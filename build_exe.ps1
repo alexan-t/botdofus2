@@ -3,26 +3,46 @@ param()
 
 $ErrorActionPreference = "Stop"
 $ProjectRoot = $PSScriptRoot
-$Python = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
+# Interpréteur : .venv s'il est valide, sinon .venv\validation, sinon arrêt explicite.
+# « Valide » = le fichier existe ET démarre (un venv copié depuis un autre compte
+# pointe souvent vers un interpréteur de base absent).
+function Test-PythonInterpreter([string]$Candidate) {
+    if (-not (Test-Path -LiteralPath $Candidate -PathType Leaf)) { return $false }
+    try {
+        & $Candidate -c "import sys" 2>$null | Out-Null
+        return ($LASTEXITCODE -eq 0)
+    } catch {
+        return $false
+    }
+}
+$Candidates = @(
+    (Join-Path $ProjectRoot ".venv\Scripts\python.exe"),
+    (Join-Path $ProjectRoot ".venv\validation\Scripts\python.exe")
+)
+$Python = $null
+foreach ($Candidate in $Candidates) {
+    if (Test-PythonInterpreter $Candidate) { $Python = $Candidate; break }
+    Write-Host "Interpréteur ignoré (absent ou invalide) : $Candidate"
+}
 $Requirements = Join-Path $ProjectRoot "requirements-dev.txt"
 $Spec = Join-Path $ProjectRoot "PythonBot.spec"
 $BuildDirectory = Join-Path $ProjectRoot "build"
 $DistDirectory = Join-Path $ProjectRoot "dist"
 $Executable = Join-Path $DistDirectory "PythonBot\PythonBot.exe"
 
-if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) {
-    throw "Environnement virtuel introuvable : $Python. Créez-le avec python -m venv .venv."
+if ($null -eq $Python) {
+    throw "Aucun interpréteur valide : ni .venv\Scripts\python.exe ni .venv\validation\Scripts\python.exe. Créez un environnement avec python -m venv .venv puis installez requirements-dev.txt."
 }
+Write-Host "Interpréteur utilisé : $Python"
 if (-not (Test-Path -LiteralPath $Spec -PathType Leaf)) {
     throw "Configuration PyInstaller introuvable : $Spec"
 }
 
 Write-Host "Vérification de PyInstaller..."
-& $Python -c "import importlib.metadata as m; from packaging.version import Version; v=Version(m.version('PyInstaller')); raise SystemExit(0 if Version('6.16') <= v < Version('7') else 1)"
+& $Python -c "import importlib.metadata as m; from packaging.version import Version; v=Version(m.version('PyInstaller')); raise SystemExit(0 if Version('6.16') <= v < Version('7') else 1)" 2>$null
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "Installation ou mise à jour de PyInstaller..."
-    & $Python -m pip install --upgrade "PyInstaller>=6.16,<7"
-    if ($LASTEXITCODE -ne 0) { throw "Installation de PyInstaller impossible." }
+    # Aucun téléchargement automatique : l'installation reste une décision explicite.
+    throw "PyInstaller >=6.16,<7 absent de $Python. Installez-le explicitement : & '$Python' -m pip install -r requirements-dev.txt"
 }
 
 foreach ($Directory in @($BuildDirectory, $DistDirectory)) {

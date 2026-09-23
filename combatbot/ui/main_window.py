@@ -37,6 +37,13 @@ from combatbot.vision.models import CapturedFrame, ConnectionResult, ZoneEvidenc
 from combatbot.vision.combat_models import GridCalibration, ObservationPacket
 from combatbot.vision.coordinates import CombatPoint
 from combatbot.vision.combat_observer import RealCombatObserver, save_debug_observation
+from combatbot.runtime import app_data_root
+from combatbot.ui.grid_projection_dialog import GridProjectionDialog
+from combatbot.vision.coordinates import LayoutSignature
+from combatbot.vision.gamedata_grid import GameDataGridResolver, GameDataTopologySource
+from combatbot.vision.grid_profile import PROFILE_SETTING_KEY, CombatGridProfileV2, ManualMapIdentity
+
+DECLARED_MAP_SETTING = "declared_map_id"
 
 
 class MainWindow(QMainWindow):
@@ -53,6 +60,12 @@ class MainWindow(QMainWindow):
         self._observation_pending = False
         self._observer: RealCombatObserver | None = None
         self._last_observation: ObservationPacket | None = None
+        # LOT 3B-2 : map déclarée manuellement, jamais détectée.
+        self._map_identity = ManualMapIdentity()
+        self._topology_source: GameDataTopologySource | None = None
+        self._topology_folder: str | None = None
+        self._declared_topology = None
+        self._allow_legacy_fallback = False
         self._fullscreen_restore_maximized = False
         self._fullscreen_restore_geometry: QRect | None = None
         self.setWindowTitle("PythonBot • Simulation et observation")
@@ -105,7 +118,7 @@ class MainWindow(QMainWindow):
         self.fullscreen_button.setObjectName("nav")
         self.fullscreen_button.clicked.connect(self._toggle_fullscreen)
         nav.addWidget(self.fullscreen_button)
-        footer = QLabel("LOT 3  ·  Observation réelle sans action")
+        footer = QLabel("LOT 3B-2  ·  Grille GameData, observation sans action")
         footer.setWordWrap(True)
         footer.setObjectName("subtitle")
         nav.addWidget(footer)
@@ -149,6 +162,11 @@ class MainWindow(QMainWindow):
         self.combat.observation_stop_requested.connect(self._stop_observation)
         self.combat.observation_save_requested.connect(self._save_observation)
         self.combat.player_reference_requested.connect(self._set_player_reference)
+        self.combat.map_load_requested.connect(self._load_declared_map)
+        self.combat.projection_calibration_requested.connect(self._calibrate_projection)
+        self.combat.overlay_options_changed.connect(self._set_overlay_options)
+        self.combat.legacy_fallback_changed.connect(self._set_legacy_fallback)
+        self.client_panel.profile_changed.connect(self._restore_declared_map_input)
         self.combat.mode.currentTextChanged.connect(
             lambda mode: self._stop_observation() if mode == "Simulation" else None
         )
@@ -564,6 +582,121 @@ class MainWindow(QMainWindow):
             self._on_event(CombatEvent("WARNING", "vision.grid", "Calibration de grille ignorée : données invalides"))
             return None
 
+    def _load_grid_profile(self, profile_id: int) -> CombatGridProfileV2 | None:
+        raw = self.storage.get_profile_setting(profile_id, PROFILE_SETTING_KEY, None)
+        if not isinstance(raw, dict):
+            return None
+        try:
+            return CombatGridProfileV2.from_dict(raw)
+        except (KeyError, TypeError, ValueError, IndexError):
+            self._on_event(CombatEvent("WARNING", "vision.grid", "Profil de projection ignoré : données invalides"))
+            return None
+
+    def _restore_declared_map_input(self, profile_id) -> None:
+        if profile_id is None:
+            return
+        value = self.storage.get_profile_setting(profile_id, DECLARED_MAP_SETTING, None)
+        # Pré-remplissage seulement : la map n'est déclarée qu'après « Charger ».
+        if isinstance(value, int) and not self.combat.map_id_input.text():
+            self.combat.map_id_input.setText(str(value))
+
+    def _load_declared_map(self, text: str) -> None:
+        try:
+            map_id = int(text.strip())
+            if map_id < 0:
+                raise ValueError
+        except ValueError:
+            QMessageBox.warning(self, "Map ID", "Map ID : entier positif ou nul attendu")
+            return
+        folder = str(self.storage.get_setting("dofus_client_directory") or "").strip()
+        if not folder:
+            QMessageBox.warning(self, "Map ID", "Configurez d'abord le dossier du client dans "
+                                "Paramètres → Données du client.")
+            return
+        if self.jobs.active:
+            self.combat.set_declared_map("Une autre opération est en cours ; réessayez dans un instant.")
+            return
+        source = self._topology_source if self._topology_folder == folder else None
+        self.combat.map_load.setEnabled(False)
+        self.combat.set_declared_map(f"Chargement de la topologie GameData de la map {map_id}…")
+
+        def work():
+            active = source or GameDataTopologySource.for_client(folder, app_data_root() / "data" / "gamedata" / "cache")
+            return active, active.topology(map_id)
+
+        def success(value) -> None:
+            self.combat.map_load.setEnabled(True)
+            active, topology = value
+            self._topology_source, self._topology_folder = active, folder
+            self._declared_topology = topology
+            declared = self._map_identity.declare(map_id)
+            cells = topology.cells
+            traversable = sum(bool(c.walkable) and not c.non_walkable_during_fight for c in cells)
+            blocked_los = sum(c.line_of_sight is False for c in cells)
+            red, blue = sum(bool(c.red_hint) for c in cells), sum(bool(c.blue_hint) for c in cells)
+            self.combat.set_declared_map(
+                f"{declared.label} — {len(cells)} cellules GameData, {traversable} traversables en combat, "
+                f"{blocked_los} bloquant la LOS, indices rouge/bleu {red}/{blue} (non validés). "
+                "PythonBot ne sait pas si la map change dans le jeu : redéclarez-la."
+            )
+            profile_id = self.client_panel.profile_id
+            if profile_id is not None:
+                self.storage.set_profile_setting(profile_id, DECLARED_MAP_SETTING, map_id)
+                profile = self._load_grid_profile(profile_id)
+                if profile is not None:
+                    self.storage.set_profile_setting(profile_id, PROFILE_SETTING_KEY, profile.with_map(map_id).to_dict())
+            observer = self._observer
+            if observer is not None and observer.grid_resolver is not None:
+                observer.grid_resolver.topology_source = active
+            self._on_event(CombatEvent("INFO", "vision.map", f"Map {map_id} déclarée manuellement"))
+
+        def failure(message: str) -> None:
+            self.combat.map_load.setEnabled(True)
+            self._map_identity.declare(None)
+            self._declared_topology = None
+            self.combat.set_declared_map(f"Map {map_id} non chargée : {message}")
+            QMessageBox.warning(self, "Map ID", f"Map {map_id} inconnue ou illisible : {message}")
+
+        self.jobs.submit(work, success, failure)
+
+    def _calibrate_projection(self) -> None:
+        profile_id = self.client_panel.profile_id
+        if profile_id is None or self.client_panel.connected_hwnd is None:
+            self._vision_error("Connectez d'abord une fenêtre DOFUS dans Paramètres.")
+            return
+        calibration = self.storage.load_calibration(profile_id)
+        if calibration is None or "combat" not in calibration.zones:
+            self._vision_error("Calibrez et confirmez la zone de combat dans Paramètres.")
+            return
+
+        def show_dialog(frame: CapturedFrame, _result) -> None:
+            combat_image = calibration.crop(frame, "combat")
+            signature = LayoutSignature.create(
+                frame.client.size, {name: rect.to_normalized_rect() for name, rect in calibration.zones.items()},
+            ).to_json()
+            declared = self._map_identity.current_map()
+            dialog = GridProjectionDialog(
+                combat_image, layout_signature=signature, topology=self._declared_topology,
+                map_id=declared.map_id if declared else None, current=self._load_grid_profile(profile_id), parent=self,
+            )
+            if dialog.exec() and dialog.result_profile is not None:
+                self.storage.set_profile_setting(profile_id, PROFILE_SETTING_KEY, dialog.result_profile.to_dict())
+                observer = self._observer
+                if observer is not None and observer.grid_resolver is not None:
+                    observer.grid_resolver.profile = dialog.result_profile
+                self._on_event(CombatEvent("INFO", "vision.grid", "Projection de grille GameData confirmée"))
+
+        self._run_capture(show_dialog)
+
+    def _set_overlay_options(self, options) -> None:
+        if self._observer is not None:
+            self._observer.overlay_options = options
+
+    def _set_legacy_fallback(self, allowed: bool) -> None:
+        self._allow_legacy_fallback = bool(allowed)
+        if self._observer is not None and self._observer.grid_resolver is not None:
+            self._observer.grid_resolver.allow_legacy_fallback = bool(allowed)
+
     def _start_observation(self) -> None:
         hwnd = self.client_panel.connected_hwnd
         profile_id = self.client_panel.profile_id
@@ -591,8 +724,15 @@ class MainWindow(QMainWindow):
         if evidence is not None and evidence.status != "confirmée":
             QMessageBox.warning(self, "Vision réelle", "La zone de combat doit être confirmée dans la calibration.")
             return
+        legacy_grid = self._load_grid_calibration(profile_id)
+        resolver = GameDataGridResolver(
+            profile=self._load_grid_profile(profile_id), topology_source=self._topology_source,
+            map_identity=self._map_identity, legacy_calibration=legacy_grid,
+            allow_legacy_fallback=self._allow_legacy_fallback,
+        )
         self._observer = RealCombatObserver(
-            hwnd, calibration, grid_calibration=self._load_grid_calibration(profile_id),
+            hwnd, calibration, grid_calibration=legacy_grid, grid_resolver=resolver,
+            overlay_options=self.combat.overlay_options(),
             capture_context={
                 "profile": self.storage.get_profile(profile_id).label,
                 "dpi": window_dpi(hwnd),

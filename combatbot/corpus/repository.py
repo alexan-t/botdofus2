@@ -38,6 +38,10 @@ def _grid_snapshot(prediction: dict[str, Any]) -> dict[str, object]:
     return {
         "cell_count": len(cells) if isinstance(cells, list) else 0,
         "confidence": grid.get("confidence") if isinstance(grid, dict) else None,
+        "grid_source": grid.get("grid_source", "VISION_DETECTED") if isinstance(grid, dict) else None,
+        "map_id_declared": grid.get("map_id_declared") if isinstance(grid, dict) else None,
+        "grid_profile_version": grid.get("grid_profile_version") if isinstance(grid, dict) else None,
+        "projection_confidence": grid.get("projection_confidence") if isinstance(grid, dict) else None,
         "cells": cells if isinstance(cells, list) else [],
         "player_cell": prediction.get("player_cell"),
         "player_confidence": prediction.get("player_confidence"),

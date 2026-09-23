@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import replace
 import math
 
 import cv2
@@ -10,7 +11,8 @@ import numpy as np
 
 from combatbot.models import Cell
 from combatbot.vision.combat_models import (
-    CellVisualState, CombatGridObservation, GridCalibration, ObservedCell,
+    GRID_SOURCE_LEGACY, GRID_SOURCE_VISION, CellVisualState, CombatGridObservation, GridCalibration,
+    ObservedCell,
 )
 
 
@@ -38,33 +40,23 @@ def _logical_coordinates(centers: list[tuple[float, float, float, float, float]]
     return sorted(found.items(), key=lambda pair: (pair[0].y, pair[0].x))
 
 
-def infer_combat_grid(image: np.ndarray, manual: GridCalibration | None = None) -> CombatGridObservation:
-    if image.size == 0:
-        return CombatGridObservation()
-    if manual is not None and manual.logical_cells:
-        cells = []
-        ox, oy = manual.origin
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        edges = cv2.Canny(gray, 35, 110)
-        supports: list[float] = []
-        for logical in manual.logical_cells:
-            cx = ox + (logical.x - logical.y) * manual.cell_width / 2
-            cy = oy + (logical.x + logical.y) * manual.cell_height / 2
-            polygon = _diamond(cx, cy, manual.cell_width, manual.cell_height)
-            mask = np.zeros(edges.shape, np.uint8)
-            cv2.polylines(mask, [np.asarray(polygon, np.int32)], True, 255, 3)
-            support = float((edges[mask > 0] > 0).mean()) if np.any(mask) else 0.0
-            confidence = min(1.0, support / 0.22)
-            supports.append(confidence)
-            cells.append(ObservedCell(logical, (round(cx), round(cy)), polygon,
-                                      CellVisualState.UNKNOWN, confidence))
-        grid_confidence = float(np.median(supports)) if supports else 0.0
-        return CombatGridObservation(tuple(cells), manual.cell_width, manual.cell_height, 0.0,
-                                     grid_confidence)
+# Seuils Canny : historiques (grille détectée) et sensibles (calibration de projection).
+LEGACY_CANNY = (35, 110)
+CALIBRATION_CANNY = (10, 30)  # mesuré : dallage en damier peu contrasté du client réel
 
+
+def detect_diamond_candidates(image: np.ndarray, canny: tuple[int, int] = LEGACY_CANNY
+                              ) -> list[tuple[float, float, float, float, float]]:
+    """Candidats de losanges (cx, cy, largeur, hauteur, score) dans le crop combat.
+
+    Générateur de candidats uniquement : n'attribue ni identité, ni voisinage,
+    ni nombre de cellules (LOT 3B-2 : ces faits viennent de GameData).
+    """
+    if image.size == 0:
+        return []
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     gray = cv2.GaussianBlur(gray, (3, 3), 0)
-    edges = cv2.Canny(gray, 35, 110)
+    edges = cv2.Canny(gray, *canny)
     edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
     contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
     image_area = image.shape[0] * image.shape[1]
@@ -91,6 +83,34 @@ def infer_combat_grid(image: np.ndarray, manual: GridCalibration | None = None) 
         if score >= 0.35:
             candidates.append((cx, cy, float(width), float(height), score))
     candidates = _deduplicate(candidates)
+    return candidates
+
+
+def infer_combat_grid(image: np.ndarray, manual: GridCalibration | None = None) -> CombatGridObservation:
+    if image.size == 0:
+        return CombatGridObservation()
+    if manual is not None and manual.logical_cells:
+        cells = []
+        ox, oy = manual.origin
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        edges = cv2.Canny(gray, 35, 110)
+        supports: list[float] = []
+        for logical in manual.logical_cells:
+            cx = ox + (logical.x - logical.y) * manual.cell_width / 2
+            cy = oy + (logical.x + logical.y) * manual.cell_height / 2
+            polygon = _diamond(cx, cy, manual.cell_width, manual.cell_height)
+            mask = np.zeros(edges.shape, np.uint8)
+            cv2.polylines(mask, [np.asarray(polygon, np.int32)], True, 255, 3)
+            support = float((edges[mask > 0] > 0).mean()) if np.any(mask) else 0.0
+            confidence = min(1.0, support / 0.22)
+            supports.append(confidence)
+            cells.append(ObservedCell(logical, (round(cx), round(cy)), polygon,
+                                      CellVisualState.UNKNOWN, confidence))
+        grid_confidence = float(np.median(supports)) if supports else 0.0
+        return CombatGridObservation(tuple(cells), manual.cell_width, manual.cell_height, 0.0,
+                                     grid_confidence, GRID_SOURCE_LEGACY)
+
+    candidates = detect_diamond_candidates(image)
     if len(candidates) < 4:
         return CombatGridObservation()
 
@@ -111,7 +131,7 @@ def infer_combat_grid(image: np.ndarray, manual: GridCalibration | None = None) 
     count_score = min(1.0, len(cells) / 12)
     consistency = max(0.0, 1.0 - float(np.std(widths) / max(median_width, 1)))
     confidence = max(0.0, min(1.0, 0.55 * count_score + 0.45 * consistency))
-    return CombatGridObservation(cells, median_width, median_height, 0.0, confidence)
+    return CombatGridObservation(cells, median_width, median_height, 0.0, confidence, GRID_SOURCE_VISION)
 
 
 def _diamond(cx: float, cy: float, width: float, height: float) -> tuple[tuple[int, int], ...]:
@@ -160,7 +180,7 @@ def classify_cell_occupancy(image: np.ndarray, grid: CombatGridObservation,
             enemies.append((observed.logical, observed.center, score))
             state = CellVisualState.OCCUPIED
             confidence = score
-        updated.append(ObservedCell(observed.logical, observed.center, observed.polygon, state, confidence))
-    return CombatGridObservation(tuple(updated), grid.cell_width, grid.cell_height,
-                                 grid.orientation_degrees, grid.confidence), \
+        # replace() keeps cell_id and GameData static fields untouched.
+        updated.append(replace(observed, state=state, confidence=confidence))
+    return replace(grid, cells=tuple(updated)), \
         (player[0] if player else None), (player[1] if player else 0.0), tuple(enemies)

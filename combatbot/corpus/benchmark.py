@@ -38,6 +38,29 @@ def _cells(prediction: dict[str, Any]) -> list[dict[str, Any]]:
     return [item for item in values if isinstance(item, dict)] if isinstance(values, list) else []
 
 
+def _grid(prediction: dict[str, Any]) -> dict[str, Any]:
+    grid = prediction.get("grid")
+    return grid if isinstance(grid, dict) else {}
+
+
+def _grid_source(prediction: dict[str, Any]) -> str:
+    """Historical observations carry no source: they came from contour detection/calibration."""
+    source = _grid(prediction).get("grid_source")
+    return str(source) if source else "LEGACY_UNSPECIFIED"
+
+
+def _projected_centers(prediction: dict[str, Any]) -> dict[int, tuple[int, int]]:
+    """cell_id -> centre for GAMEDATA_PROJECTED observations only."""
+    if _grid_source(prediction) != "GAMEDATA_PROJECTED":
+        return {}
+    result: dict[int, tuple[int, int]] = {}
+    for cell in _cells(prediction):
+        cell_id, center = cell.get("cell_id"), cell.get("center")
+        if isinstance(cell_id, int) and isinstance(center, (list, tuple)) and len(center) == 2:
+            result[cell_id] = (int(center[0]), int(center[1]))
+    return result
+
+
 def pixel_error(expected: tuple[int, int], actual: tuple[int, int]) -> float:
     """Distance euclidienne sans seuil arbitraire."""
     return ((expected[0] - actual[0]) ** 2 + (expected[1] - actual[1]) ** 2) ** 0.5
@@ -103,6 +126,8 @@ def _session_metrics(records: list[tuple[CorpusEntry, dict[str, Any], Annotation
         grouped[record[0].session_id].append(record)
     pairs = 0
     jaccards: list[float] = []
+    identity_jaccards: list[float] = []
+    center_drifts: list[float] = []
     disappeared = appeared = renumbered = origin_changes = player_moves = enemy_changes = 0
     for session_records in grouped.values():
         ordered = sorted(session_records, key=lambda item: item[0].frame_index)
@@ -135,6 +160,12 @@ def _session_metrics(records: list[tuple[CorpusEntry, dict[str, Any], Annotation
                                                 if isinstance(item, dict))))
             if before_enemy != after_enemy:
                 enemy_changes += 1
+            before_projected, after_projected = _projected_centers(before), _projected_centers(after)
+            if before_projected and after_projected:
+                ids_before, ids_after = set(before_projected), set(after_projected)
+                identity_jaccards.append(len(ids_before & ids_after) / len(ids_before | ids_after))
+                center_drifts.extend(pixel_error(before_projected[key], after_projected[key])
+                                     for key in ids_before & ids_after)
     return {
         "sessions": len(grouped), "successive_pairs": pairs,
         "mean_identifier_jaccard": mean(jaccards) if jaccards else None,
@@ -142,6 +173,10 @@ def _session_metrics(records: list[tuple[CorpusEntry, dict[str, Any], Annotation
         "same_center_renumbered": renumbered, "logical_origin_pixel_changes": origin_changes,
         "predicted_player_moves": player_moves, "predicted_enemy_set_changes": enemy_changes,
         "renumbering_scope": "centres pixel strictement identiques seulement",
+        "gamedata_pairs": len(identity_jaccards),
+        "cell_identity_stability": mean(identity_jaccards) if identity_jaccards else None,
+        "projection_center_drift_px_mean": mean(center_drifts) if center_drifts else None,
+        "projection_center_drift_px_max": max(center_drifts) if center_drifts else None,
     }
 
 
@@ -155,6 +190,9 @@ def run_benchmark(repository: CorpusRepository) -> dict[str, object]:
     turn_samples: list[tuple[bool, bool | None]] = []
     cell_counts: list[int] = []
     grid_confidences: list[float] = []
+    projected_counts: list[int] = []
+    projection_confidences: list[float] = []
+    grid_sources: dict[str, int] = {}
     player_result = {"correct": 0, "incorrect": 0, "unknown": 0, "annotated": 0}
     player_pixel_errors: list[float] = []
     enemy_result = {"correct": 0, "missed": 0, "false_positive": 0, "annotated_frames": 0}
@@ -180,6 +218,14 @@ def run_benchmark(repository: CorpusRepository) -> dict[str, object]:
         grid = prediction.get("grid")
         if isinstance(grid, dict) and isinstance(grid.get("confidence"), (int, float)):
             grid_confidences.append(float(grid["confidence"]))
+        source = _grid_source(prediction)
+        grid_sources[source] = grid_sources.get(source, 0) + 1
+        if source == "GAMEDATA_PROJECTED":
+            # Independent of how many contours were visible in the frame.
+            projected_counts.append(len(_projected_centers(prediction)))
+            value = _grid(prediction).get("projection_confidence")
+            if isinstance(value, (int, float)):
+                projection_confidences.append(float(value))
         if annotation is None:
             continue
         if annotation.ap_truth is not None:
@@ -251,6 +297,11 @@ def run_benchmark(repository: CorpusRepository) -> dict[str, object]:
             "enemies_logical": enemy_result,
             "reference_cells": reference_result,
             "false_positive_note": "Calculé uniquement lorsque reference_cells_complete=true.",
+            "grid_source": grid_sources,
+            "projected_cell_count_mean": mean(projected_counts) if projected_counts else None,
+            "projected_cell_count_min": min(projected_counts) if projected_counts else None,
+            "projected_cell_count_max": max(projected_counts) if projected_counts else None,
+            "projection_confidence_mean": mean(projection_confidences) if projection_confidences else None,
         },
         "sessions": _session_metrics(records),
         "issues": issues,
@@ -303,7 +354,12 @@ def markdown_report(report: dict[str, Any]) -> str:
         f"- Jaccard moyen des identifiants : **{_percent(sessions['mean_identifier_jaccard'])}**",
         f"- Cellules disparues / apparues : **{sessions['cells_disappeared']} / {sessions['cells_appeared']}**",
         f"- Centres identiques renumérotés : **{sessions['same_center_renumbered']}**",
-        f"- Changements pixel de l'origine logique : **{sessions['logical_origin_pixel_changes']}**", "",
+        f"- Changements pixel de l'origine logique : **{sessions['logical_origin_pixel_changes']}**",
+        f"- Sources de grille : **{json.dumps(grid.get('grid_source', {}), ensure_ascii=False)}**",
+        f"- Cellules projetées GameData (moyenne) : **{_number(grid.get('projected_cell_count_mean'))}**",
+        f"- Confiance de projection moyenne : **{_percent(grid.get('projection_confidence_mean'))}**",
+        f"- Stabilité des cell IDs GameData : **{_percent(sessions.get('cell_identity_stability'))}**",
+        f"- Dérive des centres projetés (moy./max) : **{_number(sessions.get('projection_center_drift_px_mean'))} / {_number(sessions.get('projection_center_drift_px_max'))} px**", "",
         "## États", "",
         f"- Combat : accuracy **{_percent(states['combat']['accuracy'])}**, FP **{states['combat']['false_positive']}**, FN **{states['combat']['false_negative']}**, UNKNOWN **{states['combat']['unknown']}**",
         f"- Tour joueur : accuracy **{_percent(states['player_turn']['accuracy'])}**, FP **{states['player_turn']['false_positive']}**, FN **{states['player_turn']['false_negative']}**, UNKNOWN **{states['player_turn']['unknown']}**", "",

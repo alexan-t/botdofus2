@@ -48,10 +48,25 @@ runtime_names = {
     "vcruntime140.dll", "vcruntime140_1.dll",
 }
 host_dlls_to_exclude = runtime_names | {"icuuc.dll", "icudt78.dll"}
+# Les DLL d'un runtime « codex » trouvé via le PATH sont étrangères au build, sauf si
+# ce runtime est l'interpréteur de base lui-même (cas de .venv\validation) : python312.dll,
+# python3.dll et les modules DLLs\*.pyd doivent alors être embarqués.
+build_base = Path(sys.base_prefix).resolve()
+
+
+def _foreign_host_binary(source: str) -> bool:
+    if "codex-runtimes" not in source.lower():
+        return False
+    try:
+        return not Path(source).resolve().is_relative_to(build_base)
+    except (OSError, ValueError):
+        return True
+
+
 a.binaries = [
     entry for entry in a.binaries
     if entry[0].lower() not in host_dlls_to_exclude
-    and "codex-runtimes" not in str(entry[1]).lower()
+    and not _foreign_host_binary(str(entry[1]))
 ]
 for runtime_name in sorted(runtime_names):
     runtime_path = pyside_dir / runtime_name

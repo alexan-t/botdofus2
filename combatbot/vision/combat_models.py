@@ -6,8 +6,14 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal
 
+from combatbot.gamedata.models import GridCoordinate
 from combatbot.models import Cell
 from combatbot.vision.coordinates import CombatPoint
+
+# Valeurs de CombatGridObservation.grid_source (voir grid_projection.GridSource).
+GRID_SOURCE_GAMEDATA = "GAMEDATA_PROJECTED"
+GRID_SOURCE_LEGACY = "LEGACY_CALIBRATION"
+GRID_SOURCE_VISION = "VISION_DETECTED"
 
 
 class CellVisualState(str, Enum):
@@ -19,12 +25,41 @@ class CellVisualState(str, Enum):
 
 @dataclass(frozen=True)
 class ObservedCell:
-    """Cellule observée ; centre et polygone sont locaux au crop combat."""
+    """Cellule observée ; centre et polygone sont locaux au crop combat.
+
+    Avec une grille GAMEDATA_PROJECTED, ``cell_id`` (DofusCellId) est l'identité
+    canonique et ``logical`` n'est qu'un adaptateur explicite
+    ``Cell(grid_coordinate.x, grid_coordinate.y)`` pour le code historique.
+    ``state``/``confidence`` sont visuels et dynamiques ; les champs ``*_static``
+    viennent de GameData et ne disent rien de l'occupation courante.
+    """
     logical: Cell
     center: tuple[int, int]
     polygon: tuple[tuple[int, int], ...]
     state: CellVisualState = CellVisualState.UNKNOWN
     confidence: float = 0.0
+    cell_id: int | None = None
+    grid_coordinate: GridCoordinate | None = None
+    walkable_static: bool | None = None
+    non_walkable_during_fight_static: bool | None = None
+    los_static: bool | None = None
+    red_hint: bool | None = None
+    blue_hint: bool | None = None
+
+    @property
+    def visual_state(self) -> CellVisualState:
+        return self.state
+
+    @property
+    def visual_confidence(self) -> float:
+        return self.confidence
+
+    @property
+    def static_traversable(self) -> bool | None:
+        """Traversable en combat selon GameData ; jamais synonyme de FREE."""
+        if self.walkable_static is None or self.non_walkable_during_fight_static is None:
+            return None
+        return self.walkable_static and not self.non_walkable_during_fight_static
 
 
 @dataclass(frozen=True)
@@ -34,12 +69,44 @@ class CombatGridObservation:
     cell_height: float | None = None
     orientation_degrees: float | None = None
     confidence: float = 0.0
+    grid_source: str = GRID_SOURCE_VISION
+    map_id_declared: int | None = None
+    projection_confidence: float | None = None
+    grid_profile_version: int | None = None
+    projection_status: str | None = None
+    # Sérialisation de GridScreenTransform (GAMEDATA_PROJECTED uniquement).
+    transform: dict | None = None
+    # Support visuel moyen (traversables − non traversables) : cohérence écran / map déclarée.
+    topology_consistency: float | None = None
+
+    @property
+    def declared_map_suspect(self) -> bool:
+        """Indice seulement : la map déclarée semble ne plus correspondre à l'écran."""
+        from combatbot.vision.grid_fit import MIN_TOPOLOGY_CONSISTENCY
+        return self.topology_consistency is not None and self.topology_consistency < MIN_TOPOLOGY_CONSISTENCY
 
     def cell_at(self, logical: Cell) -> ObservedCell | None:
         return next((item for item in self.cells if item.logical == logical), None)
 
+    def cell_by_id(self, cell_id: int) -> ObservedCell | None:
+        return next((item for item in self.cells if item.cell_id == cell_id), None)
+
+    def pixel_to_cell_id(self, point: CombatPoint | tuple[float, float], *,
+                         max_distance: float | None = None) -> int | None:
+        """Cellule projetée la plus proche (GAMEDATA_PROJECTED), sans contour."""
+        if self.grid_source != GRID_SOURCE_GAMEDATA or self.transform is None:
+            return None
+        from combatbot.vision.grid_projection import GridScreenTransform, lattice_pixel_to_cell_id
+        valid = {item.cell_id for item in self.cells if item.cell_id is not None}
+        return lattice_pixel_to_cell_id(GridScreenTransform.from_dict(self.transform), point, valid,
+                                        max_distance=max_distance)
+
     def pixel_to_cell(self, point: CombatPoint | tuple[int, int]) -> Cell | None:
         """Convertit un pixel si celui-ci appartient au losange observé."""
+        if self.grid_source == GRID_SOURCE_GAMEDATA and self.transform is not None:
+            cell_id = self.pixel_to_cell_id(point)
+            cell = self.cell_by_id(cell_id) if cell_id is not None else None
+            return cell.logical if cell is not None else None
         px, py = point
         best: tuple[float, Cell] | None = None
         for item in self.cells:
@@ -62,6 +129,7 @@ class EnemyObservation:
     cell: Cell
     center: tuple[int, int]
     confidence: float
+    cell_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -82,6 +150,7 @@ class CombatObservation:
     result: Literal["victory", "defeat", "unknown"] | None = None
     signals: dict[str, float] = field(default_factory=dict)
     timestamp: float = 0.0
+    player_cell_id: int | None = None
 
     @property
     def enemy_cells(self) -> tuple[Cell, ...]:

@@ -1,8 +1,29 @@
-# PythonBot — LOT 3B-2A-R : Game Data validée sur client réel (0.3.3-gamedata.1)
+# PythonBot — LOT 3B-2 : grille GameData projetée à l'écran (0.4.0)
 
 Application Windows/PySide6 avec le **simulateur du LOT 1**, la calibration et le scan de sorts du **LOT 2**, puis une session d'**observation réelle en lecture seule** pour le LOT 3. L'observateur analyse uniquement les pixels de la fenêtre choisie. Il ne lance aucun sort, ne déplace aucun personnage et n'envoie aucun clic au client. Il ne lit ni la mémoire du processus ni le réseau.
 
 Le LOT 3B-0 ajoute un corpus volontaire, une annotation humaine indépendante et un banc de mesure. Le LOT 3B-1 formalise les référentiels géométriques sans modifier les algorithmes de grille, de PA/PM, de détection ou de suivi du LOT 3.
+
+Le LOT 3B-2 change la source de la grille réelle : les 560 cellules, leurs identités (`DofusCellId`), leur voisinage, la walkability et la LOS **statiques** viennent de GameData ; la vision ne fait plus qu'estimer la projection écran et l'occupation. Voir [LOT-3B-2-GAMEDATA-GRID.md](LOT-3B-2-GAMEDATA-GRID.md).
+
+## Grille GameData projetée (LOT 3B-2)
+
+Chaîne : `DofusCellId` → `GridCoordinate` (GameData) → `GridScreenTransform` → `CombatPoint` → `LayoutTransform` → `ClientPoint` / `ScreenPoint`.
+
+1. **Paramètres → Données du client** : choisissez le dossier du client (une fois).
+2. **Combat → Vision réelle** : saisissez le **Map ID active** et cliquez sur **Charger**. La map est
+   **déclarée manuellement** : PythonBot ne détecte pas la map courante et ne sait pas quand elle change.
+3. **Calibrer projection de grille** : sur une capture figée, cliquez sur **Proposition automatique**
+   (acceptée seulement si le score et la marge sont suffisants), utilisez **Hypothèse suivante** si le
+   placement est ambigu, ou ajustez position, largeur, hauteur et inclinaison (flèches = ±1 px). Les
+   ancres cell ID → pixel sont facultatives. **Je confirme l'alignement** enregistre le profil.
+4. Démarrez l'observation. La source de grille (`GAMEDATA_PROJECTED`, `LEGACY_CALIBRATION`,
+   `VISION_DETECTED` ou `NONE`) et sa raison sont affichées ; le survol de l'aperçu indique la cellule.
+
+Le profil `combat_grid_v2` est lié au layout (taille client et zones) et non à la map : les 12 153 maps
+lisibles ont toutes le même zoom. Un layout incompatible n'applique jamais la projection
+(`GRID_CALIBRATION_INCOMPATIBLE`) ; un redimensionnement proportionnel est appliqué à l'échelle et signalé
+(`SCALED`). Les indices rouge/bleu restent des indices de diagnostic, jamais des cellules de placement.
 
 ## Données locales du client — probe expérimental
 
@@ -55,6 +76,8 @@ Les calculs de vision utilisent les pixels physiques de l'image capturée :
 - `NormalizedPoint` utilise le client complet entre `0` et `1` ;
 - `CombatPoint(0, 0)` est le coin supérieur gauche de la zone combat calibrée ;
 - `Cell(x, y)` est une coordonnée logique et ne représente jamais un pixel.
+- `DofusCellId` (0..559) est l'identité canonique d'une cellule réelle ; `GridCoordinate` est sa coordonnée
+  logique GameData. Ni l'un ni l'autre n'est un pixel : seul `GridScreenTransform` les projette.
 
 `LayoutTransform` centralise les conversions écran, client, normalisé et combat. Les transformations gardent des flottants ; la conversion finale en indice pixel emploie `round()`. La capture et la géométrie Win32 sont déjà en pixels physiques : le DPI est conservé comme métadonnée et n'est pas appliqué une seconde fois. Dans la calibration, une unité de `QGraphicsScene` correspond à un pixel de l'image cliente.
 
@@ -83,7 +106,7 @@ Depuis PowerShell, à la racine du projet :
 .\build_exe.ps1
 ```
 
-Le script vérifie `.venv`, installe PyInstaller si sa version n'est pas compatible, nettoie les anciens résultats et construit le package ONEDIR décrit par `PythonBot.spec`. Le programme final est `dist\PythonBot\PythonBot.exe` et se lance par double-clic sans console. Si `assets\pythonbot.ico` existe, elle est automatiquement utilisée ; sinon le build conserve l'icône Windows par défaut.
+Le script utilise `.venv\Scripts\python.exe` s'il démarre, sinon `.venv\validation\Scripts\python.exe`, sinon s'arrête avec une erreur claire. Il n'installe rien : si PyInstaller (>=6.16,<7) manque, il s'arrête avant tout nettoyage et indique la commande d'installation. Il nettoie ensuite les anciens résultats et construit le package ONEDIR décrit par `PythonBot.spec`. Le programme final est `dist\PythonBot\PythonBot.exe` et se lance par double-clic sans console. Si `assets\pythonbot.ico` existe, elle est automatiquement utilisée ; sinon le build conserve l'icône Windows par défaut.
 
 La version packagée conserve ses données dans `%LOCALAPPDATA%\PythonBot\data\pythonbot.sqlite3` et ses diagnostics dans `%LOCALAPPDATA%\PythonBot\logs\pythonbot.log`. Au premier lancement, si aucune base locale n'existe et que l'exécutable se trouve encore dans le dossier `dist` de ce projet, la base `data\pythonbot.sqlite3` est copiée de façon atomique avant les migrations. Une base locale déjà présente est toujours prioritaire et n'est pas remplacée. En développement, `python main.py` continue d'utiliser les dossiers `data\` et `logs\` du projet.
 
@@ -189,8 +212,13 @@ Les tests couvrent le simulateur existant, la migration SQLite, les profils, la 
 - `combatbot/vision/models.py`, `icons.py`, `tooltip.py`, `character.py` : façades de calibration compatibles et reconnaissance indépendante de Qt.
 - `combatbot/vision/combat_models.py`, `combat_grid.py`, `combat_ocr.py` : modèle réel, grille isométrique et lecture ciblée des compteurs.
 - `combatbot/vision/combat_observer.py`, `combat_tracker.py` : analyse d'une frame, overlay, sauvegarde volontaire et stabilisation temporelle.
+- `combatbot/vision/grid_projection.py` : `GridScreenTransform`, `GridProjector`, `ProjectedGrid`, composition cell → combat/client/écran (sans OpenCV).
+- `combatbot/vision/grid_fit.py` : candidats, ajustement global, ancres et alignement visuel.
+- `combatbot/vision/grid_profile.py`, `gamedata_grid.py` : profil `CombatGridProfileV2`, map déclarée, priorité des sources de grille.
+- `combatbot/ui/grid_projection_dialog.py` : calibration de projection sur capture figée.
 - `combatbot/corpus/`, `combatbot/benchmark.py` : manifeste, vérité terrain, import, promotion et métriques de baseline.
 - `combatbot/ui/corpus_page.py` : annotation visuelle locale, sans action envoyée au jeu.
 - `combatbot/storage.py` : migration et tables SQLite séparant simulation et observation.
 - `combatbot/ui/` : écrans existants enrichis, calibration interactive et tâches de vision en arrière-plan.
 - `combatbot/ports.py` : contrats du moteur ; l'exécuteur d'actions n'est connecté à aucun écran d'observation.
+- `combatbot/gamedata/` : lecture offline D2P/DLM/D2O et topologie logique (LOT 3B-2A-R).

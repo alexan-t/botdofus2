@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
 import time
@@ -17,11 +17,12 @@ from combatbot import __version__
 from combatbot.vision.capture import capture_client
 from combatbot.vision.combat_grid import classify_cell_occupancy, infer_combat_grid
 from combatbot.vision.combat_models import (
-    CombatObservation, EnemyObservation, GridCalibration, ObservationPacket,
+    GRID_SOURCE_GAMEDATA, CombatObservation, EnemyObservation, GridCalibration, ObservationPacket,
 )
 from combatbot.vision.combat_ocr import NumberReader, read_small_number
 from combatbot.vision.combat_tracker import CombatObservationTracker
 from combatbot.vision.coordinates import CombatPoint, LayoutTransform
+from combatbot.vision.gamedata_grid import GameDataGridResolver
 from combatbot.vision.models import Calibration, CapturedFrame
 
 
@@ -56,13 +57,20 @@ class RealCombatObserver:
                  number_reader: NumberReader = read_small_number,
                  grid_calibration: GridCalibration | None = None,
                  tracker: CombatObservationTracker | None = None,
-                 capture_context: dict[str, object] | None = None) -> None:
+                 capture_context: dict[str, object] | None = None,
+                 grid_resolver: GameDataGridResolver | None = None,
+                 overlay_options: "OverlayOptions | None" = None) -> None:
         self.hwnd = hwnd
         self.calibration = calibration
         self.frame_provider = frame_provider or (lambda: capture_client(hwnd, activate=False))
         self.number_reader = number_reader
         self.grid_calibration = grid_calibration
         self.tracker = tracker or CombatObservationTracker()
+        # Without resolver the historical pipeline is used unchanged.
+        self.grid_resolver = grid_resolver
+        if grid_resolver is not None and grid_resolver.legacy_calibration is None:
+            grid_resolver.legacy_calibration = grid_calibration
+        self.overlay_options = overlay_options or OverlayOptions()
         self.capture_context = dict(capture_context or {})
         self.session_id = str(self.capture_context.get("session_id") or f"session_{uuid4().hex[:12]}")
         self._frame_index = 0
@@ -81,12 +89,20 @@ class RealCombatObserver:
         transform = self.calibration.layout_transform(frame)
         combat_image = _zone(frame, self.calibration, transform, "combat")
         assert combat_image is not None
-        grid = infer_combat_grid(combat_image, self.grid_calibration)
+        resolution = None
+        if self.grid_resolver is not None:
+            zones = {name: rect.to_normalized_rect() for name, rect in self.calibration.zones.items()}
+            resolution = self.grid_resolver.resolve(combat_image, frame.client.size, zones)
+            grid = resolution.grid
+        else:
+            grid = infer_combat_grid(combat_image, self.grid_calibration)
         player_reference = self.grid_calibration.player_reference_hsv if self.grid_calibration else None
         grid, player_cell, player_confidence, raw_enemies = classify_cell_occupancy(
             combat_image, grid, player_reference,
         )
-        enemies = tuple(EnemyObservation("", cell, center, confidence)
+        # With GAMEDATA_PROJECTED, occupancy is attached to the canonical DofusCellId.
+        cell_ids = {cell.logical: cell.cell_id for cell in grid.cells} if grid.grid_source == GRID_SOURCE_GAMEDATA else {}
+        enemies = tuple(EnemyObservation("", cell, center, confidence, cell_ids.get(cell))
                         for cell, center, confidence in raw_enemies)
 
         now = time.monotonic()
@@ -127,9 +143,10 @@ class RealCombatObserver:
             player_cell, player_confidence, enemies, grid, ap, mp,
             confidence_ap, confidence_mp, observation_confidence,
             signals=signals, timestamp=time.time(),
+            player_cell_id=cell_ids.get(player_cell) if player_cell is not None else None,
         )
         observation = self.tracker.update(raw)
-        annotated = draw_diagnostic_overlay(combat_image, observation)
+        annotated = draw_diagnostic_overlay(combat_image, observation, self.overlay_options)
         elapsed_ms = (time.perf_counter() - started) * 1000
         phase = "inconnue"
         if observation.result is not None:
@@ -159,6 +176,16 @@ class RealCombatObserver:
                 "capture": "client", "frame": "combat", "grid": "combat", "hud": "client",
             },
             "tactical_mode": self.capture_context.get("tactical_mode", "inconnu"),
+            "grid_source": grid.grid_source,
+            "grid_source_reason": resolution.reason if resolution else "LEGACY_PIPELINE",
+            "map_id_declared": grid.map_id_declared,
+            "map_id_origin": "DECLARED_MANUALLY" if grid.map_id_declared is not None else None,
+            "grid_profile_version": grid.grid_profile_version,
+            "projection_confidence": grid.projection_confidence,
+            "projection_status": grid.projection_status,
+            "topology_consistency": grid.topology_consistency,
+            "declared_map_suspect": grid.declared_map_suspect,
+            "requires_recalibration": bool(resolution and resolution.requires_recalibration),
             "phase": phase,
             "analysis_ms": elapsed_ms,
             "global_confidence": observation.observation_confidence,
@@ -187,8 +214,11 @@ class RealCombatObserver:
             return False
         reference = tuple(float(value) for value in np.median(saturated, axis=0))
         current = self.grid_calibration
+        grid = packet.observation.grid
+        if current is None and grid.grid_source == GRID_SOURCE_GAMEDATA:
+            # Reference holder only: no logical cells, so it never defines a legacy grid.
+            current = GridCalibration((0.0, 0.0), grid.cell_width or 1.0, grid.cell_height or 1.0, ())
         if current is None:
-            grid = packet.observation.grid
             if not grid.cells or grid.cell_width is None or grid.cell_height is None:
                 return False
             anchor = min(grid.cells, key=lambda item: (item.logical.y, item.logical.x))
@@ -196,21 +226,87 @@ class RealCombatObserver:
                                       tuple(item.logical for item in grid.cells))
         self.grid_calibration = GridCalibration(current.origin, current.cell_width, current.cell_height,
                                                 current.logical_cells, reference)
+        if self.grid_resolver is not None:
+            self.grid_resolver.legacy_calibration = self.grid_calibration
         return True
 
 
-def draw_diagnostic_overlay(image: np.ndarray, observation: CombatObservation) -> np.ndarray:
+@dataclass(frozen=True)
+class OverlayOptions:
+    """Couches de l'overlay de diagnostic ; les IDs sont sous-échantillonnés."""
+
+    grid: bool = True
+    cell_ids: bool = False
+    coordinates: bool = False
+    walkability: bool = False
+    los: bool = False
+    red_blue: bool = False
+    candidates: bool = False
+    anchors: bool = False
+    label_every: int = 7
+
+
+def _blend_cells(output: np.ndarray, polygons: list[np.ndarray], color: tuple[int, int, int], alpha: float) -> None:
+    if not polygons:
+        return
+    layer = output.copy()
+    cv2.fillPoly(layer, polygons, color)
+    cv2.addWeighted(layer, alpha, output, 1 - alpha, 0, dst=output)
+
+
+def draw_diagnostic_overlay(image: np.ndarray, observation: CombatObservation,
+                            options: OverlayOptions | None = None, *,
+                            candidates=(), anchors=()) -> np.ndarray:
+    options = options or OverlayOptions()
     output = image.copy()
-    for item in observation.grid.cells:
-        color = (80, 170, 230)
-        if item.state.value == "OCCUPIED":
-            color = (40, 190, 245)
-        cv2.polylines(output, [np.asarray(item.polygon, np.int32)], True, color, 1, cv2.LINE_AA)
-        cv2.putText(output, f"{item.logical.x},{item.logical.y}",
-                    (item.center[0] - 13, item.center[1] + 3), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.3, color, 1, cv2.LINE_AA)
+    grid = observation.grid
+    projected = grid.grid_source == GRID_SOURCE_GAMEDATA
+    polygon = lambda item: np.asarray(item.polygon, np.int32)  # noqa: E731
+    if projected:
+        if options.walkability:
+            _blend_cells(output, [polygon(c) for c in grid.cells if c.static_traversable], (70, 160, 70), 0.22)
+            _blend_cells(output, [polygon(c) for c in grid.cells if c.static_traversable is False], (40, 40, 40), 0.35)
+        if options.los:
+            _blend_cells(output, [polygon(c) for c in grid.cells if c.los_static is False], (160, 60, 160), 0.35)
+        if options.red_blue:
+            # GameData hints only: never presented as validated placement cells.
+            _blend_cells(output, [polygon(c) for c in grid.cells if c.red_hint], (40, 40, 220), 0.4)
+            _blend_cells(output, [polygon(c) for c in grid.cells if c.blue_hint], (220, 110, 40), 0.4)
+        if options.grid:
+            cv2.polylines(output, [polygon(c) for c in grid.cells], True, (80, 170, 230), 1, cv2.LINE_AA)
+            occupied = [polygon(c) for c in grid.cells if c.state.value == "OCCUPIED"]
+            cv2.polylines(output, occupied, True, (40, 190, 245), 2, cv2.LINE_AA)
+        step = max(1, options.label_every)
+        for item in grid.cells:
+            if item.cell_id is None or item.cell_id % step:
+                continue
+            text = []
+            if options.cell_ids:
+                text.append(str(item.cell_id))
+            if options.coordinates and item.grid_coordinate is not None:
+                text.append(f"{item.grid_coordinate.x},{item.grid_coordinate.y}")
+            if text:
+                cv2.putText(output, " ".join(text), (item.center[0] - 12, item.center[1] + 3),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.3, (240, 240, 240), 1, cv2.LINE_AA)
+    else:
+        for item in grid.cells:
+            color = (80, 170, 230)
+            if item.state.value == "OCCUPIED":
+                color = (40, 190, 245)
+            cv2.polylines(output, [np.asarray(item.polygon, np.int32)], True, color, 1, cv2.LINE_AA)
+            cv2.putText(output, f"{item.logical.x},{item.logical.y}",
+                        (item.center[0] - 13, item.center[1] + 3), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.3, color, 1, cv2.LINE_AA)
+    if options.candidates:
+        for candidate in candidates:
+            cv2.circle(output, (round(candidate[0]), round(candidate[1])), 3, (0, 220, 255), -1)
+    if options.anchors:
+        for cell_id, point in anchors:
+            cv2.drawMarker(output, (round(point[0]), round(point[1])), (255, 0, 255), cv2.MARKER_CROSS, 12, 2)
+            cv2.putText(output, str(cell_id), (round(point[0]) + 6, round(point[1]) - 6),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 255), 1, cv2.LINE_AA)
     if observation.player_cell is not None:
-        item = observation.grid.cell_at(observation.player_cell)
+        item = grid.cell_at(observation.player_cell)
         if item:
             cv2.circle(output, item.center, 10, (80, 235, 120), 3)
             cv2.putText(output, "JOUEUR", (item.center[0] + 8, item.center[1] - 8),
@@ -245,7 +341,8 @@ def save_debug_observation(packet: ObservationPacket, directory: Path | None = N
                     raise OSError(f"Impossible d'enregistrer le crop {name.upper()}")
                 hud_files[name] = f"{hud_directory.name}/{filename}"
     prediction = asdict(packet.observation)
-    cells = prediction.get("grid", {}).get("cells", [])
+    grid = prediction.get("grid", {})
+    cells = grid.get("cells", [])
     payload = {
         "schema_version": 1,
         "observation_id": f"obs_{uuid4().hex[:16]}",
@@ -256,7 +353,13 @@ def save_debug_observation(packet: ObservationPacket, directory: Path | None = N
         "prediction": prediction,
         "grid_snapshot": {
             "cell_count": len(cells),
-            "confidence": prediction.get("grid", {}).get("confidence"),
+            "confidence": grid.get("confidence"),
+            # LOT 3B-2 : identité canonique DofusCellId + source de grille explicite.
+            "grid_source": grid.get("grid_source"),
+            "map_id_declared": grid.get("map_id_declared"),
+            "map_id_origin": "DECLARED_MANUALLY" if grid.get("map_id_declared") is not None else None,
+            "grid_profile_version": grid.get("grid_profile_version"),
+            "projection_confidence": grid.get("projection_confidence"),
             "cells": cells,
             "player_cell": prediction.get("player_cell"),
             "player_confidence": prediction.get("player_confidence"),

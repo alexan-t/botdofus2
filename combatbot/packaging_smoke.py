@@ -17,6 +17,21 @@ from combatbot.vision.tooltip import read_visible_text
 from combatbot.vision.window import list_dofus_windows
 
 
+def _gamedata_grid_check() -> dict[str, object]:
+    """LOT 3B-2 : modules GameData présents et projection des 560 cellules dans le binaire."""
+    import importlib
+    from combatbot.gamedata.models import DofusCellId, GameMapCell, GridTopology
+    from combatbot.vision.grid_projection import GridProjector, GridScreenTransform
+    modules = ["combatbot.gamedata.formats.archives", "combatbot.gamedata.formats.maps",
+               "combatbot.gamedata.formats.d2o", "combatbot.gamedata.topology", "combatbot.gamedata.validation",
+               "combatbot.vision.grid_fit", "combatbot.vision.grid_profile", "combatbot.vision.gamedata_grid"]
+    loaded = [name for name in modules if importlib.import_module(name)]
+    topology = GridTopology(0, tuple(GameMapCell(DofusCellId(i)) for i in range(560)))
+    grid = GridProjector(GridScreenTransform.from_cell_size((43, 21.5), 86, 43)).project(topology)
+    return {"modules": loaded, "projected_cells": len(grid.cells),
+            "lookup_287": grid.pixel_to_cell(grid.cell(287).center)}
+
+
 def run_packaging_smoke(app, storage, window) -> int:
     report_path = Path(os.environ.get(
         "PYTHONBOT_SMOKE_REPORT", str(app_data_root() / "logs" / "packaging-smoke.json")
@@ -45,13 +60,16 @@ def run_packaging_smoke(app, storage, window) -> int:
         cv2.rectangle(sample, (5, 5), (120, 58), (255, 255, 255), 2)
         checks["opencv"] = int(cv2.Canny(sample, 50, 120).sum()) > 0
 
+        checks["gamedata_grid"] = _gamedata_grid_check()
+
         ocr_image = np.full((100, 420, 3), 255, dtype=np.uint8)
         cv2.putText(ocr_image, "3 PA  Portee 1-4", (8, 55), cv2.FONT_HERSHEY_SIMPLEX, 1,
                     (0, 0, 0), 2)
         text, confidence = read_visible_text(ocr_image)
         checks["rapidocr"] = {"loaded": True, "text": text, "confidence": confidence}
 
-        windows = list_dofus_windows()
+        # PYTHONBOT_SMOKE_SKIP_DOFUS=1 : ne pas activer la fenêtre d'une partie en cours.
+        windows = [] if os.environ.get("PYTHONBOT_SMOKE_SKIP_DOFUS") == "1" else list_dofus_windows()
         checks["dofus_windows"] = [
             {"hwnd": item.hwnd, "title": item.title, "minimized": item.minimized} for item in windows
         ]
@@ -66,6 +84,7 @@ def run_packaging_smoke(app, storage, window) -> int:
         results["success"] = all((
             checks["interface_visible"], checks["navigation_pages"] == 8,
             checks["sqlite_profiles"] >= 1, checks["opencv"], checks["rapidocr"]["loaded"],
+            checks["gamedata_grid"]["projected_cells"] == 560,
         ))
     except Exception as exc:
         results["success"] = False

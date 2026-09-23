@@ -20,7 +20,8 @@ from combatbot.ui.client_panel import ClientPanel
 from combatbot.ui.scan_panel import ScanPanel
 from combatbot.ui.gamedata_panel import GameDataPanel
 from combatbot.ui.jobs import JobRunner
-from combatbot.vision.combat_models import ObservationPacket
+from combatbot.vision.combat_models import GRID_SOURCE_GAMEDATA, ObservationPacket
+from combatbot.vision.combat_observer import OverlayOptions
 
 
 def title(text: str, subtitle: str) -> QVBoxLayout:
@@ -111,9 +112,11 @@ class DashboardPage(QWidget):
 
 class ObservationPreview(QLabel):
     image_clicked = Signal(object)
+    image_hovered = Signal(object)
 
     def __init__(self) -> None:
         super().__init__("Aucune observation")
+        self.setMouseTracking(True)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setMinimumSize(560, 390)
         self.setStyleSheet("border: 1px solid #34445b; background: #111a28;")
@@ -132,16 +135,27 @@ class ObservationPreview(QLabel):
                                                 Qt.TransformationMode.SmoothTransformation))
         super().resizeEvent(event)
 
-    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt API
+    def _image_point(self, event) -> tuple[int, int] | None:
         pixmap = self.pixmap()
-        if pixmap is None or self._image_size is None:
-            return
+        if pixmap is None or pixmap.isNull() or self._image_size is None:
+            return None
         left = (self.width() - pixmap.width()) / 2
         top = (self.height() - pixmap.height()) / 2
         px, py = event.position().x() - left, event.position().y() - top
         if 0 <= px < pixmap.width() and 0 <= py < pixmap.height():
             width, height = self._image_size
-            self.image_clicked.emit((round(px * width / pixmap.width()), round(py * height / pixmap.height())))
+            return round(px * width / pixmap.width()), round(py * height / pixmap.height())
+        return None
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt API
+        point = self._image_point(event)
+        if point is not None:
+            self.image_clicked.emit(point)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802 - Qt API ; survol = inspection seule
+        point = self._image_point(event)
+        if point is not None:
+            self.image_hovered.emit(point)
 
 
 class CombatPage(QWidget):
@@ -149,6 +163,10 @@ class CombatPage(QWidget):
     observation_stop_requested = Signal()
     observation_save_requested = Signal()
     player_reference_requested = Signal(object)
+    map_load_requested = Signal(str)
+    projection_calibration_requested = Signal()
+    overlay_options_changed = Signal(object)
+    legacy_fallback_changed = Signal(bool)
 
     def __init__(self) -> None:
         super().__init__()
@@ -212,6 +230,43 @@ class CombatPage(QWidget):
             controls.addWidget(button)
         controls.addStretch()
         real_layout.addLayout(controls)
+        map_row = QHBoxLayout()
+        map_row.addWidget(QLabel("Map ID active :"))
+        self.map_id_input = QLineEdit()
+        self.map_id_input.setPlaceholderText("saisie manuelle (non détectée)")
+        self.map_id_input.setMaximumWidth(170)
+        self.map_load = QPushButton("Charger")
+        self.map_load.clicked.connect(lambda: self.map_load_requested.emit(self.map_id_input.text()))
+        self.map_id_input.returnPressed.connect(self.map_load.click)
+        self.map_status = QLabel("Aucun map ID déclaré — la map active n'est pas détectée automatiquement")
+        self.map_status.setWordWrap(True)
+        self.projection_calibrate = QPushButton("Calibrer projection de grille")
+        self.projection_calibrate.clicked.connect(self.projection_calibration_requested)
+        self.legacy_fallback = QCheckBox("Autoriser la grille historique en secours")
+        self.legacy_fallback.toggled.connect(self.legacy_fallback_changed)
+        for widget in (self.map_id_input, self.map_load, self.projection_calibrate, self.legacy_fallback):
+            map_row.addWidget(widget)
+        map_row.addStretch()
+        real_layout.addLayout(map_row)
+        real_layout.addWidget(self.map_status)
+        overlay_row = QHBoxLayout()
+        overlay_row.addWidget(QLabel("Overlay :"))
+        self.overlay_boxes: dict[str, QCheckBox] = {}
+        for key, caption, checked in (
+            ("grid", "grille projetée", True), ("cell_ids", "cell IDs", False),
+            ("coordinates", "coordonnées logiques", False), ("walkability", "walkability", False),
+            ("los", "LOS", False), ("red_blue", "indices rouge/bleu GameData", False),
+        ):
+            box = QCheckBox(caption)
+            box.setChecked(checked)
+            box.toggled.connect(self._overlay_changed)
+            overlay_row.addWidget(box)
+            self.overlay_boxes[key] = box
+        overlay_row.addStretch()
+        real_layout.addLayout(overlay_row)
+        self.hover_info = QLabel("Survolez l'aperçu pour inspecter une cellule projetée.")
+        self.hover_info.setWordWrap(True)
+        real_layout.addWidget(self.hover_info)
         self.observation_help = QLabel(
             "Lecture seule. Pour identifier le joueur, activez « Voici mon personnage » puis cliquez "
             "sur son marqueur dans l'aperçu PythonBot."
@@ -229,7 +284,8 @@ class CombatPage(QWidget):
         for key, caption in (
             ("combat", "Combat"), ("turn", "Mon tour"), ("ap", "PA"), ("mp", "PM"),
             ("player", "Ma cellule"), ("enemies", "Ennemis détectés"),
-            ("grid", "Cellules de grille"), ("quality", "Qualité observation"),
+            ("grid", "Cellules de grille"), ("grid_source", "Source de grille"),
+            ("quality", "Qualité observation"),
             ("safe", "Sûre pour décision"), ("performance", "Durée analyse"),
         ):
             value = QLabel("Inconnu")
@@ -252,6 +308,39 @@ class CombatPage(QWidget):
         self.observation_stop.clicked.connect(self.observation_stop_requested)
         self.observation_save.clicked.connect(self.observation_save_requested)
         self.observation_preview.image_clicked.connect(self._preview_clicked)
+        self.observation_preview.image_hovered.connect(self._preview_hovered)
+        self._last_packet: ObservationPacket | None = None
+
+    def overlay_options(self) -> OverlayOptions:
+        return OverlayOptions(**{key: box.isChecked() for key, box in self.overlay_boxes.items()})
+
+    def _overlay_changed(self) -> None:
+        self.overlay_options_changed.emit(self.overlay_options())
+
+    def set_declared_map(self, text: str) -> None:
+        self.map_status.setText(text)
+
+    def _preview_hovered(self, point: tuple[int, int]) -> None:
+        packet = self._last_packet
+        if packet is None:
+            return
+        grid = packet.observation.grid
+        if grid.grid_source != GRID_SOURCE_GAMEDATA:
+            self.hover_info.setText(f"Pixel {point} — grille {grid.grid_source} : pas de cell ID GameData")
+            return
+        cell_id = grid.pixel_to_cell_id(point)
+        cell = grid.cell_by_id(cell_id) if cell_id is not None else None
+        if cell is None:
+            self.hover_info.setText(f"Pixel {point} — hors des 560 cellules projetées")
+            return
+        flag = lambda value: "inconnu" if value is None else ("oui" if value else "non")  # noqa: E731
+        coordinate = cell.grid_coordinate
+        self.hover_info.setText(
+            f"Cellule {cell.cell_id} — logique ({coordinate.x}, {coordinate.y}) — "
+            f"traversable statique : {flag(cell.static_traversable)} — LOS statique : {flag(cell.los_static)} — "
+            f"état visuel : {cell.state.value} ({cell.confidence:.0%}) — "
+            f"indices rouge/bleu : {flag(cell.red_hint)}/{flag(cell.blue_hint)} (non validés)"
+        )
 
     def _preview_clicked(self, point: tuple[int, int]) -> None:
         if self.select_player.isChecked():
@@ -267,6 +356,7 @@ class CombatPage(QWidget):
 
     def set_observation(self, packet: ObservationPacket) -> None:
         observation = packet.observation
+        self._last_packet = packet
         self.observation_preview.set_image(packet.annotated)
         unknown = lambda value: "Inconnu" if value is None else str(value)
         self.real_values["combat"].setText(
@@ -287,6 +377,18 @@ class CombatPage(QWidget):
         self.real_values["grid"].setText(
             f"{len(observation.grid.cells)} ({observation.grid.confidence:.0%})"
         )
+        grid = observation.grid
+        source = grid.grid_source
+        if source == GRID_SOURCE_GAMEDATA:
+            source += f" — map {grid.map_id_declared} (déclarée manuellement), {grid.projection_status}"
+        else:
+            source += f" — {packet.metadata.get('grid_source_reason', '')}"
+        if packet.metadata.get("requires_recalibration"):
+            source += " — recalibration de projection requise"
+        if grid.declared_map_suspect:
+            source += (f" — ATTENTION : l'écran semble ne plus correspondre à la map déclarée "
+                       f"(cohérence {grid.topology_consistency:.2f}) ; redéclarez la map active")
+        self.real_values["grid_source"].setText(source)
         self.real_values["quality"].setText(f"{observation.observation_confidence:.0%}")
         self.real_values["safe"].setText("Oui" if observation.safe_for_decision else "Non")
         self.real_values["performance"].setText(f"{packet.elapsed_ms:.0f} ms")

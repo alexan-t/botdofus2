@@ -102,6 +102,6 @@ par les octets mesurés dans le client privé (lecture seule) :
   écrite indépendamment, puis **vérifiée sur les données réelles** (voir
   GAME-DATA-REAL-VALIDATION.md) : elle n'est pas acceptée sur la seule foi des sources.
 
-`scripts/inspect_client_abc.py` (inspection statique SWF/ABC, laissé par l'intervention
-précédente) n'a **pas** été utilisé ni modifié pendant cette reprise ; aucune
-conclusion de ce rapport n'en dépend.
+`scripts/inspect_client_abc.py` (inspection statique SWF/ABC, laissé par une intervention
+antérieure) n'a jamais été utilisé ; il a été **supprimé au LOT 3B-2**, avant le premier commit
+Git, car aucune conclusion ni aucun code n'en dépendait.

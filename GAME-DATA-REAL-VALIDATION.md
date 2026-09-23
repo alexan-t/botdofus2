@@ -34,9 +34,8 @@ obligatoire pour la projection écran et l'état dynamique (détails au point 24
 - `formats/archives.py` contenait déjà une branche « index initial » non terminée.
   Elle ne vérifiait pas le pavage exact des régions et refusait encore l'archive vide
   `gfx26.d2p`.
-- `scripts/inspect_client_abc.py` (inspection statique SWF/ABC visant `MapPoint`),
-  créé par l'intervention précédente, n'a **pas** été utilisé ni modifié. Aucune
-  conclusion n'en dépend. Sa conservation reste à décider par l'utilisateur.
+- `scripts/inspect_client_abc.py` (inspection statique SWF/ABC) n'a pas été utilisé ; il a été
+  supprimé au LOT 3B-2 (voir LOT-3B-2-GAMEDATA-GRID.md).
 - `.pytest_tmp` (basetemp de `pytest.ini`) est verrouillé par ses droits d'accès ;
   les tests ont été lancés avec `--basetemp` vers un dossier temporaire.
 
