@@ -80,12 +80,27 @@ class CombatGridObservation:
     topology_consistency: float | None = None
     # user_verified_mapid | manual_guess ; None pour les observations antérieures au LOT 3B-2R.
     map_id_source: str | None = None
+    # LOT 3B-3 : preuves séparées (dictionnaires sérialisables, None si non mesurées).
+    grid_visibility: dict | None = None      # GridVisibilityObservation : la grille DOFUS est-elle dessinée ?
+    alignment: dict | None = None            # GridAlignmentObservation
+    drift: dict | None = None                # DriftTracker : base / effective / runtime_adjustment
+    map_declaration: dict | None = None      # MapConsistencyObservation (avertissement seulement)
+
+    @property
+    def grid_visibility_state(self) -> str | None:
+        return (self.grid_visibility or {}).get("state")
+
+    @property
+    def map_declaration_state(self) -> str | None:
+        return (self.map_declaration or {}).get("state")
 
     @property
     def declared_map_suspect(self) -> bool:
-        """Indice seulement : la map déclarée semble ne plus correspondre à l'écran."""
-        from combatbot.vision.grid_fit import MIN_TOPOLOGY_CONSISTENCY
-        return self.topology_consistency is not None and self.topology_consistency < MIN_TOPOLOGY_CONSISTENCY
+        """Avertissement relatif (LOT 3B-3), jamais le seuil absolu 0,65 de 0.4.0.
+
+        Toujours False quand la grille n'est pas visible (état UNKNOWN).
+        """
+        return self.map_declaration_state in ("SUSPECT", "STALE_LIKELY")
 
     def cell_at(self, logical: Cell) -> ObservedCell | None:
         return next((item for item in self.cells if item.logical == logical), None)
@@ -153,6 +168,8 @@ class CombatObservation:
     signals: dict[str, float] = field(default_factory=dict)
     timestamp: float = 0.0
     player_cell_id: int | None = None
+    # COMBAT | EXPLORATION | UNKNOWN ; combat_detected reste True seulement pour COMBAT.
+    combat_state: str | None = None
 
     @property
     def enemy_cells(self) -> tuple[Cell, ...]:

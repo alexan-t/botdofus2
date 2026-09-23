@@ -263,6 +263,7 @@ class CombatPage(QWidget):
             ("grid", "grille projetée", True), ("cell_ids", "cell IDs", False),
             ("coordinates", "coordonnées logiques", False), ("walkability", "walkability", False),
             ("los", "LOS", False), ("red_blue", "indices rouge/bleu GameData", False),
+            ("alignment_debug", "diagnostic alignement", False),
         ):
             box = QCheckBox(caption)
             box.setChecked(checked)
@@ -292,6 +293,8 @@ class CombatPage(QWidget):
             ("combat", "Combat"), ("turn", "Mon tour"), ("ap", "PA"), ("mp", "PM"),
             ("player", "Ma cellule"), ("enemies", "Ennemis détectés"),
             ("grid", "Cellules de grille"), ("grid_source", "Source de grille"),
+            ("grid_visible", "Grille"), ("alignment", "Alignement"), ("declared_map", "Map déclarée"),
+            ("map_consistency", "Cohérence map"), ("runtime_adjustment", "Correction runtime"),
             ("quality", "Qualité observation"),
             ("safe", "Sûre pour décision"), ("performance", "Durée analyse"),
         ):
@@ -323,6 +326,46 @@ class CombatPage(QWidget):
 
     def _overlay_changed(self) -> None:
         self.overlay_options_changed.emit(self.overlay_options())
+
+    def _show_validation(self, grid) -> None:
+        """LOT 3B-3 : résumé lisible ; les chiffres restent dans « Signaux visuels »."""
+        visibility = {"VISIBLE": "Visible", "NOT_VISIBLE": "Non visible", "UNKNOWN": "Incertaine"}
+        alignment = {"ALIGNED": "OK", "DEGRADED": "Dégradé", "MISALIGNED": "Recalibration nécessaire",
+                     "INSUFFICIENT_EVIDENCE": "Preuves insuffisantes"}
+        consistency = {"CONSISTENT": "OK", "SUSPECT": "Suspecte", "STALE_LIKELY": "Suspecte (persistante)",
+                       "UNKNOWN": "Inconnue"}
+        drift = grid.drift or {}
+        status = (grid.alignment or {}).get("status")
+        if drift.get("state") == "RECALIBRATION_REQUIRED":
+            status = "MISALIGNED"
+        self.real_values["grid_visible"].setText(visibility.get(grid.grid_visibility_state, "—"))
+        self.real_values["alignment"].setText(alignment.get(status, "—"))
+        if grid.map_id_declared is None:
+            declared = "—"
+        else:
+            verified = "vérifiée par /mapid" if grid.map_id_source == "user_verified_mapid" else "non vérifiée"
+            declared = f"{grid.map_id_declared} — {verified}"
+        self.real_values["declared_map"].setText(declared)
+        state = grid.map_declaration_state
+        text = consistency.get(state, "—")
+        if state in ("SUSPECT", "STALE_LIKELY"):
+            text += " — Le map ID déclaré semble ne plus correspondre à la grille observée."
+        self.real_values["map_consistency"].setText(text)
+        adjustment = drift.get("runtime_adjustment")
+        if adjustment and any(adjustment.get(k) for k in ("dx", "dy", "scale")):
+            self.real_values["runtime_adjustment"].setText(
+                f"dx={adjustment['dx']:.1f} px, dy={adjustment['dy']:.1f} px, échelle={adjustment['scale']:+.3%} "
+                f"(runtime, profil inchangé)")
+        else:
+            self.real_values["runtime_adjustment"].setText("aucune")
+        details = []
+        for label, payload in (("grille", grid.grid_visibility), ("alignement", grid.alignment),
+                               ("map", grid.map_declaration)):
+            if payload:
+                details.append(f"{label} : " + " ; ".join(payload.get("reasons", ())))
+        if drift:
+            details.append(f"dérive : {drift.get('state')}")
+        self._validation_details = "\n".join(details)
 
     def set_declared_map(self, text: str) -> None:
         self.map_status.setText(text)
@@ -392,16 +435,15 @@ class CombatPage(QWidget):
             source += f" — {packet.metadata.get('grid_source_reason', '')}"
         if packet.metadata.get("requires_recalibration"):
             source += " — recalibration de projection requise"
-        if grid.declared_map_suspect:
-            source += (f" — ATTENTION : l'écran semble ne plus correspondre à la map déclarée "
-                       f"(cohérence {grid.topology_consistency:.2f}) ; redéclarez la map active")
         self.real_values["grid_source"].setText(source)
+        self._show_validation(grid)
         self.real_values["quality"].setText(f"{observation.observation_confidence:.0%}")
         self.real_values["safe"].setText("Oui" if observation.safe_for_decision else "Non")
         self.real_values["performance"].setText(f"{packet.elapsed_ms:.0f} ms")
         self.real_signals.setPlainText("\n".join(
             f"{name}: {score:.0%}" for name, score in observation.signals.items()
-        ))
+        ) + (f"\nÉtat combat : {observation.combat_state}" if observation.combat_state else "")
+          + ("\n" + getattr(self, "_validation_details", "") if getattr(self, "_validation_details", "") else ""))
         self.observation_save.setEnabled(True)
         self.select_player.setEnabled(self.observation_stop.isEnabled())
         self.observation_help.setText(

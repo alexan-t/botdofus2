@@ -20,6 +20,14 @@ Chaîne : `DofusCellId` → `GridCoordinate` (GameData) → `GridScreenTransform
 4. Démarrez l'observation. La source de grille (`GAMEDATA_PROJECTED`, `LEGACY_CALIBRATION`,
    `VISION_DETECTED` ou `NONE`) et sa raison sont affichées ; le survol de l'aperçu indique la cellule.
 
+**Validation de grille (LOT 3B-3, 0.4.1)** : l'observation distingue désormais « topologie GameData »
+(toujours 560 cellules), « grille de combat dessinée » (`GridVisibility` : Visible / Non visible / Incertaine)
+et « combat actif » (COMBAT / EXPLORATION / UNKNOWN). L'alignement est vérifié à chaque frame
+(OK / Dégradé / Recalibration nécessaire) ; une micro-correction bornée n'est appliquée qu'en mémoire,
+après consensus sur plusieurs frames, et le profil confirmé n'est jamais modifié. La cohérence de la map
+déclarée est relative à sa propre baseline et n'est évaluée que grille visible : c'est un avertissement.
+Banc : `python -m combatbot.benchmark --grid-validation`. Voir [LOT-3B-3-GRID-VALIDATION.md](LOT-3B-3-GRID-VALIDATION.md).
+
 **Recette réelle (LOT 3B-2R)** : cochez « vérifié par /mapid » quand l'ID vient de la commande
 `/mapid` du client, puis **Recette de grille…** capture une frame (lecture seule), enregistre les
 mesures automatiques et votre jugement (alignement, 4 bords + centre, rouge/bleu) sous
@@ -221,6 +229,7 @@ Les tests couvrent le simulateur existant, la migration SQLite, les profils, la 
 - `combatbot/vision/combat_observer.py`, `combat_tracker.py` : analyse d'une frame, overlay, sauvegarde volontaire et stabilisation temporelle.
 - `combatbot/vision/grid_projection.py` : `GridScreenTransform`, `GridProjector`, `ProjectedGrid`, composition cell → combat/client/écran (sans OpenCV).
 - `combatbot/vision/grid_fit.py` : candidats, ajustement global, ancres et alignement visuel.
+- `combatbot/vision/grid_validation.py` : visibilité de grille, validation d'alignement, dérive (consensus), cohérence de map relative, état de combat.
 - `combatbot/vision/grid_profile.py`, `gamedata_grid.py` : profil `CombatGridProfileV2`, map déclarée, priorité des sources de grille.
 - `combatbot/ui/grid_projection_dialog.py` : calibration de projection sur capture figée.
 - `combatbot/corpus/`, `combatbot/benchmark.py` : manifeste, vérité terrain, import, promotion et métriques de baseline.

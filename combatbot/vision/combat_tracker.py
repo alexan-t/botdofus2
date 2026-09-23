@@ -32,7 +32,9 @@ class CombatObservationTracker:
     def update(self, raw: CombatObservation) -> CombatObservation:
         self.history.append(raw)
         prior_combat = self._combat
-        self._combat = self._stable([item.combat_detected for item in self.history], self._combat)
+        # UNKNOWN (LOT 3B-3) never counts as a vote for combat or for exploration.
+        votes = [None if item.combat_state == "UNKNOWN" else item.combat_detected for item in self.history]
+        self._combat = self._stable(votes, self._combat)
         turn_values = [item.player_turn for item in self.history if item.combat_detected]
         self._turn = self._stable(turn_values, self._turn)
         enemies = self._track_enemies(raw.enemies)

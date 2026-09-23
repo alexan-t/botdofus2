@@ -32,6 +32,41 @@ def _gamedata_grid_check() -> dict[str, object]:
             "lookup_287": grid.pixel_to_cell(grid.cell(287).center)}
 
 
+def _grid_validation_check() -> dict[str, object]:
+    """LOT 3B-3 : validateur embarqué, visibilité sur image vide / grille dessinée, aucune action."""
+    from combatbot import ports
+    from combatbot.gamedata.models import DofusCellId, GameMapCell, GridTopology
+    from combatbot.vision import combat_observer
+    from combatbot.vision.gamedata_grid import projected_observation
+    from combatbot.vision.grid_fit import candidate_union
+    from combatbot.vision.grid_projection import GridProjector, GridScreenTransform
+    from combatbot.vision.grid_validation import GridAlignmentValidator, GridVisibilityDetector
+    topology = GridTopology(0, tuple(GameMapCell(DofusCellId(i), walkable=40 <= i < 520,
+                                                 non_walkable_during_fight=False) for i in range(560)))
+    transform = GridScreenTransform.from_cell_size((30, 16), 54, 27)
+    projected = GridProjector(transform).project(topology)
+    size = (820, 580)
+    results = {}
+    for name, draw in (("blank", False), ("drawn", True)):
+        image = np.full((size[1], size[0], 3), 32, np.uint8)
+        if draw:
+            for cell in projected.cells:
+                if cell.static_traversable_in_fight:
+                    points = np.array([p.rounded() for p in cell.polygon], np.int32)
+                    cv2.fillPoly(image, [points], (60, 92, 70))
+                    cv2.polylines(image, [points], True, (175, 175, 175), 1, cv2.LINE_AA)
+        grid = projected_observation(projected, image)
+        visibility, inliers, outliers = GridVisibilityDetector().observe(
+            projected, candidate_union(image), size, grid.topology_consistency)
+        alignment = GridAlignmentValidator().validate(projected, visibility, inliers, outliers)
+        results[f"{name}_visibility"] = visibility.state.value
+        results[f"{name}_alignment"] = alignment.status.value
+    # The observation pipeline holds no reference to the (unconnected) action port.
+    invoked = any(getattr(value, "__name__", "") == "ActionExecutor" for value in vars(combat_observer).values())
+    return {"projected_cells": len(projected.cells), **results,
+            "action_executor_invoked": invoked, "action_port_is_protocol": hasattr(ports, "ActionExecutor")}
+
+
 def run_packaging_smoke(app, storage, window) -> int:
     report_path = Path(os.environ.get(
         "PYTHONBOT_SMOKE_REPORT", str(app_data_root() / "logs" / "packaging-smoke.json")
@@ -61,6 +96,7 @@ def run_packaging_smoke(app, storage, window) -> int:
         checks["opencv"] = int(cv2.Canny(sample, 50, 120).sum()) > 0
 
         checks["gamedata_grid"] = _gamedata_grid_check()
+        checks["grid_validation"] = _grid_validation_check()
 
         ocr_image = np.full((100, 420, 3), 255, dtype=np.uint8)
         cv2.putText(ocr_image, "3 PA  Portee 1-4", (8, 55), cv2.FONT_HERSHEY_SIMPLEX, 1,
@@ -85,6 +121,9 @@ def run_packaging_smoke(app, storage, window) -> int:
             checks["interface_visible"], checks["navigation_pages"] == 8,
             checks["sqlite_profiles"] >= 1, checks["opencv"], checks["rapidocr"]["loaded"],
             checks["gamedata_grid"]["projected_cells"] == 560,
+            checks["grid_validation"]["blank_visibility"] == "NOT_VISIBLE",
+            checks["grid_validation"]["drawn_visibility"] == "VISIBLE",
+            not checks["grid_validation"]["action_executor_invoked"],
         ))
     except Exception as exc:
         results["success"] = False

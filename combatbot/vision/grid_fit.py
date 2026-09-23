@@ -37,8 +37,9 @@ MIN_MARGIN = 0.08
 MAX_MEDIAN_RESIDUAL_RATIO = 0.12  # of cell width
 MAX_ANISOTROPY = 0.2              # |bx| vs |by| relative difference
 ALIGNMENT_SAMPLES_PER_EDGE = 6
-# Mesuré sur 2 captures réelles (même layout) : 0,78 avec la bonne map, 0,51 après
-# changement de salle. Seuil indicatif, à recalibrer sur le corpus ; jamais bloquant.
+# Seuil historique 0.4.0 (2 captures). Conservé uniquement pour les critères de la recette
+# 3B-2R (grid_recipe.map_status). LOT 3B-3 : NE PLUS l'utiliser pour la map périmée — la
+# recette a mesuré 0,601 avec la bonne map ; voir grid_validation.MapConsistencyTracker.
 MIN_TOPOLOGY_CONSISTENCY = 0.65
 
 _GRID_X = np.array([cell_to_grid(c).x for c in range(CELL_COUNT)], dtype=float)

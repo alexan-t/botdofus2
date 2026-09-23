@@ -23,6 +23,10 @@ from combatbot.vision.combat_ocr import NumberReader, read_small_number
 from combatbot.vision.combat_tracker import CombatObservationTracker
 from combatbot.vision.coordinates import CombatPoint, LayoutTransform
 from combatbot.vision.gamedata_grid import GameDataGridResolver
+from combatbot.vision.grid_fit import candidate_union
+from combatbot.vision.grid_validation import (
+    CombatStateDetector, DriftTracker, GridAlignmentValidator, GridVisibilityDetector, MapConsistencyTracker,
+)
 from combatbot.vision.models import Calibration, CapturedFrame
 
 
@@ -71,6 +75,14 @@ class RealCombatObserver:
         if grid_resolver is not None and grid_resolver.legacy_calibration is None:
             grid_resolver.legacy_calibration = grid_calibration
         self.overlay_options = overlay_options or OverlayOptions()
+        # LOT 3B-3 : preuves de grille, dérive, cohérence de map et état de combat.
+        self.visibility_detector = GridVisibilityDetector()
+        self.alignment_validator = GridAlignmentValidator()
+        self.combat_state_detector = CombatStateDetector()
+        self.map_consistency = MapConsistencyTracker()
+        self.drift: DriftTracker | None = None
+        self._validation_debug: dict[str, object] = {}
+        self._last_visibility = None
         self.capture_context = dict(capture_context or {})
         self.session_id = str(self.capture_context.get("session_id") or f"session_{uuid4().hex[:12]}")
         self._frame_index = 0
@@ -93,7 +105,7 @@ class RealCombatObserver:
         if self.grid_resolver is not None:
             zones = {name: rect.to_normalized_rect() for name, rect in self.calibration.zones.items()}
             resolution = self.grid_resolver.resolve(combat_image, frame.client.size, zones)
-            grid = resolution.grid
+            grid = self._validate_grid(resolution, combat_image)
         else:
             grid = infer_combat_grid(combat_image, self.grid_calibration)
         player_reference = self.grid_calibration.player_reference_hsv if self.grid_calibration else None
@@ -120,8 +132,13 @@ class RealCombatObserver:
         spell_signal = _visual_activity(_zone(frame, self.calibration, transform, "spell_bar"))
         signals = {"grid": grid.confidence, "counters": counter_signal,
                    "end_turn": end_signal, "spell_bar": spell_signal}
-        combat_confidence = 0.55 * grid.confidence + 0.15 * counter_signal + 0.15 * end_signal + 0.15 * spell_signal
-        combat_detected = len(grid.cells) >= 4 and combat_confidence >= 0.45
+        # LOT 3B-3 : les 560 cellules GameData ne prouvent rien ; plus aucun len(grid.cells).
+        visibility = self._last_visibility if grid.grid_visibility is not None else None
+        state = self.combat_state_detector.detect(
+            grid_source=grid.grid_source, visibility=visibility, grid_confidence=grid.confidence,
+            hud={"counters": counter_signal, "end_turn": end_signal, "spell_bar": spell_signal})
+        combat_confidence = state.confidence
+        combat_detected = state.combat_detected
 
         # Le bouton et les compteurs doivent tous deux être lisibles avant de conclure au tour.
         turn_score = 0.6 * end_signal + 0.4 * max(confidence_ap, confidence_mp)
@@ -144,9 +161,11 @@ class RealCombatObserver:
             confidence_ap, confidence_mp, observation_confidence,
             signals=signals, timestamp=time.time(),
             player_cell_id=cell_ids.get(player_cell) if player_cell is not None else None,
+            combat_state=state.state.value,
         )
         observation = self.tracker.update(raw)
-        annotated = draw_diagnostic_overlay(combat_image, observation, self.overlay_options)
+        annotated = draw_diagnostic_overlay(combat_image, observation, self.overlay_options,
+                                            validation=self._validation_debug)
         elapsed_ms = (time.perf_counter() - started) * 1000
         phase = "inconnue"
         if observation.result is not None:
@@ -186,6 +205,12 @@ class RealCombatObserver:
             "projection_status": grid.projection_status,
             "topology_consistency": grid.topology_consistency,
             "declared_map_suspect": grid.declared_map_suspect,
+            "grid_visibility_state": grid.grid_visibility_state,
+            "alignment_status": (grid.alignment or {}).get("status"),
+            "drift_state": (grid.drift or {}).get("state"),
+            "runtime_adjustment": (grid.drift or {}).get("runtime_adjustment"),
+            "map_declaration_state": grid.map_declaration_state,
+            "combat_state": observation.combat_state,
             "requires_recalibration": bool(resolution and resolution.requires_recalibration),
             "phase": phase,
             "analysis_ms": elapsed_ms,
@@ -198,6 +223,39 @@ class RealCombatObserver:
         hud_crops = {name: value for name, value in (("ap", ap_image), ("mp", mp_image))
                      if value is not None and value.size > 0}
         return ObservationPacket(observation, combat_image, annotated, elapsed_ms, metadata, hud_crops)
+
+    def _validate_grid(self, resolution, combat_image: np.ndarray):
+        """Visibility → alignment → temporal drift → map consistency (GAMEDATA_PROJECTED only)."""
+        from dataclasses import replace as _replace
+        grid = resolution.grid
+        self._validation_debug = {}
+        self._last_visibility = None
+        if resolution.projected is None or resolution.status is None or resolution.status.transform is None:
+            return grid
+        base = resolution.status.transform
+        if self.drift is None:
+            self.drift = DriftTracker(base)
+        else:
+            self.drift.rebase(base)
+        size = (combat_image.shape[1], combat_image.shape[0])
+        candidates = candidate_union(combat_image)
+        visibility, inliers, outliers = self.visibility_detector.observe(
+            resolution.projected, candidates, size, grid.topology_consistency)
+        self._last_visibility = visibility
+        alignment = self.alignment_validator.validate(resolution.projected, visibility, inliers, outliers)
+        self.drift.update(alignment)
+        # The new adjustment applies from the next frame on; the profile is never touched.
+        self.grid_resolver.runtime_adjustment = self.drift.adjustment
+        map_state = self.map_consistency.update(grid.map_id_declared, grid.map_id_source, visibility.state,
+                                                grid.topology_consistency)
+        self._validation_debug = {"base_transform": base, "effective_transform": resolution.projected.transform,
+                                  "inliers": alignment.inlier_points or tuple(m.candidate for m in inliers),
+                                  "outliers": alignment.outlier_points or tuple(m.candidate for m in outliers),
+                                  "correction": alignment.suggested_correction,
+                                  "supported_regions": visibility.supported_regions,
+                                  "applied": self.drift.adjustment}
+        return _replace(grid, grid_visibility=visibility.to_dict(), alignment=alignment.to_dict(),
+                        drift=self.drift.to_dict(), map_declaration=map_state.to_dict())
 
     def set_player_reference(self, pixel: CombatPoint | tuple[int, int], packet: ObservationPacket) -> bool:
         """Mémorise la couleur au pixel explicitement désigné par l'utilisateur."""
@@ -244,6 +302,7 @@ class OverlayOptions:
     red_blue: bool = False
     candidates: bool = False
     anchors: bool = False
+    alignment_debug: bool = False   # base vs effective, inliers/outliers, régions, correction
     label_every: int = 7
 
 
@@ -257,7 +316,7 @@ def _blend_cells(output: np.ndarray, polygons: list[np.ndarray], color: tuple[in
 
 def draw_diagnostic_overlay(image: np.ndarray, observation: CombatObservation,
                             options: OverlayOptions | None = None, *,
-                            candidates=(), anchors=()) -> np.ndarray:
+                            candidates=(), anchors=(), validation: dict | None = None) -> np.ndarray:
     options = options or OverlayOptions()
     output = image.copy()
     grid = observation.grid
@@ -298,6 +357,8 @@ def draw_diagnostic_overlay(image: np.ndarray, observation: CombatObservation,
             cv2.putText(output, f"{item.logical.x},{item.logical.y}",
                         (item.center[0] - 13, item.center[1] + 3), cv2.FONT_HERSHEY_SIMPLEX,
                         0.3, color, 1, cv2.LINE_AA)
+    if options.alignment_debug and validation:
+        _draw_alignment_debug(output, grid, validation)
     if options.candidates:
         for candidate in candidates:
             cv2.circle(output, (round(candidate[0]), round(candidate[1])), 3, (0, 220, 255), -1)
@@ -317,6 +378,34 @@ def draw_diagnostic_overlay(image: np.ndarray, observation: CombatObservation,
         cv2.putText(output, enemy.id, (enemy.center[0] + 7, enemy.center[1] + 14),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.38, (60, 70, 245), 1, cv2.LINE_AA)
     return output
+
+
+def _draw_alignment_debug(output: np.ndarray, grid, validation: dict) -> None:
+    """Grey +: base transform centres; green: inliers; red x: outliers; arrow: correction."""
+    from combatbot.vision.grid_projection import GridProjector
+    base = validation.get("base_transform")
+    effective = validation.get("effective_transform")
+    if base is not None and effective is not None and base != effective:
+        height, width = output.shape[:2]
+        for cell in GridProjector(base)._geometry.values():
+            x, y = cell[1].rounded()
+            if 0 <= x < width and 0 <= y < height:
+                cv2.drawMarker(output, (x, y), (170, 170, 170), cv2.MARKER_CROSS, 6, 1)
+    for x, y in validation.get("inliers", ()):
+        cv2.circle(output, (round(x), round(y)), 3, (60, 220, 60), -1)
+    for x, y in validation.get("outliers", ()):
+        cv2.drawMarker(output, (round(x), round(y)), (40, 40, 230), cv2.MARKER_TILTED_CROSS, 8, 2)
+    lines = [f"regions: {list(validation.get('supported_regions', ()))}"]
+    correction, applied = validation.get("correction"), validation.get("applied")
+    if correction is not None:
+        centre = (output.shape[1] // 2, output.shape[0] // 2)
+        tip = (round(centre[0] + correction.dx * 8), round(centre[1] + correction.dy * 8))
+        cv2.arrowedLine(output, centre, tip, (0, 200, 255), 2, tipLength=0.25)
+        lines.append(f"proposee: dx={correction.dx:.1f} dy={correction.dy:.1f} s={correction.scale:.4f} (x8)")
+    if applied is not None and not applied.is_zero:
+        lines.append(f"appliquee: dx={applied.dx:.1f} dy={applied.dy:.1f} s={applied.scale:.4f}")
+    for index, text in enumerate(lines):
+        cv2.putText(output, text, (10, 22 + 20 * index), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 200, 255), 1, cv2.LINE_AA)
 
 
 def save_debug_observation(packet: ObservationPacket, directory: Path | None = None) -> Path:

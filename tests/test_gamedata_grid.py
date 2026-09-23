@@ -481,6 +481,8 @@ def test_stale_declared_map_is_flagged_not_redetected():
     right = resolver(screen_topology, map_id=1).resolve(image, CLIENT, ZONES).grid
     stale = resolver(blob_topology(1, 15, 0, 9), map_id=1).resolve(image, CLIENT, ZONES).grid
     assert right.topology_consistency > stale.topology_consistency
-    assert not right.declared_map_suspect and stale.declared_map_suspect
+    # LOT 3B-3 : plus de seuil absolu ; sans suivi relatif (MapConsistencyTracker), pas d'alerte.
+    assert not right.declared_map_suspect and not stale.declared_map_suspect
+    assert right.map_declaration_state is None
     # The warning never changes the declared map nor the 560 identities.
     assert stale.map_id_declared == 1 and {c.cell_id for c in stale.cells} == set(range(560))

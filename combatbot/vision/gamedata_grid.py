@@ -120,6 +120,8 @@ class GameDataGridResolver:
         self.map_identity = map_identity
         self.legacy_calibration = legacy_calibration
         self.allow_legacy_fallback = allow_legacy_fallback
+        # LOT 3B-3 : correction runtime bornée ; la transformation du profil n'est jamais modifiée.
+        self.runtime_adjustment = None
         self._projector: tuple[GridScreenTransform, GridProjector] | None = None
         self._projected: dict[tuple[int, GridScreenTransform], ProjectedGrid] = {}
 
@@ -155,10 +157,13 @@ class GameDataGridResolver:
             topology = self.topology_source.topology(declared.map_id)
         except (GameDataError, OSError, ValueError) as exc:
             return self._legacy(image, f"MAP_UNAVAILABLE: {exc}", status=status)
-        key = (declared.map_id, status.transform)
+        effective = status.transform
+        if self.runtime_adjustment is not None and not self.runtime_adjustment.is_zero:
+            effective = self.runtime_adjustment.apply(status.transform)
+        key = (declared.map_id, effective)
         projected = self._projected.get(key)
         if projected is None:
-            projected = self.projector(status.transform).project(topology)
+            projected = self.projector(effective).project(topology)
             self._projected[key] = projected
             while len(self._projected) > TOPOLOGY_CACHE_SIZE:
                 self._projected.pop(next(iter(self._projected)))

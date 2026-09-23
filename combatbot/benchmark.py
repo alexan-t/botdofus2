@@ -14,8 +14,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Mesure la baseline du corpus réel PythonBot")
     parser.add_argument("--corpus-root", type=Path, help="Racine data/corpus à utiliser")
     parser.add_argument("--output-dir", type=Path, help="Dossier de rapport")
+    parser.add_argument("--grid-validation", action="store_true",
+                        help="LOT 3B-3 : visibilité de grille, combat, alignement, map périmée (corpus lot3b2r)")
+    parser.add_argument("--client", type=Path, help="Dossier client GameData (défaut : réglage de l'application)")
     args = parser.parse_args(argv)
     repository = CorpusRepository(args.corpus_root)
+    if args.grid_validation:
+        return _grid_validation(repository, args)
     report = run_benchmark(repository)
     output = args.output_dir or (app_data_root() / "data" / "benchmarks")
     json_path, markdown_path = write_reports(report, output)
@@ -23,6 +28,32 @@ def main(argv: list[str] | None = None) -> int:
           f"{report['corpus']['annotated_observations']} annotée(s)")
     print(f"JSON : {json_path}")
     print(f"Markdown : {markdown_path}")
+    return 0
+
+
+def _grid_validation(repository: CorpusRepository, args) -> int:
+    import json
+    from combatbot.corpus.grid_validation_benchmark import (
+        markdown_summary, run_grid_validation_benchmark, topology_source_for,
+    )
+    client = args.client
+    if client is None:
+        try:
+            from combatbot.runtime import database_path
+            from combatbot.storage import Storage
+            storage = Storage(database_path())
+            client = storage.get_setting("dofus_client_directory")
+            storage.close()
+        except Exception:  # noqa: BLE001 - missing settings simply mean "not available"
+            client = None
+    root = app_data_root() / "data"
+    report = run_grid_validation_benchmark(repository, topology_source_for(client, root / "gamedata" / "cache"))
+    output = args.output_dir or (root / "benchmarks")
+    output.mkdir(parents=True, exist_ok=True)
+    (output / "grid-validation.json").write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str),
+                                                 encoding="utf-8")
+    (output / "grid-validation.md").write_text(markdown_summary(report), encoding="utf-8")
+    print(markdown_summary(report))
     return 0
 
 
