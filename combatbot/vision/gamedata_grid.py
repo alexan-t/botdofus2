@@ -95,7 +95,8 @@ def observed_cells(projected: ProjectedGrid, confidences: dict[int, float] | Non
 
 def projected_observation(projected: ProjectedGrid, image: np.ndarray | None, *,
                           status: ProjectionStatus | None = None,
-                          profile_version: int | None = PROFILE_SCHEMA_VERSION) -> CombatGridObservation:
+                          profile_version: int | None = PROFILE_SCHEMA_VERSION,
+                          map_id_source: str | None = None) -> CombatGridObservation:
     """560 cells whatever the image shows; the image only drives confidences."""
     if image is not None and image.size:
         confidence, per_cell = projection_alignment(image, projected)
@@ -106,7 +107,7 @@ def projected_observation(projected: ProjectedGrid, image: np.ndarray | None, *,
         observed_cells(projected, per_cell), transform.cell_width, transform.cell_height, 0.0, confidence,
         GRID_SOURCE_GAMEDATA, projected.map_id, confidence, profile_version,
         status.code.value if status else None, transform.to_dict(),
-        topology_consistency(projected, per_cell) if per_cell else None,
+        topology_consistency(projected, per_cell) if per_cell else None, map_id_source,
     )
 
 
@@ -161,5 +162,6 @@ class GameDataGridResolver:
             self._projected[key] = projected
             while len(self._projected) > TOPOLOGY_CACHE_SIZE:
                 self._projected.pop(next(iter(self._projected)))
-        grid = projected_observation(projected, image, status=status)
+        grid = projected_observation(projected, image, status=status,
+                                     map_id_source=getattr(declared.source, "value", None))
         return GridResolution(grid, GRID_SOURCE_GAMEDATA, status.code.value, status, projected, False)

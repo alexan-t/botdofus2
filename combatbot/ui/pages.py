@@ -167,6 +167,7 @@ class CombatPage(QWidget):
     projection_calibration_requested = Signal()
     overlay_options_changed = Signal(object)
     legacy_fallback_changed = Signal(bool)
+    grid_recipe_requested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -238,13 +239,19 @@ class CombatPage(QWidget):
         self.map_load = QPushButton("Charger")
         self.map_load.clicked.connect(lambda: self.map_load_requested.emit(self.map_id_input.text()))
         self.map_id_input.returnPressed.connect(self.map_load.click)
+        self.map_id_verified = QCheckBox("vérifié par /mapid")
+        self.map_id_verified.setToolTip("Cochez seulement si l'ID vient de la commande /mapid tapée dans le client")
         self.map_status = QLabel("Aucun map ID déclaré — la map active n'est pas détectée automatiquement")
         self.map_status.setWordWrap(True)
         self.projection_calibrate = QPushButton("Calibrer projection de grille")
         self.projection_calibrate.clicked.connect(self.projection_calibration_requested)
+        self.grid_recipe = QPushButton("Recette de grille…")
+        self.grid_recipe.setToolTip("Capture figée + mesures + jugement d'alignement (lecture seule)")
+        self.grid_recipe.clicked.connect(self.grid_recipe_requested)
         self.legacy_fallback = QCheckBox("Autoriser la grille historique en secours")
         self.legacy_fallback.toggled.connect(self.legacy_fallback_changed)
-        for widget in (self.map_id_input, self.map_load, self.projection_calibrate, self.legacy_fallback):
+        for widget in (self.map_id_input, self.map_id_verified, self.map_load, self.projection_calibrate,
+                       self.grid_recipe, self.legacy_fallback):
             map_row.addWidget(widget)
         map_row.addStretch()
         real_layout.addLayout(map_row)

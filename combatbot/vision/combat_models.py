@@ -78,6 +78,8 @@ class CombatGridObservation:
     transform: dict | None = None
     # Support visuel moyen (traversables − non traversables) : cohérence écran / map déclarée.
     topology_consistency: float | None = None
+    # user_verified_mapid | manual_guess ; None pour les observations antérieures au LOT 3B-2R.
+    map_id_source: str | None = None
 
     @property
     def declared_map_suspect(self) -> bool:

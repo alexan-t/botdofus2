@@ -39,9 +39,11 @@ from combatbot.vision.coordinates import CombatPoint
 from combatbot.vision.combat_observer import RealCombatObserver, save_debug_observation
 from combatbot.runtime import app_data_root
 from combatbot.ui.grid_projection_dialog import GridProjectionDialog
+from combatbot.ui.grid_recipe_dialog import GridRecipeDialog
+from combatbot.vision.grid_recipe import CAPTURE_KINDS, RealGridValidationSession
 from combatbot.vision.coordinates import LayoutSignature
 from combatbot.vision.gamedata_grid import GameDataGridResolver, GameDataTopologySource
-from combatbot.vision.grid_profile import PROFILE_SETTING_KEY, CombatGridProfileV2, ManualMapIdentity
+from combatbot.vision.grid_profile import PROFILE_SETTING_KEY, CombatGridProfileV2, ManualMapIdentity, MapIdSource
 
 DECLARED_MAP_SETTING = "declared_map_id"
 
@@ -166,6 +168,7 @@ class MainWindow(QMainWindow):
         self.combat.projection_calibration_requested.connect(self._calibrate_projection)
         self.combat.overlay_options_changed.connect(self._set_overlay_options)
         self.combat.legacy_fallback_changed.connect(self._set_legacy_fallback)
+        self.combat.grid_recipe_requested.connect(self._grid_recipe)
         self.client_panel.profile_changed.connect(self._restore_declared_map_input)
         self.combat.mode.currentTextChanged.connect(
             lambda mode: self._stop_observation() if mode == "Simulation" else None
@@ -629,7 +632,9 @@ class MainWindow(QMainWindow):
             active, topology = value
             self._topology_source, self._topology_folder = active, folder
             self._declared_topology = topology
-            declared = self._map_identity.declare(map_id)
+            source = (MapIdSource.USER_VERIFIED_MAPID if self.combat.map_id_verified.isChecked()
+                      else MapIdSource.MANUAL_GUESS)
+            declared = self._map_identity.declare(map_id, source)
             cells = topology.cells
             traversable = sum(bool(c.walkable) and not c.non_walkable_during_fight for c in cells)
             blocked_los = sum(c.line_of_sight is False for c in cells)
@@ -687,6 +692,61 @@ class MainWindow(QMainWindow):
                 self._on_event(CombatEvent("INFO", "vision.grid", "Projection de grille GameData confirmée"))
 
         self._run_capture(show_dialog)
+
+    def _recipe_session(self, frame: CapturedFrame, calibration) -> RealGridValidationSession:
+        """One session per day under data/validation/grid-real (never versioned)."""
+        root = app_data_root() / "data" / "validation" / "grid-real"
+        session_id = "grid-real-" + datetime.now().strftime("%Y%m%d")
+        if (root / session_id / "session.json").exists():
+            return RealGridValidationSession.load(root, session_id)
+        signature = LayoutSignature.create(
+            frame.client.size, {name: rect.to_normalized_rect() for name, rect in calibration.zones.items()})
+        return RealGridValidationSession.create(root, {
+            "client_size": frame.client.size.to_dict(), "dpi": window_dpi(frame.hwnd),
+            "layout_signature": signature.to_dict(), "layout_digest": signature.digest,
+            "profile_id": self.client_panel.profile_id}, session_id)
+
+    def _grid_recipe(self) -> None:
+        from PySide6.QtWidgets import QInputDialog
+        profile_id = self.client_panel.profile_id
+        declared = self._map_identity.current_map()
+        if profile_id is None or self.client_panel.connected_hwnd is None:
+            self._vision_error("Connectez d'abord une fenêtre DOFUS dans Paramètres.")
+            return
+        profile = self._load_grid_profile(profile_id)
+        calibration = self.storage.load_calibration(profile_id)
+        if declared is None or self._declared_topology is None or profile is None or calibration is None:
+            self._vision_error("Recette : chargez un map ID (/mapid) et confirmez la projection de grille d'abord.")
+            return
+        items = [f"{key} — {label}" for key, label in CAPTURE_KINDS.items()]
+        choice, ok = QInputDialog.getItem(self, "Recette de grille", "Type de capture", items, 0, False)
+        if not ok:
+            return
+        mode, ok = QInputDialog.getItem(self, "Recette de grille", "Mode affiché",
+                                        ["exploration", "placement", "combat"], 0, False)
+        if not ok:
+            return
+        kind = choice.split(" ")[0]
+        topology = self._declared_topology
+
+        def show(frame: CapturedFrame, _result) -> None:
+            session = self._recipe_session(frame, calibration)
+            transform = profile.transform.to_dict()
+            transform_id = next((t["transform_id"] for t in session.transforms if t["transform"] == transform), None)
+            if transform_id is None:
+                transform_id = session.add_transform(profile.transform, "profil combat_grid_v2",
+                                                     method=profile.calibration_method)
+            session.declare_map(declared.map_id, declared.source.value)
+            record = session.add_capture(
+                map_id=declared.map_id, map_id_source=declared.source.value, kind=kind,
+                transform_id=transform_id, frame=frame.image, combat_image=calibration.crop(frame, "combat"),
+                topology=topology, red_blue=kind == "D", context={"mode": mode, "client": frame.client.to_dict()})
+            GridRecipeDialog(session, record["capture_id"], topology, self).exec()
+            status, reasons = session.map_status(session.map_record(declared.map_id))
+            self._on_event(CombatEvent("INFO", "vision.recipe",
+                                       f"Recette {record['capture_id']} : map {declared.map_id} {status} {reasons}"))
+
+        self._run_capture(show, delay_ms=0)
 
     def _set_overlay_options(self, options) -> None:
         if self._observer is not None:

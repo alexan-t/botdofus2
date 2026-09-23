@@ -26,7 +26,7 @@ from combatbot.vision.gamedata_grid import (
 )
 from combatbot.vision.grid_fit import FitStatus, fit_from_anchors, fit_grid_from_candidates
 from combatbot.vision.grid_profile import (
-    CombatGridProfileV2, DeclaredMapId, ManualMapIdentity, MapIdOrigin, ProjectionStatusCode,
+    CombatGridProfileV2, DeclaredMapId, ManualMapIdentity, MapIdOrigin, MapIdSource, ProjectionStatusCode,
 )
 from combatbot.vision.grid_projection import (
     GridOrientation, GridProjector, GridScreenTransform, Vector2, cell_to_client, cell_to_combat, cell_to_screen,
@@ -217,7 +217,14 @@ def test_manual_map_id_is_marked_declared():
     assert identity.current_map() is None
     declared = identity.declare(123)
     assert declared.origin is MapIdOrigin.DECLARED_MANUALLY
-    assert declared.label == "Map ID déclaré manuellement : 123"
+    assert declared.label == "Map ID déclaré manuellement : 123 (non vérifié)"
+    assert declared.source is MapIdSource.MANUAL_GUESS
+    verified = identity.declare(124, MapIdSource.USER_VERIFIED_MAPID)
+    assert verified.label.endswith("(vérifié par /mapid)") and verified.source.value == "user_verified_mapid"
+    topology = make_topology(124)
+    r = resolver(topology, map_id=124)
+    r.map_identity.declare(124, MapIdSource.USER_VERIFIED_MAPID)
+    assert r.resolve(render(topology), CLIENT, ZONES).grid.map_id_source == "user_verified_mapid"
     with pytest.raises(ValueError):
         DeclaredMapId(-1)
     with pytest.raises(ValueError):

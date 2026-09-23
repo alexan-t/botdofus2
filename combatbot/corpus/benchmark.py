@@ -193,6 +193,8 @@ def run_benchmark(repository: CorpusRepository) -> dict[str, object]:
     projected_counts: list[int] = []
     projection_confidences: list[float] = []
     grid_sources: dict[str, int] = {}
+    map_id_sources: dict[str, int] = {}
+    verified_maps: set[int] = set()
     player_result = {"correct": 0, "incorrect": 0, "unknown": 0, "annotated": 0}
     player_pixel_errors: list[float] = []
     enemy_result = {"correct": 0, "missed": 0, "false_positive": 0, "annotated_frames": 0}
@@ -220,6 +222,10 @@ def run_benchmark(repository: CorpusRepository) -> dict[str, object]:
             grid_confidences.append(float(grid["confidence"]))
         source = _grid_source(prediction)
         grid_sources[source] = grid_sources.get(source, 0) + 1
+        map_source = str(_grid(prediction).get("map_id_source") or "UNSPECIFIED")
+        map_id_sources[map_source] = map_id_sources.get(map_source, 0) + 1
+        if map_source == "user_verified_mapid" and isinstance(_grid(prediction).get("map_id_declared"), int):
+            verified_maps.add(int(_grid(prediction)["map_id_declared"]))
         if source == "GAMEDATA_PROJECTED":
             # Independent of how many contours were visible in the frame.
             projected_counts.append(len(_projected_centers(prediction)))
@@ -298,6 +304,8 @@ def run_benchmark(repository: CorpusRepository) -> dict[str, object]:
             "reference_cells": reference_result,
             "false_positive_note": "Calculé uniquement lorsque reference_cells_complete=true.",
             "grid_source": grid_sources,
+            "map_id_source": map_id_sources,
+            "verified_map_ids": sorted(verified_maps),
             "projected_cell_count_mean": mean(projected_counts) if projected_counts else None,
             "projected_cell_count_min": min(projected_counts) if projected_counts else None,
             "projected_cell_count_max": max(projected_counts) if projected_counts else None,

@@ -32,10 +32,17 @@ class MapIdOrigin(str, Enum):
     DETECTED = "DETECTED"
 
 
+class MapIdSource(str, Enum):
+    """Provenance of a manually declared map ID (LOT 3B-2R)."""
+    USER_VERIFIED_MAPID = "user_verified_mapid"  # typed by the user from /mapid in the client
+    MANUAL_GUESS = "manual_guess"                # anything else (memory, coordinates, candidates)
+
+
 @dataclass(frozen=True)
 class DeclaredMapId:
     map_id: int
     origin: MapIdOrigin = MapIdOrigin.DECLARED_MANUALLY
+    source: MapIdSource = MapIdSource.MANUAL_GUESS
 
     def __post_init__(self) -> None:
         if isinstance(self.map_id, bool) or not isinstance(self.map_id, int) or self.map_id < 0:
@@ -44,7 +51,8 @@ class DeclaredMapId:
     @property
     def label(self) -> str:
         if self.origin is MapIdOrigin.DECLARED_MANUALLY:
-            return f"Map ID déclaré manuellement : {self.map_id}"
+            verified = " (vérifié par /mapid)" if self.source is MapIdSource.USER_VERIFIED_MAPID else " (non vérifié)"
+            return f"Map ID déclaré manuellement : {self.map_id}{verified}"
         return f"Map ID détecté : {self.map_id}"
 
 
@@ -60,8 +68,9 @@ class ManualMapIdentity:
     def __init__(self, map_id: int | None = None) -> None:
         self._value = DeclaredMapId(map_id) if map_id is not None else None
 
-    def declare(self, map_id: int | None) -> DeclaredMapId | None:
-        self._value = DeclaredMapId(map_id) if map_id is not None else None
+    def declare(self, map_id: int | None,
+                source: MapIdSource = MapIdSource.MANUAL_GUESS) -> DeclaredMapId | None:
+        self._value = DeclaredMapId(map_id, source=MapIdSource(source)) if map_id is not None else None
         return self._value
 
     def current_map(self) -> DeclaredMapId | None:

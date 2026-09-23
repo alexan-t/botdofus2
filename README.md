@@ -20,6 +20,13 @@ Chaîne : `DofusCellId` → `GridCoordinate` (GameData) → `GridScreenTransform
 4. Démarrez l'observation. La source de grille (`GAMEDATA_PROJECTED`, `LEGACY_CALIBRATION`,
    `VISION_DETECTED` ou `NONE`) et sa raison sont affichées ; le survol de l'aperçu indique la cellule.
 
+**Recette réelle (LOT 3B-2R)** : cochez « vérifié par /mapid » quand l'ID vient de la commande
+`/mapid` du client, puis **Recette de grille…** capture une frame (lecture seule), enregistre les
+mesures automatiques et votre jugement (alignement, 4 bords + centre, rouge/bleu) sous
+`data/validation/grid-real/` (non versionné). Le même flux existe en ligne de commande :
+`python scripts/grid_recipe.py --help` et `python scripts/grid_recipe_analysis.py --session ID`.
+Résultats : [LOT-3B-2R-REAL-GRID-RECIPE.md](LOT-3B-2R-REAL-GRID-RECIPE.md).
+
 Le profil `combat_grid_v2` est lié au layout (taille client et zones) et non à la map : les 12 153 maps
 lisibles ont toutes le même zoom. Un layout incompatible n'applique jamais la projection
 (`GRID_CALIBRATION_INCOMPATIBLE`) ; un redimensionnement proportionnel est appliqué à l'échelle et signalé
