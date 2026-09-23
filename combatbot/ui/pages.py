@@ -1,0 +1,599 @@
+"""Pages métier historiques de l'interface, sans règles de combat embarquées."""
+
+from __future__ import annotations
+
+import sqlite3
+
+from PySide6.QtCore import QPoint, Qt, Signal
+from PySide6.QtWidgets import (
+    QCheckBox, QComboBox, QFormLayout, QFrame, QGridLayout, QHBoxLayout,
+    QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton,
+    QSpinBox, QStackedWidget, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
+    QTabWidget, QScrollArea,
+)
+
+from combatbot.models import CombatSnapshot, Spell, Strategy, StrategyMode, TargetPriority
+from combatbot.storage import Storage
+from combatbot.ui.grid_widget import GridWidget
+from combatbot.ui.images import bgr_to_pixmap
+from combatbot.ui.client_panel import ClientPanel
+from combatbot.ui.scan_panel import ScanPanel
+from combatbot.ui.gamedata_panel import GameDataPanel
+from combatbot.ui.jobs import JobRunner
+from combatbot.vision.combat_models import ObservationPacket
+
+
+def title(text: str, subtitle: str) -> QVBoxLayout:
+    layout = QVBoxLayout()
+    heading = QLabel(text)
+    heading.setObjectName("title")
+    description = QLabel(subtitle)
+    description.setObjectName("subtitle")
+    layout.addWidget(heading)
+    layout.addWidget(description)
+    layout.addSpacing(12)
+    return layout
+
+
+def card() -> tuple[QFrame, QVBoxLayout]:
+    frame = QFrame()
+    frame.setObjectName("card")
+    layout = QVBoxLayout(frame)
+    layout.setContentsMargins(16, 14, 16, 14)
+    layout.setSpacing(8)
+    return frame, layout
+
+
+class DashboardPage(QWidget):
+    start_clicked = Signal()
+    pause_clicked = Signal()
+    stop_clicked = Signal()
+
+    def __init__(self) -> None:
+        super().__init__()
+        outer = title("Tableau de bord", "Simulation de combat ; observation du client dans Paramètres et Sorts")
+        metrics = QGridLayout()
+        self.values: dict[str, QLabel] = {}
+        for index, (key, label) in enumerate((
+            ("status", "État du bot"), ("character", "Personnage"),
+            ("combats", "Combats"), ("victories", "Victoires"),
+            ("defeats", "Défaites"), ("xp", "XP simulée"),
+            ("kamas", "Kamas simulés"),
+        )):
+            frame, box = card()
+            caption = QLabel(label)
+            caption.setObjectName("subtitle")
+            value = QLabel("—")
+            value.setObjectName("metric")
+            value.setWordWrap(True)
+            box.addWidget(caption)
+            box.addWidget(value)
+            metrics.addWidget(frame, index // 4, index % 4)
+            self.values[key] = value
+        outer.addLayout(metrics)
+        buttons = QHBoxLayout()
+        self.start_button = QPushButton("Démarrer la simulation")
+        self.start_button.setObjectName("primary")
+        self.pause_button = QPushButton("Pause")
+        self.stop_button = QPushButton("Arrêter")
+        self.stop_button.setObjectName("danger")
+        self.start_button.clicked.connect(self.start_clicked)
+        self.pause_button.clicked.connect(self.pause_clicked)
+        self.stop_button.clicked.connect(self.stop_clicked)
+        for button in (self.start_button, self.pause_button, self.stop_button):
+            buttons.addWidget(button)
+        buttons.addStretch()
+        outer.addLayout(buttons)
+        frame, box = card()
+        box.addWidget(QLabel("Console des événements"))
+        self.console = QTextEdit()
+        self.console.setReadOnly(True)
+        self.console.document().setMaximumBlockCount(100)
+        box.addWidget(self.console)
+        outer.addWidget(frame, 1)
+        self.setLayout(outer)
+        self.set_status("Arrêté")
+
+    def set_status(self, status: str) -> None:
+        self.values["status"].setText(status)
+        self.start_button.setEnabled(status in ("Arrêté", "Terminé", "Erreur"))
+        self.pause_button.setEnabled(status in ("En cours", "En pause"))
+        self.pause_button.setText("Reprendre" if status == "En pause" else "Pause")
+        self.stop_button.setEnabled(status in ("En cours", "En pause"))
+
+    def set_statistics(self, statistics: dict[str, int]) -> None:
+        for key in ("combats", "victories", "defeats", "xp", "kamas"):
+            self.values[key].setText(str(statistics[key]))
+
+    def append_log(self, message: str) -> None:
+        self.console.append(message)
+
+
+class ObservationPreview(QLabel):
+    image_clicked = Signal(object)
+
+    def __init__(self) -> None:
+        super().__init__("Aucune observation")
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setMinimumSize(560, 390)
+        self.setStyleSheet("border: 1px solid #34445b; background: #111a28;")
+        self._image_size: tuple[int, int] | None = None
+
+    def set_image(self, image) -> None:
+        self._image_size = (image.shape[1], image.shape[0])
+        pixmap = bgr_to_pixmap(image)
+        self.setPixmap(pixmap.scaled(self.size(), Qt.AspectRatioMode.KeepAspectRatio,
+                                     Qt.TransformationMode.SmoothTransformation))
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if self.pixmap() is not None and self._image_size:
+            # L'image suivante rétablira la résolution source; éviter d'agrandir un aperçu déjà réduit.
+            self.setPixmap(self.pixmap().scaled(self.size(), Qt.AspectRatioMode.KeepAspectRatio,
+                                                Qt.TransformationMode.SmoothTransformation))
+        super().resizeEvent(event)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt API
+        pixmap = self.pixmap()
+        if pixmap is None or self._image_size is None:
+            return
+        left = (self.width() - pixmap.width()) / 2
+        top = (self.height() - pixmap.height()) / 2
+        px, py = event.position().x() - left, event.position().y() - top
+        if 0 <= px < pixmap.width() and 0 <= py < pixmap.height():
+            width, height = self._image_size
+            self.image_clicked.emit((round(px * width / pixmap.width()), round(py * height / pixmap.height())))
+
+
+class CombatPage(QWidget):
+    observation_start_requested = Signal()
+    observation_stop_requested = Signal()
+    observation_save_requested = Signal()
+    player_reference_requested = Signal(object)
+
+    def __init__(self) -> None:
+        super().__init__()
+        outer = title("Combat", "Simulation ou observation visuelle en lecture seule")
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(QLabel("Mode"))
+        self.mode = QComboBox()
+        self.mode.addItems(("Simulation", "Vision réelle"))
+        mode_row.addWidget(self.mode)
+        mode_row.addStretch()
+        outer.addLayout(mode_row)
+        self.views = QStackedWidget()
+
+        simulation = QWidget()
+        content = QHBoxLayout()
+        frame, grid_box = card()
+        self.grid = GridWidget()
+        grid_box.addWidget(self.grid)
+        content.addWidget(frame, 3)
+        details, details_box = card()
+        self.state = QLabel("IDLE")
+        self.turn = QLabel("0")
+        self.player = QLabel("—")
+        self.enemies = QLabel("—")
+        self.ap = QLabel("0")
+        self.mp = QLabel("0")
+        self.target = QLabel("—")
+        self.spell = QLabel("—")
+        form = QFormLayout()
+        for label, widget in (
+            ("État", self.state), ("Tour", self.turn), ("Joueur", self.player),
+            ("Ennemis", self.enemies), ("PA", self.ap), ("PM", self.mp),
+            ("Cible", self.target), ("Sort", self.spell),
+        ):
+            widget.setWordWrap(True)
+            form.addRow(label, widget)
+        details_box.addLayout(form)
+        details_box.addWidget(QLabel("Historique des actions"))
+        self.history = QTextEdit()
+        self.history.setReadOnly(True)
+        details_box.addWidget(self.history, 1)
+        content.addWidget(details, 2)
+        simulation.setLayout(content)
+        self.views.addWidget(simulation)
+
+        real = QWidget()
+        real_layout = QVBoxLayout(real)
+        controls = QHBoxLayout()
+        self.observation_start = QPushButton("Démarrer l'observation")
+        self.observation_start.setObjectName("primary")
+        self.observation_stop = QPushButton("Arrêter l'observation")
+        self.observation_stop.setObjectName("danger")
+        self.observation_stop.setEnabled(False)
+        self.observation_save = QPushButton("Enregistrer cette observation")
+        self.observation_save.setEnabled(False)
+        self.select_player = QPushButton("Voici mon personnage")
+        self.select_player.setCheckable(True)
+        self.select_player.setEnabled(False)
+        for button in (self.observation_start, self.observation_stop,
+                       self.observation_save, self.select_player):
+            controls.addWidget(button)
+        controls.addStretch()
+        real_layout.addLayout(controls)
+        self.observation_help = QLabel(
+            "Lecture seule. Pour identifier le joueur, activez « Voici mon personnage » puis cliquez "
+            "sur son marqueur dans l'aperçu PythonBot."
+        )
+        self.observation_help.setWordWrap(True)
+        real_layout.addWidget(self.observation_help)
+        real_content = QHBoxLayout()
+        preview_frame, preview_box = card()
+        self.observation_preview = ObservationPreview()
+        preview_box.addWidget(self.observation_preview)
+        real_content.addWidget(preview_frame, 4)
+        status_frame, status_box = card()
+        self.real_values: dict[str, QLabel] = {}
+        real_form = QFormLayout()
+        for key, caption in (
+            ("combat", "Combat"), ("turn", "Mon tour"), ("ap", "PA"), ("mp", "PM"),
+            ("player", "Ma cellule"), ("enemies", "Ennemis détectés"),
+            ("grid", "Cellules de grille"), ("quality", "Qualité observation"),
+            ("safe", "Sûre pour décision"), ("performance", "Durée analyse"),
+        ):
+            value = QLabel("Inconnu")
+            value.setWordWrap(True)
+            real_form.addRow(caption, value)
+            self.real_values[key] = value
+        status_box.addLayout(real_form)
+        status_box.addWidget(QLabel("Signaux visuels"))
+        self.real_signals = QTextEdit()
+        self.real_signals.setReadOnly(True)
+        self.real_signals.setMaximumHeight(140)
+        status_box.addWidget(self.real_signals)
+        real_content.addWidget(status_frame, 2)
+        real_layout.addLayout(real_content, 1)
+        self.views.addWidget(real)
+        outer.addWidget(self.views, 1)
+        self.setLayout(outer)
+        self.mode.currentIndexChanged.connect(self.views.setCurrentIndex)
+        self.observation_start.clicked.connect(self.observation_start_requested)
+        self.observation_stop.clicked.connect(self.observation_stop_requested)
+        self.observation_save.clicked.connect(self.observation_save_requested)
+        self.observation_preview.image_clicked.connect(self._preview_clicked)
+
+    def _preview_clicked(self, point: tuple[int, int]) -> None:
+        if self.select_player.isChecked():
+            self.player_reference_requested.emit(point)
+            self.select_player.setChecked(False)
+
+    def set_observing(self, active: bool) -> None:
+        self.observation_start.setEnabled(not active)
+        self.observation_stop.setEnabled(active)
+        self.select_player.setEnabled(active and self.observation_save.isEnabled())
+        if not active:
+            self.observation_help.setText("Observation arrêtée. Aucun clic n'a été envoyé au client DOFUS.")
+
+    def set_observation(self, packet: ObservationPacket) -> None:
+        observation = packet.observation
+        self.observation_preview.set_image(packet.annotated)
+        unknown = lambda value: "Inconnu" if value is None else str(value)
+        self.real_values["combat"].setText(
+            f"{'Oui' if observation.combat_detected else 'Non'} ({observation.combat_confidence:.0%})"
+        )
+        turn = "Inconnu" if observation.player_turn is None else ("Oui" if observation.player_turn else "Non")
+        self.real_values["turn"].setText(f"{turn} ({observation.turn_confidence:.0%})")
+        self.real_values["ap"].setText(f"{unknown(observation.ap)} ({observation.confidence_ap:.0%})")
+        self.real_values["mp"].setText(f"{unknown(observation.mp)} ({observation.confidence_mp:.0%})")
+        player = observation.player_cell
+        self.real_values["player"].setText(
+            f"({player.x}, {player.y}) ({observation.player_confidence:.0%})" if player else "Inconnue"
+        )
+        self.real_values["enemies"].setText("\n".join(
+            f"{enemy.id}: ({enemy.cell.x}, {enemy.cell.y}) — {enemy.confidence:.0%}"
+            for enemy in observation.enemies
+        ) or "Aucun détecté")
+        self.real_values["grid"].setText(
+            f"{len(observation.grid.cells)} ({observation.grid.confidence:.0%})"
+        )
+        self.real_values["quality"].setText(f"{observation.observation_confidence:.0%}")
+        self.real_values["safe"].setText("Oui" if observation.safe_for_decision else "Non")
+        self.real_values["performance"].setText(f"{packet.elapsed_ms:.0f} ms")
+        self.real_signals.setPlainText("\n".join(
+            f"{name}: {score:.0%}" for name, score in observation.signals.items()
+        ))
+        self.observation_save.setEnabled(True)
+        self.select_player.setEnabled(self.observation_stop.isEnabled())
+        self.observation_help.setText(
+            "Observation active en lecture seule. Les données insuffisantes restent inconnues."
+        )
+
+    def set_snapshot(self, snap: CombatSnapshot) -> None:
+        self.grid.set_snapshot(snap)
+        self.state.setText(snap.state.value)
+        self.turn.setText(str(snap.turn))
+        self.player.setText(f"{snap.player.name} : ({snap.player.cell.x}, {snap.player.cell.y}), {snap.player.hp}/{snap.player.max_hp} PV")
+        self.enemies.setText("\n".join(
+            f"{e.name} : ({e.cell.x}, {e.cell.y}), {e.hp} PV" for e in snap.enemies
+        ))
+        self.ap.setText(str(snap.ap))
+        self.mp.setText(str(snap.mp))
+        self.target.setText(snap.selected_target or "—")
+        self.spell.setText(snap.selected_spell or "—")
+        self.history.setPlainText("\n".join(snap.history[-30:]))
+        self.history.moveCursor(self.history.textCursor().MoveOperation.End)
+
+
+class SpellsPage(QWidget):
+    def __init__(self, storage: Storage) -> None:
+        super().__init__()
+        self.storage = storage
+        self.selected_id: int | None = None
+        outer = title("Sorts", "Valeurs configurables pour la simulation ; aucun sort DOFUS n'est prédéfini")
+        content = QHBoxLayout()
+        left, left_box = card()
+        self.list_widget = QListWidget()
+        self.list_widget.currentItemChanged.connect(self._on_selection)
+        left_box.addWidget(self.list_widget)
+        self.new_button = QPushButton("Nouveau sort")
+        self.new_button.clicked.connect(self._new)
+        left_box.addWidget(self.new_button)
+        content.addWidget(left, 1)
+        right, right_box = card()
+        form = QFormLayout()
+        self.name = QLineEdit()
+        self.ap_cost = self._spin(1, 20, 3)
+        self.min_range = self._spin(0, 30, 1)
+        self.max_range = self._spin(0, 30, 4)
+        self.modifiable_range = QCheckBox()
+        self.line_cast = QCheckBox()
+        self.line_of_sight = QCheckBox()
+        self.line_of_sight.setChecked(True)
+        self.per_turn = self._spin(1, 20, 2)
+        self.per_target = self._spin(1, 20, 2)
+        self.priority = self._spin(-100, 100, 10)
+        self.damage = self._spin(0, 100, 6)
+        for label, widget in (
+            ("Nom", self.name), ("Coût PA", self.ap_cost),
+            ("Portée min.", self.min_range), ("Portée max.", self.max_range),
+            ("Portée modifiable", self.modifiable_range), ("Lancer en ligne", self.line_cast),
+            ("Ligne de vue", self.line_of_sight), ("Lancers par tour", self.per_turn),
+            ("Lancers par cible", self.per_target), ("Priorité", self.priority),
+            ("Dégâts simulés", self.damage),
+        ):
+            form.addRow(label, widget)
+        right_box.addLayout(form)
+        actions = QHBoxLayout()
+        save = QPushButton("Enregistrer")
+        save.setObjectName("primary")
+        save.clicked.connect(self._save)
+        delete = QPushButton("Supprimer")
+        delete.setObjectName("danger")
+        delete.clicked.connect(self._delete)
+        actions.addWidget(save)
+        actions.addWidget(delete)
+        right_box.addLayout(actions)
+        content.addWidget(right, 2)
+        tabs = QTabWidget()
+        manual = QWidget()
+        manual.setLayout(content)
+        self.scan_panel = ScanPanel(storage)
+        tabs.addTab(manual, "Sorts simulés")
+        tabs.addTab(self.scan_panel, "Scanner le client")
+        outer.addWidget(tabs, 1)
+        self.setLayout(outer)
+        self.reload()
+
+    @staticmethod
+    def _spin(minimum: int, maximum: int, value: int) -> QSpinBox:
+        spin = QSpinBox()
+        spin.setRange(minimum, maximum)
+        spin.setValue(value)
+        return spin
+
+    def reload(self, select_id: int | None = None) -> None:
+        self.list_widget.clear()
+        spells = self.storage.list_spells()
+        for spell in spells:
+            item = QListWidgetItem(f"{spell.name}  •  {spell.ap_cost} PA  •  priorité {spell.priority}")
+            item.setData(Qt.ItemDataRole.UserRole, spell.id)
+            self.list_widget.addItem(item)
+        for row in range(self.list_widget.count()):
+            if self.list_widget.item(row).data(Qt.ItemDataRole.UserRole) == select_id:
+                self.list_widget.setCurrentRow(row)
+                return
+        if spells:
+            self.list_widget.setCurrentRow(0)
+        else:
+            self._new()
+
+    def _on_selection(self, current: QListWidgetItem | None, previous: QListWidgetItem | None) -> None:
+        if current is None:
+            return
+        spell_id = current.data(Qt.ItemDataRole.UserRole)
+        spell = next((s for s in self.storage.list_spells() if s.id == spell_id), None)
+        if spell is None:
+            return
+        self.selected_id = spell.id
+        self.name.setText(spell.name)
+        for widget, value in (
+            (self.ap_cost, spell.ap_cost), (self.min_range, spell.min_range),
+            (self.max_range, spell.max_range), (self.per_turn, spell.per_turn),
+            (self.per_target, spell.per_target), (self.priority, spell.priority),
+            (self.damage, spell.damage),
+        ):
+            widget.setValue(value)
+        self.modifiable_range.setChecked(spell.modifiable_range)
+        self.line_cast.setChecked(spell.line_cast)
+        self.line_of_sight.setChecked(spell.line_of_sight)
+
+    def _new(self) -> None:
+        self.list_widget.clearSelection()
+        self.selected_id = None
+        self.name.clear()
+        self.ap_cost.setValue(3)
+        self.min_range.setValue(1)
+        self.max_range.setValue(4)
+        self.modifiable_range.setChecked(False)
+        self.line_cast.setChecked(False)
+        self.line_of_sight.setChecked(True)
+        self.per_turn.setValue(2)
+        self.per_target.setValue(2)
+        self.priority.setValue(10)
+        self.damage.setValue(6)
+        self.name.setFocus()
+
+    def _save(self) -> None:
+        spell = Spell(
+            id=self.selected_id, name=self.name.text().strip(), ap_cost=self.ap_cost.value(),
+            min_range=self.min_range.value(), max_range=self.max_range.value(),
+            modifiable_range=self.modifiable_range.isChecked(), line_cast=self.line_cast.isChecked(),
+            line_of_sight=self.line_of_sight.isChecked(), per_turn=self.per_turn.value(),
+            per_target=self.per_target.value(), priority=self.priority.value(), damage=self.damage.value(),
+        )
+        try:
+            spell_id = self.storage.save_spell(spell)
+        except (ValueError, sqlite3.IntegrityError) as exc:
+            QMessageBox.warning(self, "Sort invalide", str(exc))
+            return
+        self.reload(spell_id)
+
+    def _delete(self) -> None:
+        if self.selected_id is not None:
+            self.storage.delete_spell(self.selected_id)
+            self.reload()
+
+
+class StrategiesPage(QWidget):
+    def __init__(self, storage: Storage) -> None:
+        super().__init__()
+        self.storage = storage
+        outer = title("Stratégies", "Paramètres utilisés au prochain démarrage de la simulation")
+        frame, box = card()
+        form = QFormLayout()
+        self.mode = QComboBox()
+        for mode in StrategyMode:
+            self.mode.addItem(mode.value.capitalize(), mode.value)
+        self.threshold = QSpinBox()
+        self.threshold.setRange(0, 100)
+        self.threshold.setSuffix(" %")
+        self.priority = QComboBox()
+        for priority in TargetPriority:
+            self.priority.addItem(priority.value.capitalize(), priority.value)
+        self.reserve_ap = QSpinBox()
+        self.reserve_ap.setRange(0, 20)
+        for label, widget in (
+            ("Approche", self.mode), ("Seuil de PV (survie)", self.threshold),
+            ("Priorité des cibles", self.priority), ("PA à réserver", self.reserve_ap),
+        ):
+            form.addRow(label, widget)
+        box.addLayout(form)
+        save = QPushButton("Enregistrer la stratégie")
+        save.setObjectName("primary")
+        save.clicked.connect(self._save)
+        box.addWidget(save)
+        outer.addWidget(frame)
+        outer.addStretch()
+        self.setLayout(outer)
+        strategy = storage.load_strategy()
+        self.mode.setCurrentIndex(self.mode.findData(strategy.mode.value))
+        self.threshold.setValue(strategy.hp_threshold)
+        self.priority.setCurrentIndex(self.priority.findData(strategy.target_priority.value))
+        self.reserve_ap.setValue(strategy.reserve_ap)
+
+    def _save(self) -> None:
+        try:
+            self.storage.save_strategy(Strategy(
+                mode=StrategyMode(self.mode.currentData()), hp_threshold=self.threshold.value(),
+                target_priority=TargetPriority(self.priority.currentData()),
+                reserve_ap=self.reserve_ap.value(),
+            ))
+        except ValueError as exc:
+            QMessageBox.warning(self, "Stratégie invalide", str(exc))
+            return
+        QMessageBox.information(self, "Stratégie", "Stratégie enregistrée pour le prochain combat.")
+
+
+class StatisticsPage(QWidget):
+    def __init__(self, storage: Storage) -> None:
+        super().__init__()
+        self.storage = storage
+        outer = title("Statistiques", "Résultats des combats simulés enregistrés dans SQLite")
+        self.summary = QLabel()
+        self.summary.setObjectName("metric")
+        outer.addWidget(self.summary)
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(["Date UTC", "Résultat", "Tours", "XP", "Kamas"])
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        outer.addWidget(self.table, 1)
+        self.setLayout(outer)
+        self.refresh()
+
+    def refresh(self) -> None:
+        stats = self.storage.statistics()
+        self.summary.setText(
+            f"{stats['combats']} combats  ·  {stats['victories']} victoires  ·  "
+            f"{stats['defeats']} défaites  ·  {stats['xp']} XP  ·  {stats['kamas']} kamas"
+        )
+        rows = self.storage.recent_combats()
+        self.table.setRowCount(len(rows))
+        for row_index, row in enumerate(rows):
+            for column, key in enumerate(("ended_at", "outcome", "turns", "xp", "kamas")):
+                self.table.setItem(row_index, column, QTableWidgetItem(str(row[key])))
+        self.table.resizeColumnsToContents()
+
+
+class LogsPage(QWidget):
+    def __init__(self, storage: Storage) -> None:
+        super().__init__()
+        self.storage = storage
+        outer = title("Logs", "Événements structurés conservés dans SQLite")
+        self.text = QTextEdit()
+        self.text.setReadOnly(True)
+        outer.addWidget(self.text, 1)
+        self.setLayout(outer)
+        self.refresh()
+
+    def refresh(self) -> None:
+        lines = [
+            f"{row['created_at']}  [{row['level']}] {row['event']}  {row['message']}  {row['context_json']}"
+            for row in self.storage.recent_events()
+        ]
+        self.text.setPlainText("\n".join(lines))
+        self.text.moveCursor(self.text.textCursor().MoveOperation.End)
+
+    def append_event(self, timestamp: str, level: str, event: str, message: str, context: str) -> None:
+        self.text.append(f"{timestamp}  [{level}] {event}  {message}  {context}")
+
+
+class SettingsPage(QWidget):
+    def __init__(self, storage: Storage, jobs: JobRunner | None = None) -> None:
+        super().__init__()
+        self.storage = storage
+        outer = title("Paramètres", "Simulation et connexion visuelle au client")
+        frame, box = card()
+        form = QFormLayout()
+        self.player_name = QLineEdit(str(storage.get_setting("player_name") or "Personnage test"))
+        self.tick_ms = QSpinBox()
+        self.tick_ms.setRange(50, 5000)
+        self.tick_ms.setSuffix(" ms")
+        self.tick_ms.setValue(int(storage.get_setting("tick_ms") or 350))
+        form.addRow("Personnage", self.player_name)
+        form.addRow("Délai entre étapes", self.tick_ms)
+        box.addLayout(form)
+        save = QPushButton("Enregistrer les paramètres")
+        save.setObjectName("primary")
+        save.clicked.connect(self._save)
+        box.addWidget(save)
+        outer.addWidget(frame)
+        self.client_panel = ClientPanel(storage)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(self.client_panel)
+        self.gamedata_panel = GameDataPanel(storage, jobs)
+        self.client_tabs = QTabWidget()
+        self.client_tabs.addTab(scroll, "Client DOFUS")
+        self.client_tabs.addTab(self.gamedata_panel, "Données du client")
+        outer.addWidget(self.client_tabs, 1)
+        self.setLayout(outer)
+
+    def _save(self) -> None:
+        name = self.player_name.text().strip()
+        if not name:
+            QMessageBox.warning(self, "Paramètre invalide", "Le nom du personnage est requis.")
+            return
+        self.storage.set_setting("player_name", name)
+        self.storage.set_setting("tick_ms", self.tick_ms.value())
+        QMessageBox.information(self, "Paramètres", "Paramètres enregistrés pour le prochain combat.")

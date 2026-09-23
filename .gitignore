@@ -1,0 +1,31 @@
+# Environnements et caches Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.pytest_tmp/
+
+# Build PyInstaller
+build/
+dist/
+*.spec.bak
+
+# Données runtime locales : base SQLite, corpus, caches, exports GameData
+# (dont data/gamedata/real-validation/). Jamais de fichiers du client DOFUS.
+data/
+logs/
+*.log
+*.sqlite3
+*.bak
+
+# Archives/données propriétaires du client : ne jamais versionner
+*.d2p
+*.d2o
+*.dlm
+*.d2i
+*.swf
+*.ele
+
+# Dumps concaténés du projet (générés, volumineux)
+pythonbot_test.md
+projet-pythonbot_test.md
