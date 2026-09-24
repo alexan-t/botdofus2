@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 
 import cv2
@@ -59,6 +61,28 @@ class AnnotationCanvas(QLabel):
             width, height = self._image_size
             self.image_clicked.emit((round(px * width / pixmap.width()),
                                      round(py * height / pixmap.height())))
+
+
+def _carry_hud_provenance(previous: Annotation | None, annotation: Annotation) -> Annotation:
+    """Conserve la provenance PA/PM ; une valeur modifiée ici redevient non vérifiée.
+
+    Seule la revue HUD enregistre ``human_confirmed`` : l'ancienne valeur passe dans l'historique.
+    """
+    if previous is None:
+        return annotation
+    same = (previous.ap_truth, previous.mp_truth) == (annotation.ap_truth, annotation.mp_truth)
+    if same:
+        return replace(annotation, truth_source=previous.truth_source, confirmed_at=previous.confirmed_at,
+                       confirmed_by=previous.confirmed_by, session_id=previous.session_id,
+                       hud_review=previous.hud_review, truth_history=previous.truth_history)
+    history = previous.truth_history + ({
+        "ap_truth": previous.ap_truth, "mp_truth": previous.mp_truth,
+        "truth_source": previous.truth_source or "unverified_import",
+        "confirmed_at": previous.confirmed_at, "replaced_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "comments": "modifiée dans l'annotation générale ; à confirmer dans la revue HUD",
+    },)
+    return replace(annotation, truth_source="unverified_import", session_id=previous.session_id,
+                   truth_history=history)
 
 
 class AnnotationDialog(QDialog):
@@ -353,6 +377,7 @@ class AnnotationDialog(QDialog):
                 mp_crop_quality=self.mp_quality.currentData(),
                 hud_burst_id=self.burst_id.text().strip() or None,
             )
+            annotation = _carry_hud_provenance(self.repository.read_annotation(self.entry), annotation)
             self.repository.save_annotation(annotation)
         except ValueError as exc:
             QMessageBox.warning(self, "Annotation invalide", str(exc))
@@ -362,6 +387,9 @@ class AnnotationDialog(QDialog):
 
 
 class CorpusPage(QWidget):
+    # La collecte a besoin de la fenêtre connectée et de la calibration : la fenêtre principale la lance.
+    hud_collection_requested = Signal()
+
     def __init__(self, repository: CorpusRepository | None = None) -> None:
         super().__init__()
         self.repository = repository or CorpusRepository()
@@ -384,6 +412,15 @@ class CorpusPage(QWidget):
             buttons.addWidget(button)
         buttons.addStretch()
         outer.addLayout(buttons)
+        hud_buttons = QHBoxLayout()
+        self.hud_review_button = QPushButton("Revue HUD PA/PM…")
+        self.hud_collection_button = QPushButton("Collecte HUD réelle (lecture seule)…")
+        hud_buttons.addWidget(self.hud_review_button)
+        hud_buttons.addWidget(self.hud_collection_button)
+        hud_buttons.addStretch()
+        outer.addLayout(hud_buttons)
+        self.hud_review_button.clicked.connect(self._hud_review)
+        self.hud_collection_button.clicked.connect(self.hud_collection_requested.emit)
         self.list = QListWidget()
         outer.addWidget(self.list, 1)
         self.summary = QLabel()
@@ -406,6 +443,13 @@ class CorpusPage(QWidget):
             return
         for entry in entries:
             marker = "annotée" if entry.annotation_available else "sans annotation"
+            if {"ap_crop", "mp_crop"} & set(entry.paths):
+                try:
+                    annotation = self.repository.read_annotation(entry)
+                except ValueError:
+                    annotation = None
+                marker += " · HUD confirmé" if annotation is not None and annotation.human_confirmed \
+                    else " · HUD non vérifié"
             item = QListWidgetItem(
                 f"{entry.session_id} · frame {entry.frame_index} · {entry.observation_id} · {marker} · {entry.usage}"
             )
@@ -462,6 +506,15 @@ class CorpusPage(QWidget):
             if not dialog.continue_requested:
                 break
             index += 1
+
+    def _hud_review(self) -> None:
+        from combatbot.ui.hud_review_dialog import HUDReviewDialog
+
+        try:
+            HUDReviewDialog(self.repository, self).exec()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Revue HUD", str(exc))
+        self.refresh()
 
     def _promote(self) -> None:
         entry = self._selected()

@@ -20,18 +20,30 @@ def main(argv: list[str] | None = None) -> int:
                         help="LOT 3B-4 : inventaire et mesure du lecteur spécialisé PA/PM")
     parser.add_argument("--hud-rapidocr", action="store_true",
                         help="Inclut le fallback RapidOCR dans le benchmark HUD")
+    parser.add_argument("--hud-split", action="store_true",
+                        help="LOT 3B-4R2 : reconstruit explicitement le split HUD (TEST gelé) et affiche la distribution")
     parser.add_argument("--client", type=Path, help="Dossier client GameData (défaut : réglage de l'application)")
     args = parser.parse_args(argv)
     repository = CorpusRepository(args.corpus_root)
     if args.grid_validation:
         return _grid_validation(repository, args)
+    if args.hud_split:
+        from combatbot.corpus.hud_dataset import build_split_registry, distribution_text, inventory
+        registry = build_split_registry(repository)
+        print(f"Registre : {len(registry['groups'])} groupe(s), TEST gelé : {registry['frozen_test']}")
+        if registry["missing_frozen_test"]:
+            print(f"ATTENTION groupes TEST gelés introuvables : {registry['missing_frozen_test']}")
+        print(distribution_text(inventory(repository)))
+        return 0
     if args.hud_reader:
         from combatbot.corpus.hud_dataset import export_one_seven, run_hud_benchmark, write_report
         report = run_hud_benchmark(repository, rapidocr=args.hud_rapidocr)
+        print(report["distribution_text"])
         output = args.output_dir or (app_data_root() / "data" / "benchmarks")
         json_path, markdown_path = write_report(report, output)
         one_seven_json, one_seven_plate = export_one_seven(repository, output)
         print(f"HUD : {report['labelled_examples']}/{report['inventory_examples']} crop(s) avec vérité humaine")
+        print(f"Vérité terrain : {report['ground_truth_status']} — {report['review']}")
         print(f"Statut : {report['status']}")
         print(f"1/7 : {report['one_seven']['verdict']} — {one_seven_json}"
               + (f" + {one_seven_plate}" if one_seven_plate else ""))

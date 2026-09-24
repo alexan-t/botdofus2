@@ -168,6 +168,8 @@ class MainWindow(QMainWindow):
         self.combat.projection_calibration_requested.connect(self._calibrate_projection)
         self.combat.overlay_options_changed.connect(self._set_overlay_options)
         self.combat.legacy_fallback_changed.connect(self._set_legacy_fallback)
+        self.corpus.hud_collection_requested.connect(self._open_hud_collection)
+        self._hud_collection_dialog = None
         self.combat.grid_recipe_requested.connect(self._grid_recipe)
         self.client_panel.profile_changed.connect(self._restore_declared_map_input)
         self.combat.mode.currentTextChanged.connect(
@@ -756,6 +758,41 @@ class MainWindow(QMainWindow):
         self._allow_legacy_fallback = bool(allowed)
         if self._observer is not None and self._observer.grid_resolver is not None:
             self._observer.grid_resolver.allow_legacy_fallback = bool(allowed)
+
+    def _open_hud_collection(self) -> None:
+        """HUD Real Collection : capture PA/PM en lecture seule, aucune action n'est envoyée."""
+        from combatbot.corpus.hud_collection import capture_metadata, extract_hud_crops
+        from combatbot.ui.hud_review_dialog import HUDCollectionDialog
+
+        hwnd = self.client_panel.connected_hwnd
+        profile_id = self.client_panel.profile_id
+        if hwnd is None or profile_id is None or not self.client_panel.content_confirmed:
+            QMessageBox.warning(self, "Collecte HUD", "Connectez et confirmez d'abord une fenêtre DOFUS dans Paramètres.")
+            return
+        calibration = self.storage.load_calibration(profile_id)
+        if calibration is None or not {"combat", "ap", "mp"} <= set(calibration.zones):
+            QMessageBox.warning(self, "Collecte HUD", "Calibrez les zones combat, PA et PM dans Paramètres.")
+            return
+        if self._hud_collection_dialog is not None and self._hud_collection_dialog.isVisible():
+            self._hud_collection_dialog.raise_()
+            return
+
+        def grab():
+            frame = capture_client(hwnd, activate=False)
+            if frame.hwnd != hwnd:
+                raise RuntimeError("La capture ne correspond plus à la fenêtre connectée")
+            if not calibration.compatible(frame.client.width, frame.client.height):
+                raise RuntimeError("Calibration incompatible avec la taille actuelle du client")
+            ap, mp, transform = extract_hud_crops(frame, calibration)
+            return frame.image, ap, mp, capture_metadata(frame, calibration, transform)
+
+        dialog = HUDCollectionDialog(self.corpus.repository, grab, self)
+        dialog.collection_changed.connect(self.corpus.refresh)
+        dialog.finished.connect(lambda _result: self.corpus.refresh())
+        self._hud_collection_dialog = dialog
+        self._on_event(CombatEvent("INFO", "vision.hud_collection",
+                                   f"Collecte HUD en lecture seule : {dialog.session.session_id}"))
+        dialog.show()
 
     def _start_observation(self) -> None:
         hwnd = self.client_panel.connected_hwnd

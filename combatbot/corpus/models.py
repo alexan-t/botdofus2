@@ -14,6 +14,10 @@ HUD_CROP_QUALITIES = {
     "VALID", "CUT_LEFT", "CUT_RIGHT", "CUT_TOP", "CUT_BOTTOM",
     "WRONG_ROI", "HUD_OCCLUDED", "EMPTY", "OTHER",
 }
+# Provenance des vérités PA/PM. Une annotation sans provenance est un import non vérifié.
+TRUTH_SOURCES = {"human_confirmed", "unverified_import"}
+# Décision humaine par compteur lors de la revue HUD.
+HUD_REVIEW_DECISIONS = {"confirmed", "corrected", "entered", "unreadable"}
 
 
 def _optional_bool(value: object, field_name: str) -> bool | None:
@@ -100,7 +104,18 @@ class Annotation:
     ap_crop_quality: str | None = None
     mp_crop_quality: str | None = None
     hud_burst_id: str | None = None
+    truth_source: str | None = None
+    confirmed_at: str | None = None
+    confirmed_by: str | None = None
+    session_id: str | None = None
+    hud_review: dict[str, str] | None = None
+    truth_history: tuple[dict[str, object], ...] = ()
     schema_version: int = SCHEMA_VERSION
+
+    @property
+    def human_confirmed(self) -> bool:
+        """Seule une confirmation humaine traçable fait des PA/PM une vérité finale."""
+        return self.truth_source == "human_confirmed" and bool(self.confirmed_at)
 
     def validate(self) -> None:
         if self.schema_version != SCHEMA_VERSION:
@@ -127,6 +142,17 @@ class Annotation:
                 raise ValueError(f"{field_name} non reconnu : {value}")
         if self.hud_burst_id is not None and not self.hud_burst_id.strip():
             raise ValueError("hud_burst_id ne peut pas être vide")
+        if self.truth_source is not None and self.truth_source not in TRUTH_SOURCES:
+            raise ValueError(f"truth_source non reconnu : {self.truth_source}")
+        if self.truth_source == "human_confirmed" and not self.confirmed_at:
+            raise ValueError("Une vérité human_confirmed exige confirmed_at")
+        for kind, decision in (self.hud_review or {}).items():
+            if kind not in ("ap", "mp") or decision not in HUD_REVIEW_DECISIONS:
+                raise ValueError(f"Décision de revue HUD invalide : {kind}={decision}")
+        for kind in ("ap", "mp"):
+            truth = self.ap_truth if kind == "ap" else self.mp_truth
+            if (self.hud_review or {}).get(kind) == "unreadable" and truth is not None:
+                raise ValueError(f"{kind.upper()} marqué illisible ne peut pas porter de vérité")
 
     def to_dict(self) -> dict[str, object]:
         self.validate()
@@ -145,8 +171,15 @@ class Annotation:
             "mp_crop_quality": self.mp_crop_quality,
             "hud_burst_id": self.hud_burst_id.strip() if self.hud_burst_id else None,
             "reference_cells_complete": self.reference_cells_complete,
+            "truth_source": self.truth_source,
+            "confirmed_at": self.confirmed_at,
+            "confirmed_by": self.confirmed_by,
+            "session_id": self.session_id,
+            "hud_review": dict(self.hud_review) if self.hud_review else None,
         }
         result.update({key: value for key, value in scalar_values.items() if value is not None})
+        if self.truth_history:
+            result["truth_history"] = [dict(item) for item in self.truth_history]
         if self.player is not None:
             result["player"] = self.player.to_dict()
         for key, values in (
@@ -190,6 +223,14 @@ class Annotation:
             mp_crop_quality=(str(raw["mp_crop_quality"])
                              if raw.get("mp_crop_quality") is not None else None),
             hud_burst_id=str(raw["hud_burst_id"]) if raw.get("hud_burst_id") is not None else None,
+            truth_source=str(raw["truth_source"]) if raw.get("truth_source") is not None else None,
+            confirmed_at=str(raw["confirmed_at"]) if raw.get("confirmed_at") is not None else None,
+            confirmed_by=str(raw["confirmed_by"]) if raw.get("confirmed_by") is not None else None,
+            session_id=str(raw["session_id"]) if raw.get("session_id") is not None else None,
+            hud_review=({str(key): str(value) for key, value in raw["hud_review"].items()}
+                        if isinstance(raw.get("hud_review"), dict) else None),
+            truth_history=tuple(dict(item) for item in raw.get("truth_history", ())
+                                if isinstance(item, dict)),
             schema_version=int(raw.get("schema_version", SCHEMA_VERSION)),
         )
         item.validate()

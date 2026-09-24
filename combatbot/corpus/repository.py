@@ -265,6 +265,66 @@ class CorpusRepository:
         self.save_manifest(CorpusManifest(entries))
         return updated
 
+    def confirm_hud_truth(self, observation_id: str, *, ap: int | None, mp: int | None,
+                          ap_unreadable: bool = False, mp_unreadable: bool = False,
+                          ap_crop_quality: str | None = None, mp_crop_quality: str | None = None,
+                          confirmed_by: str = "user", confirmed_at: str | None = None) -> Annotation:
+        """Enregistre une décision humaine PA/PM traçable.
+
+        L'ancienne vérité active reste dans ``truth_history`` ; le split n'est jamais recalculé ici.
+        """
+        entry = self.get_entry(observation_id)
+        previous = self.read_annotation(entry) or Annotation(observation_id)
+        stamp = confirmed_at or datetime.now().astimezone().isoformat(timespec="seconds")
+        values = {"ap": None if ap_unreadable else ap, "mp": None if mp_unreadable else mp}
+        unreadable = {"ap": ap_unreadable, "mp": mp_unreadable}
+        before = {"ap": previous.ap_truth, "mp": previous.mp_truth}
+        review: dict[str, str] = {}
+        for kind in ("ap", "mp"):
+            if unreadable[kind]:
+                review[kind] = "unreadable"
+            elif values[kind] is None:
+                raise ValueError(f"{kind.upper()} : saisissez une valeur ou marquez le crop illisible")
+            elif before[kind] is None:
+                review[kind] = "entered"
+            else:
+                review[kind] = "confirmed" if before[kind] == values[kind] else "corrected"
+        history = previous.truth_history
+        if before != values or previous.truth_source != "human_confirmed":
+            history = history + ({
+                "ap_truth": before["ap"], "mp_truth": before["mp"],
+                "truth_source": previous.truth_source or "unverified_import",
+                "confirmed_at": previous.confirmed_at, "replaced_at": stamp,
+                "comments": previous.comments,
+            },)
+        annotation = replace(
+            previous, ap_truth=values["ap"], mp_truth=values["mp"],
+            ap_crop_quality=ap_crop_quality if ap_crop_quality is not None else previous.ap_crop_quality,
+            mp_crop_quality=mp_crop_quality if mp_crop_quality is not None else previous.mp_crop_quality,
+            truth_source="human_confirmed", confirmed_at=stamp, confirmed_by=confirmed_by,
+            session_id=entry.session_id, hud_review=review, truth_history=history,
+        )
+        self.save_annotation(annotation)
+        return annotation
+
+    def hud_review_summary(self) -> dict[str, object]:
+        """Compte les décisions humaines PA/PM ; tout le reste est « non traité »."""
+        counts = {kind: {"confirmed": 0, "corrected": 0, "entered": 0, "unreadable": 0, "untreated": 0}
+                  for kind in ("ap", "mp")}
+        observations = {"human_confirmed": 0, "untreated": 0}
+        for entry in self.list_entries():
+            if not ({"ap_crop", "mp_crop"} & set(entry.paths)):
+                continue
+            annotation = self.read_annotation(entry)
+            confirmed = annotation is not None and annotation.human_confirmed
+            observations["human_confirmed" if confirmed else "untreated"] += 1
+            for kind in ("ap", "mp"):
+                if f"{kind}_crop" not in entry.paths:
+                    continue
+                decision = (annotation.hud_review or {}).get(kind) if confirmed and annotation else None
+                counts[kind][decision or "untreated"] += 1
+        return {"observations": observations, "counters": counts}
+
     def promote_fixture(self, observation_id: str, stable_name: str,
                         destination_root: Path | None = None) -> Path:
         """Copie explicite d'une observation annotée vers les fixtures de non-régression."""

@@ -15,6 +15,12 @@ from combatbot.corpus.models import Annotation, CorpusEntry, CorpusManifest
 from combatbot.corpus.repository import CorpusRepository
 
 
+def confirmed(observation_id: str, **values) -> Annotation:
+    """Vérité PA/PM confirmée par un humain : seule forme comptée par le banc HUD."""
+    return Annotation(observation_id, truth_source="human_confirmed",
+                      confirmed_at="2026-09-24T12:00:00+02:00", confirmed_by="user", **values)
+
+
 def crop(text: str) -> np.ndarray:
     image = np.zeros((58, 28 * len(text) + 10, 3), np.uint8)
     for index, digit in enumerate(text):
@@ -58,7 +64,7 @@ def test_hud_inventory_never_uses_prediction_as_truth(tmp_path: Path) -> None:
 
 def test_hud_inventory_keeps_metadata_and_session_split(tmp_path: Path) -> None:
     repository, entry = repository_with_entry(tmp_path)
-    repository.save_annotation(Annotation(entry.observation_id, ap_truth=12, mp_truth=3))
+    repository.save_annotation(confirmed(entry.observation_id, ap_truth=12, mp_truth=3))
     samples = inventory(repository)
     assert len({sample.split for sample in samples}) == 1
     assert samples[0].map_id == 42 and samples[0].client_size == (800, 600)
@@ -69,7 +75,7 @@ def test_hud_inventory_keeps_metadata_and_session_split(tmp_path: Path) -> None:
 
 def test_templates_are_built_from_human_train_truth(tmp_path: Path) -> None:
     repository, entry = repository_with_entry(tmp_path, usage="train")
-    repository.save_annotation(Annotation(entry.observation_id, ap_truth=12, mp_truth=3))
+    repository.save_annotation(confirmed(entry.observation_id, ap_truth=12, mp_truth=3))
     templates, issues = build_templates(repository, inventory(repository))
     assert issues == []
     assert set(templates.digits("AP")) == {1, 2}
@@ -86,7 +92,7 @@ def test_identical_train_glyphs_are_not_duplicated(tmp_path: Path) -> None:
     )
     repository.save_manifest(CorpusManifest((entry, duplicate)))
     # Les deux observations pointent volontairement sur les mêmes pixels.
-    repository.save_annotation(Annotation(entry.observation_id, ap_truth=12, mp_truth=3))
+    repository.save_annotation(confirmed(entry.observation_id, ap_truth=12, mp_truth=3))
     templates, _issues = build_templates(repository, inventory(repository))
     assert len(templates.digits("AP")[1]) == 1
     assert len(templates.digits("AP")[2]) == 1
@@ -112,9 +118,9 @@ def test_duplicate_burst_does_not_cross_splits(tmp_path: Path) -> None:
     repository, entry = repository_with_entry(tmp_path, usage="train")
     duplicate = CorpusEntry("obs-b", "another-session", 0, dict(entry.paths), usage="test")
     repository.save_manifest(CorpusManifest((entry, duplicate)))
-    repository.save_annotation(Annotation(entry.observation_id, ap_truth=12,
+    repository.save_annotation(confirmed(entry.observation_id, ap_truth=12,
                                           hud_burst_id="same-visible-counter"))
-    repository.save_annotation(Annotation(duplicate.observation_id, ap_truth=12,
+    repository.save_annotation(confirmed(duplicate.observation_id, ap_truth=12,
                                           hud_burst_id="same-visible-counter"))
     with pytest.raises(ValueError, match="Fuite temporelle"):
         inventory(repository)
@@ -122,7 +128,7 @@ def test_duplicate_burst_does_not_cross_splits(tmp_path: Path) -> None:
 
 def test_inventory_exports_crop_quality_and_group(tmp_path: Path) -> None:
     repository, entry = repository_with_entry(tmp_path)
-    repository.save_annotation(Annotation(
+    repository.save_annotation(confirmed(
         entry.observation_id, ap_truth=12, mp_truth=None,
         ap_crop_quality="VALID", mp_crop_quality="CUT_LEFT",
         hud_burst_id="burst-verified-01",
@@ -151,8 +157,8 @@ def two_consecutive_entries(tmp_path: Path, usages: tuple[str, str]) -> CorpusRe
     second = CorpusEntry("obs-48", "session-x", 48, dict(entry.paths), usage=usages[1])  # type: ignore[arg-type]
     repository.save_manifest(CorpusManifest((first, second)))
     # Séquence réelle : PA 11 → 7, PM 3 inchangé entre deux captures voisines.
-    repository.save_annotation(Annotation("obs-47", ap_truth=11, mp_truth=3, hud_burst_id="f47"))
-    repository.save_annotation(Annotation("obs-48", ap_truth=7, mp_truth=3, hud_burst_id="f48"))
+    repository.save_annotation(confirmed("obs-47", ap_truth=11, mp_truth=3, hud_burst_id="f47"))
+    repository.save_annotation(confirmed("obs-48", ap_truth=7, mp_truth=3, hud_burst_id="f48"))
     return repository
 
 
@@ -169,7 +175,7 @@ def test_unchanged_counter_cannot_cross_train_and_test(tmp_path: Path) -> None:
 
 def test_test_split_never_used_for_templates(tmp_path: Path) -> None:
     repository, entry = repository_with_entry(tmp_path, usage="test")
-    repository.save_annotation(Annotation(entry.observation_id, ap_truth=12, mp_truth=3))
+    repository.save_annotation(confirmed(entry.observation_id, ap_truth=12, mp_truth=3))
     templates, _issues = build_templates(repository, inventory(repository))
     assert templates.empty
 
@@ -177,7 +183,7 @@ def test_test_split_never_used_for_templates(tmp_path: Path) -> None:
 def test_unknown_truth_excluded_from_accuracy(tmp_path: Path) -> None:
     repository, entry = repository_with_entry(tmp_path, usage="test")
     # PA illisible pour l'humain : aucune vérité, donc aucune ligne de mesure.
-    repository.save_annotation(Annotation(entry.observation_id, ap_truth=None, mp_truth=3,
+    repository.save_annotation(confirmed(entry.observation_id, ap_truth=None, mp_truth=3,
                                           ap_crop_quality="HUD_OCCLUDED"))
     report = run_hud_benchmark(repository)
     assert report["labelled_examples"] == 1
@@ -205,3 +211,8 @@ def test_one_seven_not_validated_without_independent_train_and_test_sevens() -> 
     assert "aucun 7 en TRAIN pour construire un template" in verdict["missing"]
     enough = labelled + [sample("d", "train", 7), sample("e", "train", 1)]
     assert one_seven_verdict(enough, {"errors_1_to_7": 0, "errors_7_to_1": 0})["verdict"] == "VALIDATED"
+    # Le « 1 » de « 12 » UNKNOWN à cause du « 2 » ne déclasse pas 1/7 ; une ambiguïté 1/7 oui.
+    other_digit = {"errors_1_to_7": 0, "errors_7_to_1": 0, "one_to_unknown": 1}
+    assert one_seven_verdict(enough, other_digit, [{"reason": "LOW_MARGIN"}])["verdict"] == "VALIDATED"
+    assert one_seven_verdict(enough, other_digit, [{"reason": "AMBIGUOUS_1_7"}])["verdict"] == "IMPROVED"
+    assert one_seven_verdict(enough, {"errors_1_to_7": 1, "errors_7_to_1": 0})["verdict"] == "NOT VALIDATED"

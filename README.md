@@ -48,6 +48,14 @@ captures consécutives d'une session partageant un compteur inchangé). Un chiff
 chiffre, le verdict 1/7 et `one-seven.json/png`. Voir
 [LOT-3B-4R-REAL-HUD-VALIDATION.md](LOT-3B-4R-REAL-HUD-VALIDATION.md).
 
+**Vérité humaine HUD (LOT 3B-4R2)** : dans **Corpus / Annotation**, « Revue HUD PA/PM… » confirme,
+corrige ou marque illisible chaque vérité sans jamais afficher la prédiction du lecteur ; seules les
+vérités `human_confirmed` comptent. « Collecte HUD réelle (lecture seule)… » capture PA/PM pendant que
+vous jouez, sans aucune action. Le split se reconstruit explicitement (TEST gelé) avec
+`python -m combatbot.benchmark --hud-split`. L'exécutable utilise le corpus de
+`%LOCALAPPDATA%\PythonBot\data\corpus` (`--corpus-root` pour le banc). Voir
+[LOT-3B-4R2-HUD-GROUND-TRUTH.md](LOT-3B-4R2-HUD-GROUND-TRUTH.md).
+
 **Recette réelle (LOT 3B-2R)** : cochez « vérifié par /mapid » quand l'ID vient de la commande
 `/mapid` du client, puis **Recette de grille…** capture une frame (lecture seule), enregistre les
 mesures automatiques et votre jugement (alignement, 4 bords + centre, rouge/bleu) sous
