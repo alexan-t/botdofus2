@@ -96,8 +96,9 @@ def _mean(values: np.ndarray, roi, n: int) -> np.ndarray:
 
 
 def _sector_fraction(member: np.ndarray, roi, n: int) -> np.ndarray:
+    """``member`` : un booléen par pixel de ``roi`` (même ordre que ``roi.pos``)."""
     key = roi.cell * SECTORS + roi.sector
-    hits = np.bincount(key, weights=member[roi.pos].astype(np.float64), minlength=n * SECTORS)
+    hits = np.bincount(key, weights=member.astype(np.float64), minlength=n * SECTORS)
     count = np.bincount(key, minlength=n * SECTORS)
     return (hits / np.maximum(count, 1)).reshape(n, SECTORS)
 
@@ -113,16 +114,25 @@ def partial_ring_features(hsv: np.ndarray, maps: CellRoiMaps, team: MarkerColorC
 
     ``hsv`` : pixels (N, 3) de ``maps.box`` à plat. La couleur seule ne suffit jamais : il faut
     des secteurs où la teinte est plus présente sur l'anneau que dedans et dehors, étalés.
+    Seuls les pixels des trois bandes sont lus ; la teinte (entière, 0..179) passe par une table.
     """
     n = maps.size
     tolerance = team.pixel_tolerance if team.pixel_tolerance is not None else team.hue_tolerance
-    delta = np.abs(hsv[:, 0] - team.hue) % 180.0
-    member = ((np.minimum(delta, 180.0 - delta) <= tolerance)
-              & (hsv[:, 1] >= max(config.partial_min_saturation, team.min_saturation))
-              & (hsv[:, 2] >= max(config.partial_min_value, team.min_value)))
-    ring = _sector_fraction(member, maps.partial_ring, n)
-    outer = _sector_fraction(member, maps.partial_outer, n)
-    inner = _sector_fraction(member, maps.partial_inner, n)
+    delta = np.abs(np.arange(180, dtype=np.float64) - team.hue) % 180.0
+    table = np.zeros(256, dtype=bool)
+    table[:180] = np.minimum(delta, 180.0 - delta) <= tolerance
+    s_min = max(config.partial_min_saturation, team.min_saturation)
+    v_min = max(config.partial_min_value, team.min_value)
+
+    def member(roi) -> np.ndarray:
+        pixels = hsv[roi.pos]
+        return table[pixels[:, 0].astype(np.intp)] & (pixels[:, 1] >= s_min) & (pixels[:, 2] >= v_min)
+
+    ring_member, outer_member, inner_member = (member(roi) for roi in (
+        maps.partial_ring, maps.partial_outer, maps.partial_inner))
+    ring = _sector_fraction(ring_member, maps.partial_ring, n)
+    outer = _sector_fraction(outer_member, maps.partial_outer, n)
+    inner = _sector_fraction(inner_member, maps.partial_inner, n)
     neighbour = np.maximum(outer, inner)
     coherent = ((ring >= config.partial_sector_fraction)
                 & (ring - neighbour >= config.partial_sector_contrast)
@@ -130,8 +140,11 @@ def partial_ring_features(hsv: np.ndarray, maps: CellRoiMaps, team: MarkerColorC
     count = coherent.sum(axis=1)
     spread = spread_sectors(coherent)
     fill = ring.max(axis=1) if n else np.zeros(0)
-    outside = np.maximum(_mean(member.astype(np.float64), maps.partial_outer, n),
-                         _mean(member.astype(np.float64), maps.partial_inner, n))
+    outside = np.maximum(
+        np.bincount(maps.partial_outer.cell, weights=outer_member.astype(np.float64), minlength=n)
+        / np.maximum(maps.partial_outer.counts, 1),
+        np.bincount(maps.partial_inner.cell, weights=inner_member.astype(np.float64), minlength=n)
+        / np.maximum(maps.partial_inner.counts, 1))
     contradiction = (fill > config.partial_sector_fill_max) | (outside >= config.partial_outside_max)
     fires = (count >= config.partial_min_sectors) & spread & ~contradiction
     contrast = np.where(coherent, ring - neighbour, 0.0).sum(axis=1) / np.maximum(count, 1)
@@ -165,8 +178,8 @@ class CellEntityDetector:
         x0, y0, x1, y1 = maps.box
         crop = np.ascontiguousarray(image[y0:y1, x0:x1])
         lab = cv2.cvtColor(crop, cv2.COLOR_BGR2LAB).reshape(-1, 3).astype(np.float32)
-        hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV).reshape(-1, 3).astype(np.float32)
-        hue = hsv[:, 0]
+        hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV).reshape(-1, 3)  # uint8, lu seulement aux ROI
+        hue = hsv[:, 0].astype(np.float32)
         chroma = np.hypot(lab[:, 1] - 128.0, lab[:, 2] - 128.0)
 
         ring, outer = maps.ring, maps.outer
