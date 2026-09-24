@@ -10,11 +10,11 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QHBoxLayout,
     QInputDialog, QLabel, QListWidget, QListWidgetItem, QMessageBox, QPushButton,
-    QSpinBox, QTextEdit, QVBoxLayout, QWidget,
+    QLineEdit, QSpinBox, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from combatbot.corpus.benchmark import run_benchmark, write_reports
-from combatbot.corpus.models import Annotation, CorpusEntry, PixelAnnotation
+from combatbot.corpus.models import Annotation, CorpusEntry, HUD_CROP_QUALITIES, PixelAnnotation
 from combatbot.corpus.repository import CorpusRepository
 from combatbot.runtime import app_data_root
 from combatbot.ui.images import bgr_to_pixmap
@@ -73,6 +73,7 @@ class AnnotationDialog(QDialog):
         self.enemies: list[PixelAnnotation] = []
         self.references: list[PixelAnnotation] = []
         self.anchors: list[PixelAnnotation] = []
+        self.continue_requested = False
         self.setWindowTitle(f"Corpus / Annotation — {entry.observation_id}")
         self.resize(1380, 850)
 
@@ -102,6 +103,10 @@ class AnnotationDialog(QDialog):
         self.turn = self._truth_combo()
         self.ap = self._counter()
         self.mp = self._counter()
+        self.ap_quality = self._quality_combo()
+        self.mp_quality = self._quality_combo()
+        self.burst_id = QLineEdit()
+        self.burst_id.setPlaceholderText("Ex. combat-01-tour-03 (même valeur immobile = même burst)")
         self.hud_status = QLabel("Les valeurs restent non annotées tant qu'elles ne sont pas validées.")
         self.hud_status.setWordWrap(True)
         self.digit_issue = QCheckBox("Confusion 1 ↔ 7 pertinente")
@@ -118,12 +123,15 @@ class AnnotationDialog(QDialog):
         form.addRow("PA réels", self.ap)
         form.addRow("PM réels", self.mp)
         hud_editors = QHBoxLayout()
-        hud_editors.addWidget(self._hud_editor("PA", "ap_crop", self.ap, self.mp))
-        hud_editors.addWidget(self._hud_editor("PM", "mp_crop", self.mp, self.ap))
+        hud_editors.addWidget(self._hud_editor(
+            "PA", "ap_crop", self.ap, self.ap_quality, self.mp))
+        hud_editors.addWidget(self._hud_editor(
+            "PM", "mp_crop", self.mp, self.mp_quality, self.ap))
         hud_widget = QWidget()
         hud_widget.setLayout(hud_editors)
         form.addRow("Inspection HUD", hud_widget)
         form.addRow("Validation HUD", self.hud_status)
+        form.addRow("Groupe temporel", self.burst_id)
         form.addRow("Cas chiffres", self.digit_issue)
         form.addRow("Références", self.reference_complete)
         form.addRow("Dernier clic", self.last_click)
@@ -138,12 +146,15 @@ class AnnotationDialog(QDialog):
         actions = QHBoxLayout()
         cancel = QPushButton("Fermer sans enregistrer")
         save = QPushButton("Enregistrer l'annotation")
+        save_next = QPushButton("Enregistrer et suivante")
         save.setObjectName("primary")
         cancel.clicked.connect(self.reject)
-        save.clicked.connect(self._save)
+        save.clicked.connect(lambda: self._save(False))
+        save_next.clicked.connect(lambda: self._save(True))
         actions.addStretch()
         actions.addWidget(cancel)
         actions.addWidget(save)
+        actions.addWidget(save_next)
         root.addLayout(actions)
 
         self.show_overlay.toggled.connect(self._refresh_image)
@@ -167,7 +178,16 @@ class AnnotationDialog(QDialog):
         spin.setValue(-1)
         return spin
 
-    def _hud_editor(self, kind: str, path_key: str, spin: QSpinBox, next_spin: QSpinBox) -> QWidget:
+    @staticmethod
+    def _quality_combo() -> QComboBox:
+        combo = QComboBox()
+        combo.addItem("Non classé", None)
+        for quality in sorted(HUD_CROP_QUALITIES):
+            combo.addItem(quality, quality)
+        return combo
+
+    def _hud_editor(self, kind: str, path_key: str, spin: QSpinBox,
+                    quality: QComboBox, next_spin: QSpinBox) -> QWidget:
         widget = QWidget()
         layout = QVBoxLayout(widget)
         title = QLabel(f"{kind} — original + zoom nearest-neighbor")
@@ -190,6 +210,10 @@ class AnnotationDialog(QDialog):
         images.addWidget(original)
         images.addWidget(zoom)
         layout.addLayout(images)
+        quality_row = QHBoxLayout()
+        quality_row.addWidget(QLabel("Qualité du crop :"))
+        quality_row.addWidget(quality, 1)
+        layout.addLayout(quality_row)
         buttons = QHBoxLayout()
         validate = QPushButton("Valider")
         unknown = QPushButton("Inconnu")
@@ -299,6 +323,9 @@ class AnnotationDialog(QDialog):
             combo.setCurrentIndex(combo.findData(value))
         self.ap.setValue(annotation.ap_truth if annotation.ap_truth is not None else -1)
         self.mp.setValue(annotation.mp_truth if annotation.mp_truth is not None else -1)
+        self.ap_quality.setCurrentIndex(self.ap_quality.findData(annotation.ap_crop_quality))
+        self.mp_quality.setCurrentIndex(self.mp_quality.findData(annotation.mp_crop_quality))
+        self.burst_id.setText(annotation.hud_burst_id or "")
         self.digit_issue.setChecked(annotation.digit_issue == "1_vs_7")
         self.reference_complete.setChecked(annotation.reference_cells_complete is True)
         self.player = annotation.player
@@ -308,7 +335,7 @@ class AnnotationDialog(QDialog):
         self.comments.setPlainText(annotation.comments or "")
         self._update_points()
 
-    def _save(self) -> None:
+    def _save(self, continue_requested: bool = False) -> None:
         try:
             annotation = Annotation(
                 observation_id=self.entry.observation_id,
@@ -322,11 +349,15 @@ class AnnotationDialog(QDialog):
                 grid_anchors=tuple(self.anchors),
                 comments=self.comments.toPlainText().strip() or None,
                 digit_issue="1_vs_7" if self.digit_issue.isChecked() else None,
+                ap_crop_quality=self.ap_quality.currentData(),
+                mp_crop_quality=self.mp_quality.currentData(),
+                hud_burst_id=self.burst_id.text().strip() or None,
             )
             self.repository.save_annotation(annotation)
         except ValueError as exc:
             QMessageBox.warning(self, "Annotation invalide", str(exc))
             return
+        self.continue_requested = continue_requested
         self.accept()
 
 
@@ -414,13 +445,23 @@ class CorpusPage(QWidget):
         entry = self._selected()
         if entry is None:
             return
-        try:
-            dialog = AnnotationDialog(self.repository, entry, self)
-            dialog.showFullScreen()
-            if dialog.exec() == QDialog.DialogCode.Accepted:
-                self.refresh()
-        except ValueError as exc:
-            QMessageBox.warning(self, "Observation illisible", str(exc))
+        entries = list(self.repository.list_entries())
+        index = next((i for i, item in enumerate(entries)
+                      if item.observation_id == entry.observation_id), 0)
+        while index < len(entries):
+            try:
+                dialog = AnnotationDialog(self.repository, entries[index], self)
+                dialog.showFullScreen()
+                accepted = dialog.exec() == QDialog.DialogCode.Accepted
+            except ValueError as exc:
+                QMessageBox.warning(self, "Observation illisible", str(exc))
+                return
+            if not accepted:
+                break
+            self.refresh()
+            if not dialog.continue_requested:
+                break
+            index += 1
 
     def _promote(self) -> None:
         entry = self._selected()

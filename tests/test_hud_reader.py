@@ -3,9 +3,10 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
+import combatbot.vision.hud_reader as hud_reader
 from combatbot.vision.combat_ocr import read_small_number
 from combatbot.vision.hud_reader import (
-    GlyphTemplateLibrary, HUDReader, NumberReadReason, NumberReadResult,
+    GlyphRead, GlyphTemplateLibrary, HUDReader, NumberReadReason, NumberReadResult,
     NumberReadSource, NumberTemporalTracker, TemporalState, segment_glyphs,
 )
 
@@ -48,6 +49,16 @@ def test_single_digit_segmentation() -> None:
 
 def test_two_digit_segmentation() -> None:
     assert len(segment_glyphs(digit_crop("12"))) == 2
+
+
+def test_white_hud_mask_keeps_two_glyphs_before_bright_fallback(monkeypatch) -> None:
+    two = np.zeros((50, 70), np.uint8)
+    cv2.rectangle(two, (14, 10), (20, 39), 255, -1)
+    cv2.rectangle(two, (35, 10), (45, 39), 255, -1)
+    one = np.zeros_like(two)
+    cv2.rectangle(one, (35, 9), (46, 40), 255, -1)
+    monkeypatch.setattr(hud_reader, "_candidate_masks", lambda _image: (two, one))
+    assert len(segment_glyphs(np.zeros((50, 70, 3), np.uint8))) == 2
 
 
 def test_template_reader_one() -> None:
@@ -113,6 +124,15 @@ def test_high_confidence_specialized_does_not_require_rapidocr() -> None:
     assert calls == []
 
 
+def test_validation_threshold_skips_rapidocr_for_accepted_template() -> None:
+    calls = []
+    reader = HUDReader(library(2, 3), rapidocr_reader=lambda *_: (calls.append(True) or (3, 1.0)))
+    result = reader.read(digit_crop("2"), "AP")
+    assert result.value == 2
+    assert result.confidence >= reader.skip_rapidocr_confidence
+    assert calls == []
+
+
 def test_temporal_stability() -> None:
     tracker = NumberTemporalTracker(high_confidence=.9)
     assert tracker.update(accepted(7)).value == 7
@@ -132,6 +152,110 @@ def test_old_value_expires() -> None:
     tracker.update(accepted(7))
     assert tracker.update(unknown()).value == 7
     assert tracker.update(unknown()).value is None
+
+
+def test_real_transition_high_confidence() -> None:
+    # Transition réelle observée : 13 PA puis 11 PA, lecture spécialisée à 0,97.
+    tracker = NumberTemporalTracker()
+    tracker.update(accepted(13, .93))
+    result = tracker.update(accepted(11, .97))
+    assert result.value == 11 and result.temporal_state is TemporalState.STABLE
+
+
+def test_low_confidence_transition_stays_unknown() -> None:
+    # 6 PM → 3 PM lu à 0,82 : une seule frame ne remplace pas la valeur stable.
+    tracker = NumberTemporalTracker()
+    tracker.update(accepted(6, .94))
+    first = tracker.update(accepted(3, .82))
+    assert first.value is None and first.reason is NumberReadReason.TEMPORAL_CONFLICT
+    assert tracker.update(accepted(3, .82)).value == 3
+
+
+def test_unreadable_changed_counter_is_not_held() -> None:
+    # Séquence réelle 11 → 7 : le 7 illisible ne doit pas laisser 11 affiché.
+    tracker = NumberTemporalTracker()
+    tracker.update(accepted(11, .97))
+    glyph = GlyphRead((20, 10, 15, 30), 3, .69, 2, .68, .015, .9)
+    changed = NumberReadResult(None, .49, NumberReadSource.UNKNOWN, (glyph,),
+                               reason=NumberReadReason.LOW_MARGIN,
+                               raw_candidates={"specialized_value": 3})
+    result = tracker.update(changed)
+    assert result.value is None and result.temporal_state is TemporalState.UNKNOWN
+
+
+def test_unreadable_glitch_without_glyph_is_still_held_once() -> None:
+    tracker = NumberTemporalTracker(hold_frames=1)
+    tracker.update(accepted(11, .97))
+    held = tracker.update(unknown())
+    assert held.value == 11 and held.reason is NumberReadReason.TEMPORAL_HOLD
+
+
+def clipped_fifteen() -> np.ndarray:
+    full = digit_crop("15")
+    one = segment_glyphs(full)[0]
+    x, _y, width, _height = one.bbox
+    # La ROI démarre au milieu du « 1 » : seul le « 5 » reste entier.
+    return np.ascontiguousarray(full[:, x + width // 2:])
+
+
+def test_real_pm_crop_not_clipped() -> None:
+    reader = HUDReader(library(1, 5))
+    result = reader.read(clipped_fifteen(), "AP")
+    assert result.value is None
+    assert result.reason is NumberReadReason.CLIPPED_GLYPH
+    assert segment_glyphs(clipped_fifteen()) == ()
+
+
+def test_pm_roi_keeps_full_glyph() -> None:
+    reader = HUDReader(library(1, 5))
+    assert not hud_reader.glyph_clipped(digit_crop("15"))
+    assert reader.read(digit_crop("15"), "AP").value == 15
+
+
+def test_rapidocr_not_called_on_clipped_crop() -> None:
+    calls = []
+    reader = HUDReader(library(1, 5), rapidocr_reader=lambda *_: (calls.append(True) or (5, 1.0)))
+    assert reader.read(clipped_fifteen(), "AP").value is None
+    assert calls == []
+
+
+def hud_glyph_crop(digit: str) -> np.ndarray:
+    """Forme proche de la police HUD réelle : 1 = hampe + petit drapeau, 7 = barre + diagonale."""
+    image = np.zeros((65, 66, 3), np.uint8)
+    if digit == "1":
+        cv2.rectangle(image, (30, 16), (35, 47), (255, 255, 255), -1)
+        cv2.rectangle(image, (26, 16), (29, 20), (255, 255, 255), -1)
+    else:
+        cv2.rectangle(image, (24, 16), (40, 21), (255, 255, 255), -1)
+        cv2.fillConvexPoly(image, np.array([[35, 22], [40, 22], [31, 47], [26, 47]], np.int32),
+                           (255, 255, 255))
+    return image
+
+
+def real_like_library() -> GlyphTemplateLibrary:
+    result = GlyphTemplateLibrary()
+    for digit in ("1", "7"):
+        result.add("AP", int(digit), segment_glyphs(hud_glyph_crop(digit))[0].image)
+    return result
+
+
+def test_one_real_like_glyph() -> None:
+    result = HUDReader(real_like_library()).read(hud_glyph_crop("1"), "AP")
+    assert result.value == 1 and result.reason is NumberReadReason.ACCEPTED
+
+
+def test_seven_real_like_glyph() -> None:
+    result = HUDReader(real_like_library()).read(hud_glyph_crop("7"), "AP")
+    assert result.value == 7 and result.reason is NumberReadReason.ACCEPTED
+
+
+def test_one_seven_heuristic_is_not_trusted_on_narrow_real_one() -> None:
+    # Mesure réelle 3B-4R : la largeur du sommet vaut 1,0 sur les 39 « 1 » annotés.
+    # L'heuristique n'est donc qu'un diagnostic ; elle ne doit pas transformer 1 en 7.
+    glyph = segment_glyphs(hud_glyph_crop("1"))[0].image
+    _preferred, features = hud_reader.distinguish_one_seven(glyph)
+    assert features["top_span"] == 1.0
+    assert HUDReader(real_like_library()).read(hud_glyph_crop("1"), "AP").value == 1
 
 
 def test_ap_and_mp_use_same_reader() -> None:

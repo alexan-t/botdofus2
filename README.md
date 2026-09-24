@@ -1,4 +1,4 @@
-# PythonBot — LOT 3B-4 : lecteur spécialisé PA/PM (0.4.2)
+# PythonBot — LOT 3B-4R : recette réelle du lecteur PA/PM (0.4.3)
 
 Application Windows/PySide6 avec le **simulateur du LOT 1**, la calibration et le scan de sorts du **LOT 2**, puis une session d'**observation réelle en lecture seule** pour le LOT 3. L'observateur analyse uniquement les pixels de la fenêtre choisie. Il ne lance aucun sort, ne déplace aucun personnage et n'envoie aucun clic au client. Il ne lit ni la mémoire du processus ni le réseau.
 
@@ -41,6 +41,12 @@ python -m combatbot.benchmark --hud-reader --hud-rapidocr
 
 Il crée `data/corpus/manifests/hud_manifest.json` et les rapports `data/benchmarks/hud-reader.*`.
 Les sessions entières restent dans un seul split afin d'éviter la fuite entre frames consécutives.
+
+**Recette réelle PA/PM (LOT 3B-4R, 0.4.3)** : le split se fait par groupe temporel (burst annoté, et
+captures consécutives d'une session partageant un compteur inchangé). Un chiffre coupé par la ROI donne
+`UNKNOWN` (`CLIPPED_GLYPH`) au lieu d'une lecture partielle. Le banc exporte aussi la matrice chiffre par
+chiffre, le verdict 1/7 et `one-seven.json/png`. Voir
+[LOT-3B-4R-REAL-HUD-VALIDATION.md](LOT-3B-4R-REAL-HUD-VALIDATION.md).
 
 **Recette réelle (LOT 3B-2R)** : cochez « vérifié par /mapid » quand l'ID vient de la commande
 `/mapid` du client, puis **Recette de grille…** capture une frame (lecture seule), enregistre les

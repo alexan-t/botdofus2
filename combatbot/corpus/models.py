@@ -10,6 +10,10 @@ from combatbot.vision.coordinates import CombatPoint
 
 SCHEMA_VERSION = 1
 USAGES = {"train", "validation", "test", "diagnostic"}
+HUD_CROP_QUALITIES = {
+    "VALID", "CUT_LEFT", "CUT_RIGHT", "CUT_TOP", "CUT_BOTTOM",
+    "WRONG_ROI", "HUD_OCCLUDED", "EMPTY", "OTHER",
+}
 
 
 def _optional_bool(value: object, field_name: str) -> bool | None:
@@ -93,6 +97,9 @@ class Annotation:
     grid_anchors: tuple[PixelAnnotation, ...] = ()
     comments: str | None = None
     digit_issue: str | None = None
+    ap_crop_quality: str | None = None
+    mp_crop_quality: str | None = None
+    hud_burst_id: str | None = None
     schema_version: int = SCHEMA_VERSION
 
     def validate(self) -> None:
@@ -112,6 +119,14 @@ class Annotation:
                 item.validate()
         if self.digit_issue not in (None, "1_vs_7"):
             raise ValueError("digit_issue non reconnu")
+        for value, field_name in (
+            (self.ap_crop_quality, "ap_crop_quality"),
+            (self.mp_crop_quality, "mp_crop_quality"),
+        ):
+            if value is not None and value not in HUD_CROP_QUALITIES:
+                raise ValueError(f"{field_name} non reconnu : {value}")
+        if self.hud_burst_id is not None and not self.hud_burst_id.strip():
+            raise ValueError("hud_burst_id ne peut pas être vide")
 
     def to_dict(self) -> dict[str, object]:
         self.validate()
@@ -126,6 +141,9 @@ class Annotation:
             "mp_truth": self.mp_truth,
             "comments": self.comments.strip() if self.comments else None,
             "digit_issue": self.digit_issue,
+            "ap_crop_quality": self.ap_crop_quality,
+            "mp_crop_quality": self.mp_crop_quality,
+            "hud_burst_id": self.hud_burst_id.strip() if self.hud_burst_id else None,
             "reference_cells_complete": self.reference_cells_complete,
         }
         result.update({key: value for key, value in scalar_values.items() if value is not None})
@@ -167,6 +185,11 @@ class Annotation:
             grid_anchors=many("grid_anchors"),
             comments=str(raw["comments"]) if raw.get("comments") is not None else None,
             digit_issue=str(raw["digit_issue"]) if raw.get("digit_issue") is not None else None,
+            ap_crop_quality=(str(raw["ap_crop_quality"])
+                             if raw.get("ap_crop_quality") is not None else None),
+            mp_crop_quality=(str(raw["mp_crop_quality"])
+                             if raw.get("mp_crop_quality") is not None else None),
+            hud_burst_id=str(raw["hud_burst_id"]) if raw.get("hud_burst_id") is not None else None,
             schema_version=int(raw.get("schema_version", SCHEMA_VERSION)),
         )
         item.validate()

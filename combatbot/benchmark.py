@@ -26,12 +26,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.grid_validation:
         return _grid_validation(repository, args)
     if args.hud_reader:
-        from combatbot.corpus.hud_dataset import run_hud_benchmark, write_report
+        from combatbot.corpus.hud_dataset import export_one_seven, run_hud_benchmark, write_report
         report = run_hud_benchmark(repository, rapidocr=args.hud_rapidocr)
         output = args.output_dir or (app_data_root() / "data" / "benchmarks")
         json_path, markdown_path = write_report(report, output)
+        one_seven_json, one_seven_plate = export_one_seven(repository, output)
         print(f"HUD : {report['labelled_examples']}/{report['inventory_examples']} crop(s) avec vérité humaine")
         print(f"Statut : {report['status']}")
+        print(f"1/7 : {report['one_seven']['verdict']} — {one_seven_json}"
+              + (f" + {one_seven_plate}" if one_seven_plate else ""))
         print(f"JSON : {json_path}")
         print(f"Markdown : {markdown_path}")
         return 0

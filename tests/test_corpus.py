@@ -80,10 +80,30 @@ def test_annotation_valid_and_partial_round_trip(tmp_path: Path) -> None:
         reference_cells=(PixelAnnotation((20, 20), (0, 0)),),
         reference_cells_complete=True, grid_anchors=(PixelAnnotation((10, 10)),),
         digit_issue="1_vs_7", comments="cas réel",
+        ap_crop_quality="VALID", mp_crop_quality="CUT_LEFT",
+        hud_burst_id="combat-01-tour-02",
     )
     updated = repository.save_annotation(complete)
     assert updated.annotation_available and updated.ap_truth == 7
     assert repository.read_annotation(updated) == complete
+
+
+def test_hud_crop_quality_is_independent_from_truth(tmp_path: Path) -> None:
+    repository = CorpusRepository(tmp_path / "corpus")
+    entry = repository.import_debug(make_debug(tmp_path / "debug"))
+    annotation = Annotation(
+        entry.observation_id,
+        ap_truth=None,
+        mp_truth=6,
+        ap_crop_quality="EMPTY",
+        mp_crop_quality="CUT_LEFT",
+        hud_burst_id="fight-a-turn-1",
+    )
+    updated = repository.save_annotation(annotation)
+    loaded = repository.read_annotation(updated)
+    assert loaded is not None
+    assert loaded.ap_truth is None and loaded.ap_crop_quality == "EMPTY"
+    assert loaded.mp_truth == 6 and loaded.mp_crop_quality == "CUT_LEFT"
 
 
 def test_corpus_coordinate_serialization() -> None:

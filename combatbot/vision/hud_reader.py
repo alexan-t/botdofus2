@@ -36,6 +36,7 @@ class NumberReadReason(str, Enum):
     LOW_MARGIN = "LOW_MARGIN"
     NO_GLYPH = "NO_GLYPH"
     SEGMENTATION_FAILED = "SEGMENTATION_FAILED"
+    CLIPPED_GLYPH = "CLIPPED_GLYPH"
     NO_TEMPLATE = "NO_TEMPLATE"
     OUT_OF_RANGE = "OUT_OF_RANGE"
     TEMPORAL_CONFLICT = "TEMPORAL_CONFLICT"
@@ -206,17 +207,56 @@ def _segments_for_mask(mask: np.ndarray) -> tuple[SegmentedGlyph, ...]:
     return tuple(output)
 
 
+def _clipped_by_side(mask: np.ndarray) -> bool:
+    """Un trait blanc de hauteur chiffre qui touche le bord gauche/droit est un glyphe coupé.
+
+    Sur le corpus réel, une ROI trop étroite coupait le « 1 » de « 15 » : le
+    segmenteur écartait ce reste comme composante de bord et lisait « 5 ».
+    """
+    height, width = mask.shape
+    clean = mask.copy()
+    border = max(1, round(min(width, height) * 0.04))
+    clean[:border] = clean[-border:] = 0
+    clean[:, :border] = clean[:, -border:] = 0
+    count, _labels, stats, _ = cv2.connectedComponentsWithStats(clean, 8)
+    min_area = max(5, round(width * height * 0.008))
+    for index in range(1, count):
+        x, _y, w, h, area = (int(value) for value in stats[index])
+        if area >= min_area and h >= height * 0.30 and w <= width * 0.65 \
+                and (x <= border or x + w >= width - border):
+            return True
+    return False
+
+
+def glyph_clipped(image: np.ndarray) -> bool:
+    """Vrai si le masque blanc HUD montre un chiffre tronqué par la ROI."""
+    masks = _candidate_masks(image)
+    return bool(masks) and _clipped_by_side(masks[0])
+
+
 def segment_glyphs(image: np.ndarray) -> tuple[SegmentedGlyph, ...]:
-    """Teste trois variantes justifiées et garde la segmentation la plus nette."""
-    candidates = [_segments_for_mask(mask) for mask in _candidate_masks(image)]
-    candidates = [value for value in candidates if value]
-    if not candidates:
+    """Priorise le masque blanc HUD, puis utilise les seuils gris en repli.
+
+    Le masque HSV est spécifique aux glyphes blancs. Un masque lumineux plus
+    large peut absorber l'icône PA/PM et faire disparaître un chiffre pourtant
+    correctement séparé par le masque blanc. Un chiffre coupé par la ROI ne
+    produit aucun glyphe : lire seulement la partie visible serait une erreur.
+    """
+    masks = _candidate_masks(image)
+    if masks and _clipped_by_side(masks[0]):
         return ()
-    return max(candidates, key=lambda items: (sum(item.quality for item in items) / len(items), len(items)))
+    for mask in masks:
+        segments = _segments_for_mask(mask)
+        if segments:
+            return segments
+    return ()
 
 
 def distinguish_one_seven(glyph: np.ndarray) -> tuple[int | None, dict[str, float | int | None]]:
-    """Indice interprétable fondé sur la largeur du sommet et la hampe basse."""
+    """Indice interprétable fondé sur la largeur du sommet et la hampe basse.
+
+    Diagnostic uniquement : réfuté sur le corpus réel 3B-4R (préfère 7 pour chaque « 1 »).
+    """
     mask = glyph > 0
     rows, columns = np.where(mask)
     if not len(columns):
@@ -310,7 +350,7 @@ RapidReader = Callable[[np.ndarray, int, int], tuple[int | None, float]]
 class HUDReader:
     def __init__(self, templates: GlyphTemplateLibrary | None = None, *,
                  rapidocr_reader: RapidReader | None = None, minimum_score: float = 0.70,
-                 minimum_margin: float = 0.055, skip_rapidocr_confidence: float = 0.88,
+                 minimum_margin: float = 0.055, skip_rapidocr_confidence: float = 0.74,
                  fallback_confidence: float = 0.94, rapidocr_interval: float = 0.55) -> None:
         self.templates = templates or GlyphTemplateLibrary()
         self.rapidocr_reader = rapidocr_reader
@@ -340,6 +380,10 @@ class HUDReader:
             return NumberReadResult(None, 0.0, NumberReadSource.UNKNOWN,
                                     reason=NumberReadReason.NO_GLYPH,
                                     timings_ms={"specialized": (time.perf_counter() - started) * 1000})
+        if glyph_clipped(image):
+            return NumberReadResult(None, 0.0, NumberReadSource.UNKNOWN,
+                                    reason=NumberReadReason.CLIPPED_GLYPH,
+                                    timings_ms={"specialized": (time.perf_counter() - started) * 1000})
         segments = segment_glyphs(image)
         if not segments:
             return NumberReadResult(None, 0.0, NumberReadSource.UNKNOWN,
@@ -354,9 +398,11 @@ class HUDReader:
         second_score = max(glyph.second_score for glyph in glyphs)
         margin = min(glyph.margin for glyph in glyphs)
         value = int("".join(str(glyph.best_digit) for glyph in glyphs))
+        # 3B-4R : sur les 39 « 1 » réels annotés, distinguish_one_seven préfère 7 (la hampe
+        # étroite donne une largeur de sommet de 1,0). Ses mesures restent exportées pour le
+        # diagnostic, mais seule la marge des templates décide de l'ambiguïté 1/7.
         ambiguous_17 = any(
-            {glyph.best_digit, glyph.second_digit} == {1, 7}
-            and (glyph.margin < self.minimum_margin or glyph.one_seven_features.get("preferred") is None)
+            {glyph.best_digit, glyph.second_digit} == {1, 7} and glyph.margin < self.minimum_margin
             for glyph in glyphs
         )
         if ambiguous_17:
@@ -383,7 +429,9 @@ class HUDReader:
         specialized = self._specialized(image, kind, minimum, maximum)
         if specialized.value is not None and specialized.confidence >= self.skip_rapidocr_confidence:
             return specialized
-        if specialized.reason is NumberReadReason.OUT_OF_RANGE or self.rapidocr_reader is None:
+        # Un crop tronqué reste UNKNOWN : RapidOCR lirait lui aussi la seule partie visible.
+        if specialized.reason in (NumberReadReason.OUT_OF_RANGE, NumberReadReason.CLIPPED_GLYPH) \
+                or self.rapidocr_reader is None:
             return specialized
         started = time.perf_counter()
         signature = zlib.crc32(np.ascontiguousarray(image).tobytes())
@@ -447,11 +495,25 @@ class NumberTemporalTracker:
         self._pending_count = 0
         self._misses = 0
 
+    @staticmethod
+    def _shows_change(result: NumberReadResult, stable: NumberReadResult) -> bool:
+        """Une frame illisible mais segmentée qui contredit la valeur stable prouve un changement.
+
+        Sur une vraie séquence, 11 → 7 illisible gardait 11 affiché : un nombre de glyphes
+        différent ou une proposition spécialisée différente interdit ce maintien.
+        """
+        if not result.glyphs or stable.value is None:
+            return False
+        proposed = result.raw_candidates.get("specialized_value")
+        return len(result.glyphs) != len(str(stable.value)) \
+            or (proposed is not None and proposed != stable.value)
+
     def update(self, result: NumberReadResult) -> NumberReadResult:
         if result.value is None:
             self._misses += 1
             self._pending_value, self._pending_count = None, 0
-            if self._stable is not None and self._misses <= self.hold_frames:
+            if self._stable is not None and self._misses <= self.hold_frames \
+                    and not self._shows_change(result, self._stable):
                 return replace(self._stable, confidence=self._stable.confidence * 0.72,
                                reason=NumberReadReason.TEMPORAL_HOLD,
                                temporal_state=TemporalState.STABLE,
