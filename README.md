@@ -1,4 +1,4 @@
-# PythonBot — LOT 3B-2 : grille GameData projetée à l'écran (0.4.0)
+# PythonBot — LOT 3B-4 : lecteur spécialisé PA/PM (0.4.2)
 
 Application Windows/PySide6 avec le **simulateur du LOT 1**, la calibration et le scan de sorts du **LOT 2**, puis une session d'**observation réelle en lecture seule** pour le LOT 3. L'observateur analyse uniquement les pixels de la fenêtre choisie. Il ne lance aucun sort, ne déplace aucun personnage et n'envoie aucun clic au client. Il ne lit ni la mémoire du processus ni le réseau.
 
@@ -27,6 +27,20 @@ et « combat actif » (COMBAT / EXPLORATION / UNKNOWN). L'alignement est vérifi
 après consensus sur plusieurs frames, et le profil confirmé n'est jamais modifié. La cohérence de la map
 déclarée est relative à sa propre baseline et n'est évaluée que grille visible : c'est un avertissement.
 Banc : `python -m combatbot.benchmark --grid-validation`. Voir [LOT-3B-3-GRID-VALIDATION.md](LOT-3B-3-GRID-VALIDATION.md).
+
+**Lecteur PA/PM (LOT 3B-4, 0.4.2)** : les crops calibrés passent par une segmentation légère,
+des templates issus exclusivement des annotations humaines du corpus, un seuil absolu, une marge
+premier/second candidat et un consensus temporel. RapidOCR reste un fallback strict et mis en cache.
+Un désaccord ou une ambiguïté, notamment entre 1 et 7, produit `UNKNOWN`. Dans **Corpus / Annotation**,
+les crops PA et PM sont affichés à leur taille originale et agrandis en nearest-neighbor pour saisir la
+vérité sans recopier une prédiction. Le banc dédié s'exécute avec :
+
+```powershell
+python -m combatbot.benchmark --hud-reader --hud-rapidocr
+```
+
+Il crée `data/corpus/manifests/hud_manifest.json` et les rapports `data/benchmarks/hud-reader.*`.
+Les sessions entières restent dans un seul split afin d'éviter la fuite entre frames consécutives.
 
 **Recette réelle (LOT 3B-2R)** : cochez « vérifié par /mapid » quand l'ID vient de la commande
 `/mapid` du client, puis **Recette de grille…** capture une frame (lecture seule), enregistre les

@@ -170,6 +170,9 @@ class CombatObservation:
     player_cell_id: int | None = None
     # COMBAT | EXPLORATION | UNKNOWN ; combat_detected reste True seulement pour COMBAT.
     combat_state: str | None = None
+    # Preuves sérialisées du lecteur HUD 3B-4 ; absentes pour les anciennes observations.
+    ap_read: dict[str, object] | None = None
+    mp_read: dict[str, object] | None = None
 
     @property
     def enemy_cells(self) -> tuple[Cell, ...]:

@@ -13,6 +13,7 @@ from combatbot.vision.combat_observer import RealCombatObserver, save_debug_obse
 from combatbot.vision.combat_ocr import preprocess_number_variants
 from combatbot.vision.combat_tracker import CombatObservationTracker
 from combatbot.vision.models import Calibration, CapturedFrame, ClientRect, RelativeRect, ZoneEvidence
+from combatbot.vision.hud_reader import NumberReadReason, NumberReadResult, NumberReadSource
 
 
 WIDTH, HEIGHT = 800, 600
@@ -104,6 +105,23 @@ def test_combat_present_reads_grid_player_enemies_ap_pm() -> None:
     assert len(observation.grid.cells) == 16
     assert observation.player_turn is True
     assert packet.elapsed_ms >= 0
+
+
+def test_observer_exposes_rich_hud_evidence() -> None:
+    class Reader:
+        def read(self, _image, kind):
+            value = 6 if kind == "AP" else 3
+            return NumberReadResult(value, .93, NumberReadSource.GLYPH_TEMPLATE,
+                                    best_score=.95, second_score=.5, margin=.45,
+                                    reason=NumberReadReason.ACCEPTED)
+
+    frame = combat_frame()
+    observer = RealCombatObserver(7, calibration(), frame_provider=lambda: frame,
+                                  hud_reader=Reader(), grid_calibration=GRID)
+    packet = observer.observe()
+    assert packet.observation.ap == 6 and packet.observation.mp == 3
+    assert packet.observation.ap_read["source"] == "GLYPH_TEMPLATE"
+    assert packet.metadata["hud_reader"]["ap"]["margin"] == .45
     assert packet.metadata["coordinate_spaces"]["frame"] == "combat"
     assert packet.metadata["layout_transform"]["client_screen_origin"] == {"x": 0.0, "y": 0.0}
 

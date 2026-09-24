@@ -102,6 +102,8 @@ class AnnotationDialog(QDialog):
         self.turn = self._truth_combo()
         self.ap = self._counter()
         self.mp = self._counter()
+        self.hud_status = QLabel("Les valeurs restent non annotées tant qu'elles ne sont pas validées.")
+        self.hud_status.setWordWrap(True)
         self.digit_issue = QCheckBox("Confusion 1 ↔ 7 pertinente")
         self.reference_complete = QCheckBox("Liste des cellules de référence exhaustive")
         self.points = QLabel("Aucun point humain")
@@ -115,6 +117,13 @@ class AnnotationDialog(QDialog):
         form.addRow("Mon tour", self.turn)
         form.addRow("PA réels", self.ap)
         form.addRow("PM réels", self.mp)
+        hud_editors = QHBoxLayout()
+        hud_editors.addWidget(self._hud_editor("PA", "ap_crop", self.ap, self.mp))
+        hud_editors.addWidget(self._hud_editor("PM", "mp_crop", self.mp, self.ap))
+        hud_widget = QWidget()
+        hud_widget.setLayout(hud_editors)
+        form.addRow("Inspection HUD", hud_widget)
+        form.addRow("Validation HUD", self.hud_status)
         form.addRow("Cas chiffres", self.digit_issue)
         form.addRow("Références", self.reference_complete)
         form.addRow("Dernier clic", self.last_click)
@@ -157,6 +166,46 @@ class AnnotationDialog(QDialog):
         spin.setSpecialValueText("Non annoté")
         spin.setValue(-1)
         return spin
+
+    def _hud_editor(self, kind: str, path_key: str, spin: QSpinBox, next_spin: QSpinBox) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        title = QLabel(f"{kind} — original + zoom nearest-neighbor")
+        layout.addWidget(title)
+        images = QHBoxLayout()
+        original, zoom = QLabel(), QLabel()
+        original.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        zoom.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        zoom.setMinimumSize(150, 120)
+        relative = self.entry.paths.get(path_key)
+        image = cv2.imread(str(self.repository.resolve(relative)), cv2.IMREAD_COLOR) if relative else None
+        if image is None:
+            original.setText("Crop absent")
+            zoom.setText("—")
+        else:
+            pixmap = bgr_to_pixmap(image)
+            original.setPixmap(pixmap)
+            zoom.setPixmap(pixmap.scaled(180, 150, Qt.AspectRatioMode.KeepAspectRatio,
+                                         Qt.TransformationMode.FastTransformation))
+        images.addWidget(original)
+        images.addWidget(zoom)
+        layout.addLayout(images)
+        buttons = QHBoxLayout()
+        validate = QPushButton("Valider")
+        unknown = QPushButton("Inconnu")
+        following = QPushButton("Suivant")
+        validate.clicked.connect(
+            lambda: self.hud_status.setText(
+                f"{kind} validé manuellement : {spin.value()}" if spin.value() >= 0
+                else f"{kind} reste inconnu : saisissez une valeur avant validation."
+            )
+        )
+        unknown.clicked.connect(lambda: (spin.setValue(-1), self.hud_status.setText(f"{kind} marqué inconnu")))
+        following.clicked.connect(next_spin.setFocus)
+        for button in (validate, unknown, following):
+            buttons.addWidget(button)
+        layout.addLayout(buttons)
+        return widget
 
     def _read_image(self, key: str) -> np.ndarray:
         path = self.repository.resolve(self.entry.paths[key])

@@ -414,8 +414,20 @@ class CombatPage(QWidget):
         )
         turn = "Inconnu" if observation.player_turn is None else ("Oui" if observation.player_turn else "Non")
         self.real_values["turn"].setText(f"{turn} ({observation.turn_confidence:.0%})")
-        self.real_values["ap"].setText(f"{unknown(observation.ap)} ({observation.confidence_ap:.0%})")
-        self.real_values["mp"].setText(f"{unknown(observation.mp)} ({observation.confidence_mp:.0%})")
+        def hud_text(value, confidence, evidence) -> str:
+            if not evidence:
+                return f"{unknown(value)} ({confidence:.0%})"
+            source = {"GLYPH_TEMPLATE": "Glyphes", "RAPIDOCR": "RapidOCR",
+                      "CONSENSUS": "Consensus", "UNKNOWN": "Inconnu"}.get(
+                          str(evidence.get("source")), str(evidence.get("source", "Inconnu")))
+            reason = str(evidence.get("reason", ""))
+            margin = float(evidence.get("margin", 0.0))
+            return f"{unknown(value)} ({confidence:.0%}) · {source} · marge {margin:.3f} · {reason}"
+
+        self.real_values["ap"].setText(hud_text(observation.ap, observation.confidence_ap,
+                                                observation.ap_read))
+        self.real_values["mp"].setText(hud_text(observation.mp, observation.confidence_mp,
+                                                observation.mp_read))
         player = observation.player_cell
         self.real_values["player"].setText(
             f"({player.x}, {player.y}) ({observation.player_confidence:.0%})" if player else "Inconnue"
@@ -443,6 +455,8 @@ class CombatPage(QWidget):
         self.real_signals.setPlainText("\n".join(
             f"{name}: {score:.0%}" for name, score in observation.signals.items()
         ) + (f"\nÉtat combat : {observation.combat_state}" if observation.combat_state else "")
+          + (f"\nHUD PA : {observation.ap_read}" if observation.ap_read else "")
+          + (f"\nHUD PM : {observation.mp_read}" if observation.mp_read else "")
           + ("\n" + getattr(self, "_validation_details", "") if getattr(self, "_validation_details", "") else ""))
         self.observation_save.setEnabled(True)
         self.select_player.setEnabled(self.observation_stop.isEnabled())

@@ -16,11 +16,25 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-dir", type=Path, help="Dossier de rapport")
     parser.add_argument("--grid-validation", action="store_true",
                         help="LOT 3B-3 : visibilité de grille, combat, alignement, map périmée (corpus lot3b2r)")
+    parser.add_argument("--hud-reader", action="store_true",
+                        help="LOT 3B-4 : inventaire et mesure du lecteur spécialisé PA/PM")
+    parser.add_argument("--hud-rapidocr", action="store_true",
+                        help="Inclut le fallback RapidOCR dans le benchmark HUD")
     parser.add_argument("--client", type=Path, help="Dossier client GameData (défaut : réglage de l'application)")
     args = parser.parse_args(argv)
     repository = CorpusRepository(args.corpus_root)
     if args.grid_validation:
         return _grid_validation(repository, args)
+    if args.hud_reader:
+        from combatbot.corpus.hud_dataset import run_hud_benchmark, write_report
+        report = run_hud_benchmark(repository, rapidocr=args.hud_rapidocr)
+        output = args.output_dir or (app_data_root() / "data" / "benchmarks")
+        json_path, markdown_path = write_report(report, output)
+        print(f"HUD : {report['labelled_examples']}/{report['inventory_examples']} crop(s) avec vérité humaine")
+        print(f"Statut : {report['status']}")
+        print(f"JSON : {json_path}")
+        print(f"Markdown : {markdown_path}")
+        return 0
     report = run_benchmark(repository)
     output = args.output_dir or (app_data_root() / "data" / "benchmarks")
     json_path, markdown_path = write_reports(report, output)

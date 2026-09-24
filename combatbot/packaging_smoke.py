@@ -67,6 +67,25 @@ def _grid_validation_check() -> dict[str, object]:
             "action_executor_invoked": invoked, "action_port_is_protocol": hasattr(ports, "ActionExecutor")}
 
 
+def _hud_reader_check() -> dict[str, object]:
+    """LOT 3B-4 : classification spécialisée et fallback, sans action ni donnée client."""
+    from combatbot.vision.hud_reader import GlyphTemplateLibrary, HUDReader, segment_glyphs
+    image = np.zeros((58, 38, 3), np.uint8)
+    cv2.putText(image, "7", (5, 46), cv2.FONT_HERSHEY_SIMPLEX, 1.35, (255, 255, 255), 2, cv2.LINE_AA)
+    segments = segment_glyphs(image)
+    templates = GlyphTemplateLibrary()
+    if segments:
+        templates.add("SHARED", 7, segments[0].image)
+    specialized = HUDReader(templates).read(image, "AP")
+    fallback = HUDReader(GlyphTemplateLibrary(), rapidocr_reader=lambda *_: (3, .99)).read(image, "MP")
+    return {
+        "initialized": True, "fixture_value": specialized.value,
+        "fixture_source": specialized.source.value,
+        "fallback_available": fallback.value == 3 and fallback.source.value == "RAPIDOCR",
+        "action_executed": False,
+    }
+
+
 def run_packaging_smoke(app, storage, window) -> int:
     report_path = Path(os.environ.get(
         "PYTHONBOT_SMOKE_REPORT", str(app_data_root() / "logs" / "packaging-smoke.json")
@@ -97,6 +116,7 @@ def run_packaging_smoke(app, storage, window) -> int:
 
         checks["gamedata_grid"] = _gamedata_grid_check()
         checks["grid_validation"] = _grid_validation_check()
+        checks["hud_reader"] = _hud_reader_check()
 
         ocr_image = np.full((100, 420, 3), 255, dtype=np.uint8)
         cv2.putText(ocr_image, "3 PA  Portee 1-4", (8, 55), cv2.FONT_HERSHEY_SIMPLEX, 1,
@@ -124,6 +144,9 @@ def run_packaging_smoke(app, storage, window) -> int:
             checks["grid_validation"]["blank_visibility"] == "NOT_VISIBLE",
             checks["grid_validation"]["drawn_visibility"] == "VISIBLE",
             not checks["grid_validation"]["action_executor_invoked"],
+            checks["hud_reader"]["fixture_value"] == 7,
+            checks["hud_reader"]["fallback_available"],
+            not checks["hud_reader"]["action_executed"],
         ))
     except Exception as exc:
         results["success"] = False

@@ -28,6 +28,10 @@ from combatbot.vision.grid_validation import (
     CombatStateDetector, DriftTracker, GridAlignmentValidator, GridVisibilityDetector, MapConsistencyTracker,
 )
 from combatbot.vision.models import Calibration, CapturedFrame
+from combatbot.vision.hud_reader import (
+    GlyphTemplateLibrary, HUDReader, NumberReadReason, NumberReadResult,
+    NumberReadSource, NumberTemporalTracker,
+)
 
 
 FrameProvider = Callable[[], CapturedFrame]
@@ -58,7 +62,8 @@ class RealCombatObserver:
 
     def __init__(self, hwnd: int, calibration: Calibration, *,
                  frame_provider: FrameProvider | None = None,
-                 number_reader: NumberReader = read_small_number,
+                 number_reader: NumberReader | None = None,
+                 hud_reader: HUDReader | None = None,
                  grid_calibration: GridCalibration | None = None,
                  tracker: CombatObservationTracker | None = None,
                  capture_context: dict[str, object] | None = None,
@@ -68,6 +73,19 @@ class RealCombatObserver:
         self.calibration = calibration
         self.frame_provider = frame_provider or (lambda: capture_client(hwnd, activate=False))
         self.number_reader = number_reader
+        if hud_reader is not None:
+            self.hud_reader = hud_reader
+        elif number_reader is None:
+            templates = GlyphTemplateLibrary.load(app_data_root() / "data" / "hud_templates")
+            self.hud_reader = HUDReader(
+                templates,
+                rapidocr_reader=lambda image, minimum, maximum: read_small_number(image, minimum, maximum),
+            )
+        else:
+            # Injection historique conservée pour les intégrations et tests existants.
+            self.hud_reader = None
+        self.ap_temporal = NumberTemporalTracker()
+        self.mp_temporal = NumberTemporalTracker()
         self.grid_calibration = grid_calibration
         self.tracker = tracker or CombatObservationTracker()
         # Without resolver the historical pipeline is used unchanged.
@@ -87,6 +105,7 @@ class RealCombatObserver:
         self.session_id = str(self.capture_context.get("session_id") or f"session_{uuid4().hex[:12]}")
         self._frame_index = 0
         self._last_numbers: tuple[float, tuple[int | None, float], tuple[int | None, float]] | None = None
+        self._last_number_results: tuple[NumberReadResult, NumberReadResult] | None = None
 
     def observe(self) -> ObservationPacket:
         started = time.perf_counter()
@@ -120,11 +139,31 @@ class RealCombatObserver:
         now = time.monotonic()
         ap_image = _zone(frame, self.calibration, transform, "ap")
         mp_image = _zone(frame, self.calibration, transform, "mp")
-        if self._last_numbers is None or now - self._last_numbers[0] >= 0.55:
-            ap = self.number_reader(ap_image) if ap_image is not None else (None, 0.0)
-            mp = self.number_reader(mp_image) if mp_image is not None else (None, 0.0)
-            self._last_numbers = (now, ap, mp)
-        _, (ap, confidence_ap), (mp, confidence_mp) = self._last_numbers
+        if self.hud_reader is not None:
+            ap_raw = self.hud_reader.read(ap_image, "AP") if ap_image is not None else NumberReadResult(
+                None, 0.0, NumberReadSource.UNKNOWN, reason=NumberReadReason.NO_GLYPH)
+            mp_raw = self.hud_reader.read(mp_image, "MP") if mp_image is not None else NumberReadResult(
+                None, 0.0, NumberReadSource.UNKNOWN, reason=NumberReadReason.NO_GLYPH)
+            ap_read = self.ap_temporal.update(ap_raw)
+            mp_read = self.mp_temporal.update(mp_raw)
+            ap, confidence_ap = ap_read.value, ap_read.confidence
+            mp, confidence_mp = mp_read.value, mp_read.confidence
+        else:
+            assert self.number_reader is not None
+            if self._last_numbers is None or now - self._last_numbers[0] >= 0.55:
+                ap_pair = self.number_reader(ap_image) if ap_image is not None else (None, 0.0)
+                mp_pair = self.number_reader(mp_image) if mp_image is not None else (None, 0.0)
+                self._last_numbers = (now, ap_pair, mp_pair)
+                self._last_number_results = tuple(
+                    NumberReadResult(value, confidence, NumberReadSource.RAPIDOCR if value is not None
+                                     else NumberReadSource.UNKNOWN,
+                                     reason=NumberReadReason.OCR_FALLBACK if value is not None
+                                     else NumberReadReason.NO_GLYPH)
+                    for value, confidence in (ap_pair, mp_pair)
+                )  # type: ignore[assignment]
+            _, (ap, confidence_ap), (mp, confidence_mp) = self._last_numbers
+            assert self._last_number_results is not None
+            ap_read, mp_read = self._last_number_results
 
         counter_signal = (_visual_activity(_zone(frame, self.calibration, transform, "ap")) +
                           _visual_activity(_zone(frame, self.calibration, transform, "mp"))) / 2
@@ -162,6 +201,7 @@ class RealCombatObserver:
             signals=signals, timestamp=time.time(),
             player_cell_id=cell_ids.get(player_cell) if player_cell is not None else None,
             combat_state=state.state.value,
+            ap_read=ap_read.to_dict(), mp_read=mp_read.to_dict(),
         )
         observation = self.tracker.update(raw)
         annotated = draw_diagnostic_overlay(combat_image, observation, self.overlay_options,
@@ -215,6 +255,13 @@ class RealCombatObserver:
             "phase": phase,
             "analysis_ms": elapsed_ms,
             "global_confidence": observation.observation_confidence,
+            "hud_reader": {
+                "ap": observation.ap_read, "mp": observation.mp_read,
+                "specialized_ap_ms": ap_read.timings_ms.get("specialized"),
+                "specialized_mp_ms": mp_read.timings_ms.get("specialized"),
+                "rapidocr_ap_ms": ap_read.timings_ms.get("rapidocr"),
+                "rapidocr_mp_ms": mp_read.timings_ms.get("rapidocr"),
+            },
             "capture_source": frame.source,
             "session_id": self.session_id,
             "frame_index": self._frame_index,
