@@ -4,6 +4,12 @@ Date : 24 septembre 2026. Version conservée : **0.4.3**.
 
 ## Conclusion
 
+**Réparation 3B-5B : voir section 15.** La couverture TRAIN tient compte du layout (TEST
+inchangé). Le profil joueur utilise plusieurs exemples et l'anneau partiel est appris sur TRAIN.
+TEST du nouveau layout, exécuté une seule fois : joueur 13/16 sans erreur, ennemis 35/45 sans
+faux ; ancien layout inchangé (54/58). Le suivi reste non mesurable faute d'identités vérifiées.
+LOT 3B-5 non finalisé, version 0.4.3.
+
 **Dernière vérification : voir section 14.** Une nouvelle collecte de 28 images distinctes,
 sur deux maps et deux sessions, est annotée. Les identités sont cette fois cohérentes à
 l'examen des séquences, mais aucun profil TRAIN ne couvre leur nouvelle calibration :
@@ -639,3 +645,186 @@ des annotations utilisateur. Pas de 0.5.0, de commit de finalisation ni de LOT 3
 
 HUD REGRESSION: NONE ; GRID REGRESSION: NONE sur les corpus de référence mesurés.
 Contrôle final des 944 empreintes source : aucun fichier modifié.
+
+## 15. Réparation layout-aware et détection partielle
+
+LOT 3B-5B, 24 septembre 2026. Aucune nouvelle collecte ni nouvelle map. Aucun groupe TEST
+déplacé. Aucun profil ni seuil appris sur TEST. Version conservée : **0.4.3**.
+
+### 15.1 Git
+
+- Branche `lot-3b-5-entity-tracking`, partie de `57d0753`. Le code 3B-5 n'avait jamais été commité.
+- `8c8926c fix: make entity learning layout aware` : point de gel. Il contient le code 3B-5 et
+  la réparation 3B-5B (le message inclut « fix: improve player and partial marker detection »).
+  Les seuils étaient fixés avant tout passage sur VALIDATION ou TEST.
+- `526bea0 perf: restrict partial ring evidence to band pixels` : optimisation seulement.
+  Les sorties TRAIN sont identiques frame par frame (33/33).
+- Aucun fichier `data/`, `dist/`, `build/`, `.venv/`, capture, template runtime ni log n'est commité.
+
+### 15.2 Reproduction du blocage (snapshot isolé)
+
+Snapshot `data/validation/lot3b5b-run2/corpus` : 944 fichiers, empreintes SHA-256 vérifiées.
+Registre v1 recopié de `lot3b5-sequences-2`. Le corpus utilisateur ne contient aucun registre
+entités. Contrôle final : ses 944 fichiers sont identiques au snapshot (0 différence).
+
+| Layout | Digest | TRAIN (avant) | Baseline joueur | Baseline ennemis |
+|---|---|---|---|---|
+| nouveau | `9a0751d48681994e` | **0 groupe** | 0/27, 27 UNKNOWN | 0/66 |
+| ancien | `e561118fd8115c8f` | 6 groupes | 1 bon, 1 mauvais / 21 TRAIN | 54/58, 0 faux |
+
+La baseline attendue est reproduite exactement.
+
+### 15.3 Couverture TRAIN par layout (§4–8)
+
+- `cover_layouts` : un layout sans groupe TRAIN en reçoit un. L'ordre est déterministe :
+  VALIDATION d'abord, puis non attribué, puis `sha256(layout|groupe)`. Un groupe TEST n'est
+  jamais promu, même absent du corpus courant.
+- Migration appliquée : `session_1f2858ce5c14|map88084225` (12 frames) passe de VALIDATION à TRAIN.
+  `session_325b4d78d112|map88083713` (16 frames) **reste TEST**.
+- Registre `schema_version: 2`. Chaque migration est tracée (`reason: layout_train_coverage`,
+  `previous_split`, `new_split`, `layout_signature`) et l'historique est conservé. Fichier produit
+  à part : `data/validation/lot3b5b-run2/entity_split_registry.v2.json`. Le corpus utilisateur
+  n'est pas modifié.
+- **Ce layout n'a temporairement plus de VALIDATION indépendante.** Les résultats TRAIN et TEST
+  du nouveau layout sont rapportés séparément ci-dessous.
+
+### 15.4 Profils d'équipe (TRAIN seulement, §21)
+
+La classe d'équipe vient des anneaux complets s'il y en a au moins 3. Sinon, la teinte est
+estimée par enrichissement : densité de pixels saturés dans l'anneau moins le maximum des densités
+intérieure et extérieure, aux cellules annotées. Un corps de sprite coloré déborde vers
+l'intérieur ; un trait d'anneau reste dans sa bande. La tolérance pixel est le p95 des écarts + 1.
+
+| Layout | Équipe | Méthode | Échantillons | Teinte | Dispersion | Tol. anneau | Tol. pixel | Partiel TRAIN (retrouvés / contraires) |
+|---|---|---|---|---|---|---|---|---|
+| nouveau | joueur | anneaux complets | 9 | 3,78 | 0,76 | 8,0 | 4,78 | 3 / **15** → refusé |
+| nouveau | ennemi | enrichissement | 21 cellules (0 anneau complet) | 120,52 | — | 8,0 | 3,52 | 18 / 0 → **autorisé** |
+| ancien | joueur | anneaux complets | 10 | 2,20 | 1,11 | 8,0 | 11,80 | 0 / 0 → refusé (grille non enregistrée) |
+| ancien | ennemi | anneaux complets | 47 | 118,84 | 0,91 | 8,0 | 3,84 | 0 / 0 → refusé (grille non enregistrée) |
+
+L'anneau partiel de l'équipe joueur est refusé dans le nouveau layout. Il se déclenche sur 15
+vérités ennemies : le corps des monstres étoiles porte du rouge. Les anciennes frames sont
+antérieures à 3B-3 et n'ont pas d'état de grille enregistré. Le chemin partiel, qui exige une
+grille fiable, n'y est donc jamais utilisé : l'ancien layout reste entièrement en anneau complet.
+
+### 15.5 PlayerVisualProfileV2 (§9–14, §22)
+
+- Prototypes : vecteurs (Lab pieds, Lab centre) des vérités PLAYER `human_confirmed` de TRAIN.
+- Rejets motivés : `player_not_visible`, `grid_untrusted` (état refusé explicitement),
+  `roi_abnormal`, `marker_unreadable`, `weak_evidence`, `marker_team_mismatch`,
+  `duplicate_prototype`. Un état de grille non enregistré (ancien corpus) est accepté et compté.
+- Décision : distance = min sur les prototypes de la moyenne ΔE (pieds, centre). PLAYER si
+  distance ≤ 20 **et** écart ≥ 5 avec le candidat suivant de la même équipe. Sinon UNKNOWN :
+  un allié proche du profil rend le cas ambigu. Le temporel ne sert jamais de vérité.
+- Choix de 20 / 5 en leave-one-frame-out TRAIN (frames identiques exclues) : 0 mauvais joueur
+  de 15 à 30 / marge 3 à 8. 20 / 5 donne nouveau 8 bons + 3 UNKNOWN, ancien 8 bons + 13 UNKNOWN.
+
+| Layout | Acceptés | Rejets | Prototypes | Dispersion pieds / centre | Paires médiane / max |
+|---|---|---|---|---|---|
+| nouveau | 9 | marker_unreadable 2, duplicate_prototype 2 | 7 | 24,9 / 16,6 | 23,4 / 57,5 |
+| ancien | 10 (état de grille non enregistré) | marker_unreadable 11, duplicate_prototype 2 | 8 | 37,4 / 20,9 | 50,4 / 65,6 |
+
+Profils persistés par layout : `team_markers_<digest>.json` et `player_train_<digest>.json`.
+L'observateur charge ceux du layout courant ; l'ancien `team_markers.json` reste lu en secours.
+
+### 15.6 PARTIAL_RING (§15–19)
+
+États : FULL_RING (chemin 3B-5 inchangé), PARTIAL_RING, sinon rien. Tous les seuils viennent de
+TRAIN : distributions sur les vérités ENEMY/PLAYER/EMPTY_CONFIRMED ; les cellules non annotées ne
+servent qu'au diagnostic.
+
+- Pixels d'équipe : teinte à la tolérance pixel, S ≥ 135, V ≥ 105 (p5 des traits ennemis).
+- Secteur cohérent (8 secteurs, cercle complet) : fraction anneau ≥ 0,05, dépasse
+  max(intérieur, extérieur) de 0,03 **et** en vaut au moins le triple. Le p5 TRAIN du rapport est 7,1.
+- Au moins 2 secteurs cohérents, dont deux séparés d'au moins 2 pas.
+- Contradictions : un secteur rempli à plus de 0,77 (aplat), ou teinte d'équipe hors de l'anneau
+  ≥ 0,05 (TRAIN max 0,023) ; décor ou sprite coloré.
+- Conditions requises : grille fiable, profil d'équipe du layout, autorisation TRAIN de l'équipe,
+  visibilité > 0,5, centre hétérogène (sprite, écart-type ≥ 8), un seul camp compatible.
+  `peak_presence` n'est pas modifié.
+- La couleur seule ne suffit jamais. Les fixtures couvrent l'aplat, l'arc sans sprite, le sprite
+  coloré sans anneau, un fond parsemé à 3/10/35 % et des rayures.
+- Coût : 21 ms par frame 2555×1151 après optimisation (77 ms avant), vectorisé sur les pixels des bandes.
+
+### 15.7 Résultats
+
+**TRAIN (profils appris sur ces frames : optimiste pour le joueur)**
+
+| Layout | Joueur bon / mauvais / UNKNOWN | Ennemis exacts | Faux ennemis |
+|---|---|---|---|
+| nouveau (11 visibles, 21 ennemis) | 9 / **0** / 2 | 18/21 | 0 |
+| ancien (21 visibles, 50 ennemis) | 9 / **0** / 12 | 46/50 | 0 |
+
+Aucun joueur faux avec haute confiance. Leave-one-frame-out TRAIN : nouveau 8/0/3, ancien 8/0/13.
+
+**Non-régression ancien layout (TRAIN + VALIDATION + TEST, §24)**
+
+- Ennemis **54/58**, 0 faux : identique à la référence (46 + 4 + 4).
+- Joueur 11/28 bons, **0 mauvais**, 17 UNKNOWN. Baseline : 1 bon, 1 mauvais.
+- 0 faux FREE, précision OCCUPIED 1,000.
+
+**TEST nouveau layout — exécuté une seule fois, code gelé `8c8926c` (§25–26)**
+
+- Joueur **13/16**, **0 mauvais**, 3 UNKNOWN. Deux UNKNOWN sans candidat de l'équipe joueur ;
+  un vrai joueur trouvé mais au-delà de la tolérance. Baseline : 0/16.
+- Ennemis **35/45** exacts, **0 faux**, 0 UNKNOWN sur une vérité ennemie. Baseline : 0/45.
+  Les 10 manqués ne donnent aucune preuve (ni ENEMY ni UNKNOWN).
+- Cellules : 0 faux FREE sur PLAYER/ENEMY, précision OCCUPIED 1,000. 3 791 FREE sur des cellules
+  sans annotation vide : exclus (`free_unlabelled`). Aucune vérité EMPTY_CONFIRMED sur ce layout,
+  donc aucune précision FREE revendiquée.
+- Aucun réglage n'a suivi ce passage. Les images TEST n'ont pas été ouvertes.
+
+### 15.8 Tracking, horodatages, occlusion (§27–31)
+
+- Horodatages réels : les 16 frames TEST utilisent `prediction.timestamp`. Replis explicites
+  (interpolation entre ancres réelles, 0,4 s ancré, 0,4 s sans ancre), ordre non croissant ou
+  NaN refusés. Tests : écart réel 1 s (saut de 8 cellules accepté, refusé au pas fictif 0,4 s),
+  écart 4 s (piste perdue), ordre et valeurs manquantes.
+- Provenance `tracking_identity` : aucune frame du corpus n'a de source d'identité explicite.
+  Les anciennes identités renumérotées et les nouvelles séquences sont donc exclues des métriques
+  (28 frames anciennes et 16 TEST exclues), et le suivi est `NOT_EVALUABLE`. Aucune ancienne
+  identité n'est mélangée aux nouvelles.
+- L'interface d'annotation ne permet pas encore de confirmer E1/E2/E3 comme identités suivies.
+  Suite proposée, sans recollecte : ajouter cette revue à l'interface, puis la faire sur les
+  deux séquences existantes. La détection étant désormais réparée, la mesure devient possible.
+- Occlusion : aucune occultation annotée, NOT OBSERVED.
+
+### 15.9 Performance (§33)
+
+| Mesure (moyenne / max) | Nouveau layout | Ancien layout |
+|---|---|---|
+| detector_ms TRAIN, modèle de fond actif | 109 / 217 | 92 / 198 |
+| tracker_ms | 0,1 / 0,2 | 0,1 / 0,3 |
+
+Sur le TEST, avant l'optimisation `526bea0`, le détecteur mesurait 269 ms en moyenne. Les sorties
+sont identiques après optimisation ; le TEST n'est pas relancé pour mesurer le temps.
+
+### 15.10 Non-régressions (§34) et tests (§35)
+
+- GRID (snapshot, `nonreg/`) : 0/14 faux combats, 12/12 visibles, 26/26 combats, 12/12 alignés.
+- HUD (snapshot) : précision acceptée 1,000 sur TRAIN/VALIDATION/TEST, 1/7 VALIDATED, PASS.
+- `tests/test_entity_repair.py` : les 11 tests exigés, plus l'ordre et les manques d'horodatage,
+  la barrière partielle, la persistance par layout et le profil multi-exemples sur corpus.
+- **373 tests réussis**, compilation réussie.
+
+### 15.11 Statuts
+
+```text
+IMPLEMENTATION: PASS
+REAL ENTITY CORPUS: PARTIAL
+PLAYER DETECTION: PARTIAL
+ENEMY DETECTION: PARTIAL
+GLOBAL TRACKING: PARTIAL
+OCCLUSION HANDLING: NOT OBSERVED
+CELL OCCUPANCY: PARTIAL
+HUD REGRESSION: NONE
+GRID REGRESSION: NONE
+ACTIONS: NONE
+```
+
+- PLAYER : 0 mauvais partout, mais 17/28 UNKNOWN sur l'ancien layout (marqueurs illisibles).
+- ENEMY : 0 faux, rappel TEST nouveau layout 35/45.
+- TRACKING : implémenté, non mesurable faute d'identités vérifiées.
+- CORPUS : pas de VALIDATION indépendante sur le nouveau layout, aucune vérité vide.
+
+Le LOT 3B-5 **n'est pas finalisé**. Version 0.4.3, pas de 0.5.0, pas de LOT 3B-6.
