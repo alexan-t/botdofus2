@@ -15,7 +15,7 @@ Référence : `LOT-3B-4R-REAL-HUD-VALIDATION.md`
 | PM READER | **PASS** |
 | 1 VS 7 | **VALIDATED** (critère §16, support encore modeste) |
 | DIGIT 4 | **VALIDATED** (support minimal : 1 crop TRAIN, 1 crop TEST) |
-| DIGIT 8 | **NOT OBSERVED** |
+| DIGIT 8 | **OBSERVED_INSUFFICIENT** (appris en TRAIN, pas encore testé — §14) |
 | RAPIDOCR | **PARTIAL** |
 | GRID REGRESSION | **NONE** |
 
@@ -241,11 +241,43 @@ actuel date d'avant les correctifs de déduplication et de conflit.
 Le benchmark a écrit les templates TRAIN humains dans `%LOCALAPPDATA%\PythonBot\data\hud_templates` :
 l'observateur de l'exe les utilisera pour la lecture en direct.
 
-## 14. Condition pour 3B-5 (§30)
+## 14. Complément : premier 8 et premier PA = 1 seul (13 h 53)
+
+Observation en direct avec l'exécutable reconstruit : le lecteur a répondu **Inconnu** sur un PA
+qu'il n'avait jamais appris (meilleur candidat 9 à 0,904, marge 0,043 face à 3), sans inventer de
+valeur. Trois observations enregistrées (`session_bd6deb4a56b3`, frames 161, 191, 263) ont été
+importées puis confirmées par l'utilisateur : **PA 8 / PM 3**, **PA 1 / PM 0** (premier PA = 1 seul)
+et PA 5 / PM 1. Aucun conflit de vérité.
+
+Règle de split ajustée : un chiffre vu dans **un seul** groupe va en TRAIN (il ne peut pas être à la
+fois appris et testé). Le split existant n'a pas bougé ; le TEST gelé est intact.
+
+| Mesure (spécialisé) | Avant | Après |
+| --- | ---: | ---: |
+| Vérités humaines | 122 | 128 |
+| Accepted accuracy GLOBAL | 1,000 | **1,000** |
+| Coverage GLOBAL | 0,984 | 0,977 |
+| Coverage VALIDATION | 1,000 | 0,955 |
+| Coverage TEST | 0,923 | 0,923 |
+| 1 → 7 / 7 → 1 | 0 / 0 | 0 / 0 |
+
+- **8** : 1 groupe, en TRAIN, template `ap-8` créé, relu 8 → 8 → **OBSERVED_INSUFFICIENT** (appris,
+  pas encore testé : il faut un 8 d'un autre combat).
+- **PA = 1 seul** : 1 groupe (TRAIN), lu correctement.
+- Effet mesuré du template 8 : un PA 3 de VALIDATION (ancien PC, 72 × 63) donne 3 à 0,936 contre 8 à
+  0,906, marge 0,03 < 0,055 → **UNKNOWN** au lieu d'une lecture juste. Prudence, pas d'erreur ; aucun
+  seuil modifié (aucune erreur démontrée). Remède : davantage de 3 et de 8 confirmés.
+- Transitions réelles rejouées : 106 OK, 14 UNKNOWN, **0 valeur fausse ou périmée** (nouvelles : 5→8, 8→1).
+- 1 / 7 reste **VALIDATED** ; statut du banc : PASS.
+
+Le banc a régénéré `%LOCALAPPDATA%\PythonBot\data\hud_templates` (8 inclus) : arrêter puis relancer
+l'observation dans l'exe pour recharger les templates.
+
+## 15. Condition pour 3B-5 (§30)
 
 Vérités réellement confirmées ✔ ; aucune erreur silencieuse connue ✔ ; 1/7 testé avec plusieurs
 groupes indépendants ✔ ; UNKNOWN sur classe inconnue ✔ (PA 12, PA 0) ; benchmark reproductible ✔.
-Limites documentées : 8, PA = 1 seul et PM = 7 non observés ; 4 et 7 en TRAIN reposent sur un seul
-crop chacun ; nouvelles captures uniquement en combat.
+Limites documentées : 8 appris mais non testé, PA = 1 seul observé une fois, PM = 7 non observé ;
+4, 7 et 8 en TRAIN reposent sur un seul crop chacun ; nouvelles captures uniquement en combat.
 
 Arrêt après ce rapport. LOT 3B-5 non commencé.

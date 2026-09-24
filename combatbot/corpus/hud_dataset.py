@@ -83,8 +83,8 @@ def _assign_splits(group_digits: dict[str, set[str]],
     """Répartit des groupes indépendants en 70/15/15, sans jamais déplacer un groupe fixé.
 
     Les groupes sont classés par hash. Avant le remplissage, les chiffres rares sont
-    stratifiés : dès deux groupes indépendants, un chiffre doit exister en TRAIN (templates)
-    puis en TEST ; dès trois groupes, aussi en VALIDATION. Les vérités ne servent qu'à cette
+    stratifiés : un chiffre observé doit exister en TRAIN (templates) ; dès deux groupes
+    indépendants, aussi en TEST ; dès trois groupes, aussi en VALIDATION. Les vérités ne servent qu'à cette
     répartition, jamais à régler un seuil.
     """
     fixed = dict(fixed or {})
@@ -104,7 +104,9 @@ def _assign_splits(group_digits: dict[str, set[str]],
             holders[digit].append(group_id)
     for digit in sorted(holders, key=lambda value: (len(holders[value]), value)):
         groups = holders[digit]
-        wanted = [split for split, minimum in (("train", 2), ("test", 2), ("validation", 3))
+        # Un chiffre vu dans un seul groupe va d'abord en TRAIN : il ne peut pas être à la fois
+        # appris et testé ; on l'apprend, il sera testé quand un groupe indépendant arrivera.
+        wanted = [split for split, minimum in (("train", 1), ("test", 2), ("validation", 3))
                   if len(groups) >= minimum]
         for split in wanted:
             if any(result.get(group_id) == split for group_id in groups):

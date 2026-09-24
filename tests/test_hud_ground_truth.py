@@ -172,6 +172,13 @@ def test_frozen_test_member_survives_group_merge_after_correction(repository: Co
     assert set(rebuilt["groups"].values()) == {"test"} and rebuilt["missing_frozen_test"] == []
 
 
+def test_digit_seen_in_single_group_is_learned_in_train() -> None:
+    # Cas réel : un premier 8 observé ; il doit alimenter un template plutôt que TEST.
+    groups = {"first-eight": {"8"}, **{f"g{i}": {"5"} for i in range(12)}}
+    for fixed in ({}, {"g0": "test", "g1": "test"}):
+        assert _assign_splits(groups, fixed)["first-eight"] == "train"
+
+
 def test_frozen_test_group_never_moves() -> None:
     groups = {f"g{index}": {"5"} for index in range(8)}
     result = _assign_splits(groups, {"g0": "test", "g1": "test"})
