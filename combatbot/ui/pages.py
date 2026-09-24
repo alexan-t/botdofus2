@@ -272,6 +272,23 @@ class CombatPage(QWidget):
             self.overlay_boxes[key] = box
         overlay_row.addStretch()
         real_layout.addLayout(overlay_row)
+        entity_row = QHBoxLayout()
+        entity_row.addWidget(QLabel("Entités :"))
+        for key, caption, checked in (
+            ("entity_rois", "ROIs entités", False), ("player_evidence", "preuves joueur", False),
+            ("enemy_evidence", "preuves ennemis", False), ("track_ids", "IDs de piste", True),
+            ("occluded_tracks", "pistes occultées", True), ("background_delta", "fond (FREE)", False),
+            ("occupancy_states", "états d'occupation", False),
+        ):
+            box = QCheckBox(caption)
+            box.setChecked(checked)
+            box.toggled.connect(self._overlay_changed)
+            entity_row.addWidget(box)
+            self.overlay_boxes[key] = box
+        self.sequence_capture = QCheckBox("Enregistrer la séquence dans le corpus (entités, lecture seule)")
+        entity_row.addWidget(self.sequence_capture)
+        entity_row.addStretch()
+        real_layout.addLayout(entity_row)
         self.hover_info = QLabel("Survolez l'aperçu pour inspecter une cellule projetée.")
         self.hover_info.setWordWrap(True)
         real_layout.addWidget(self.hover_info)
@@ -291,7 +308,7 @@ class CombatPage(QWidget):
         real_form = QFormLayout()
         for key, caption in (
             ("combat", "Combat"), ("turn", "Mon tour"), ("ap", "PA"), ("mp", "PM"),
-            ("player", "Ma cellule"), ("enemies", "Ennemis détectés"),
+            ("player", "Ma cellule"), ("enemies", "Ennemis détectés"), ("occupancy", "Occupation"),
             ("grid", "Cellules de grille"), ("grid_source", "Source de grille"),
             ("grid_visible", "Grille"), ("alignment", "Alignement"), ("declared_map", "Map déclarée"),
             ("map_consistency", "Cohérence map"), ("runtime_adjustment", "Correction runtime"),
@@ -429,13 +446,39 @@ class CombatPage(QWidget):
         self.real_values["mp"].setText(hud_text(observation.mp, observation.confidence_mp,
                                                 observation.mp_read))
         player = observation.player_cell
-        self.real_values["player"].setText(
-            f"({player.x}, {player.y}) ({observation.player_confidence:.0%})" if player else "Inconnue"
-        )
-        self.real_values["enemies"].setText("\n".join(
-            f"{enemy.id}: ({enemy.cell.x}, {enemy.cell.y}) — {enemy.confidence:.0%}"
-            for enemy in observation.enemies
-        ) or "Aucun détecté")
+        if observation.entities is not None:
+            # LOT 3B-5 : identités par DofusCellId ; une piste occultée n'est jamais « observée ».
+            track = observation.player_track or {}
+            if observation.player_cell_id is not None:
+                player_text = f"Cell {observation.player_cell_id} — confirmé — {observation.player_confidence:.2f}"
+            elif track.get("state") == "OCCLUDED":
+                player_text = f"Occulté (dernière cellule {track.get('last_known_cell_id')})"
+            else:
+                player_text = "Inconnu (désignez votre personnage si aucun profil n'existe)"
+            self.real_values["player"].setText(player_text)
+            lines = []
+            for enemy in observation.enemies:
+                label = "E" + enemy.id.rsplit("_", 1)[-1]
+                lines.append(f"{label} : Cell {enemy.cell_id} — observé — {enemy.confidence:.2f}"
+                             if enemy.observed_this_frame else
+                             f"{label} : occulté (dernière cellule {enemy.cell_id})")
+            unknown = observation.unknown_entities
+            if unknown:
+                lines.append(f"Équipe inconnue : {', '.join(str(item.get('cell_id')) for item in unknown)}")
+            self.real_values["enemies"].setText("\n".join(lines) or "Aucun détecté")
+            summary = observation.occupancy_summary or {}
+            self.real_values["occupancy"].setText(
+                f"occupées {summary.get('OCCUPIED', 0)} · libres prouvées {summary.get('FREE', 0)} · "
+                f"inconnues {summary.get('UNKNOWN', 0) + summary.get('NOT_ANALYSED', 0)}")
+        else:
+            self.real_values["player"].setText(
+                f"({player.x}, {player.y}) ({observation.player_confidence:.0%})" if player else "Inconnue"
+            )
+            self.real_values["enemies"].setText("\n".join(
+                f"{enemy.id}: ({enemy.cell.x}, {enemy.cell.y}) — {enemy.confidence:.0%}"
+                for enemy in observation.enemies
+            ) or "Aucun détecté")
+            self.real_values["occupancy"].setText("Ancien pipeline (grille historique)")
         self.real_values["grid"].setText(
             f"{len(observation.grid.cells)} ({observation.grid.confidence:.0%})"
         )

@@ -37,7 +37,9 @@ class CombatObservationTracker:
         self._combat = self._stable(votes, self._combat)
         turn_values = [item.player_turn for item in self.history if item.combat_detected]
         self._turn = self._stable(turn_values, self._turn)
-        enemies = self._track_enemies(raw.enemies)
+        # LOT 3B-5 : avec la grille GameData, EntityTracker a déjà attribué des identités globales ;
+        # l'association gloutonne historique ne reste active que pour l'ancien pipeline.
+        enemies = raw.enemies if raw.entities is not None else self._track_enemies(raw.enemies)
         result = raw.result
         if self._combat is True:
             self._had_combat = True

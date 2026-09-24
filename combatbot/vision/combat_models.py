@@ -141,12 +141,21 @@ class CombatGridObservation:
 
 @dataclass(frozen=True)
 class EnemyObservation:
-    """Ennemi dont le centre est exprimé dans le référentiel combat."""
+    """Ennemi dont le centre est exprimé dans le référentiel combat.
+
+    LOT 3B-5 (champs additifs) : une piste OCCLUDED garde sa dernière cellule connue mais porte
+    ``observed_this_frame=False`` ; elle ne prouve pas que la cellule est occupée.
+    """
     id: str
     cell: Cell
     center: tuple[int, int]
     confidence: float
     cell_id: int | None = None
+    track_state: str = "OBSERVED"
+    observed_this_frame: bool = True
+    marker_confidence: float | None = None
+    visual_signature: dict[str, object] | None = None
+    evidence: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -173,10 +182,21 @@ class CombatObservation:
     # Preuves sérialisées du lecteur HUD 3B-4 ; absentes pour les anciennes observations.
     ap_read: dict[str, object] | None = None
     mp_read: dict[str, object] | None = None
+    # LOT 3B-5 : entités suivies (TrackedEntity sérialisées), preuves brutes du détecteur et
+    # synthèse d'occupation. None = ancien pipeline (grille historique) ou ancienne observation.
+    entities: tuple[dict[str, object], ...] | None = None
+    player_track: dict[str, object] | None = None
+    entity_evidence: tuple[dict[str, object], ...] | None = None
+    occupancy_summary: dict[str, int] | None = None
 
     @property
     def enemy_cells(self) -> tuple[Cell, ...]:
-        return tuple(enemy.cell for enemy in self.enemies)
+        """Cellules d'ennemis observés sur cette frame ; une piste occultée n'occupe rien."""
+        return tuple(enemy.cell for enemy in self.enemies if enemy.observed_this_frame)
+
+    @property
+    def unknown_entities(self) -> tuple[dict[str, object], ...]:
+        return tuple(item for item in (self.entities or ()) if item.get("kind") == "UNKNOWN")
 
     @property
     def safe_for_decision(self) -> bool:
@@ -192,6 +212,9 @@ class CombatObservation:
             and bool(self.grid.cells)
             and all(cell.state is not CellVisualState.UNKNOWN for cell in self.grid.cells)
             and self.observation_confidence >= 0.7
+            # LOT 3B-5 : une entité d'équipe inconnue ou un ennemi occulté bloque toute décision.
+            and not self.unknown_entities
+            and all(enemy.observed_this_frame for enemy in self.enemies)
         )
 
 

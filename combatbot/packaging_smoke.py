@@ -86,6 +86,59 @@ def _hud_reader_check() -> dict[str, object]:
     }
 
 
+def _entity_check() -> dict[str, object]:
+    """LOT 3B-5 : détecteur par cellule + suivi global sur une fixture synthétique, sans action."""
+    from combatbot.gamedata.models import GridCoordinate
+    from combatbot.gamedata.topology import CELL_COUNT, cell_to_grid
+    from combatbot.models import Cell
+    from combatbot.vision.combat_models import GRID_SOURCE_GAMEDATA, CombatGridObservation, ObservedCell
+    from combatbot.vision.entity_detector import CellEntityDetector, DetectionContext
+    from combatbot.vision.entity_models import MarkerColorClass, TeamMarkerProfile, VisualProfiles
+    from combatbot.vision.entity_profiles import player_profile_from_cell
+    from combatbot.vision.entity_tracker import EntityTracker
+
+    origin = cell_to_grid(287)
+    ids = [c for c in range(CELL_COUNT)
+           if abs(cell_to_grid(c).x - origin.x) + abs(cell_to_grid(c).y - origin.y) <= 3]
+    half_w, half_h = 32, 16
+    coords = {c: cell_to_grid(c) for c in ids}
+    min_x = min(k.x - k.y for k in coords.values())
+    min_y = min(k.x + k.y for k in coords.values())
+    cells = []
+    for cell_id, k in coords.items():
+        cx, cy = (k.x - k.y - min_x) * half_w + 64, (k.x + k.y - min_y) * half_h + 48
+        cells.append(ObservedCell(Cell(k.x, k.y), (cx, cy),
+                                  ((cx, cy - half_h), (cx + half_w, cy), (cx, cy + half_h), (cx - half_w, cy)),
+                                  cell_id=cell_id, grid_coordinate=GridCoordinate(k.x, k.y),
+                                  walkable_static=True, non_walkable_during_fight_static=False))
+    grid = CombatGridObservation(tuple(cells), 64, 32, 0.0, 1.0, GRID_SOURCE_GAMEDATA)
+    width = max(c.center[0] for c in cells) + 96
+    height = max(c.center[1] for c in cells) + 64
+    image = np.full((height, width, 3), (120, 150, 125), np.uint8)
+    player_cell, enemy_cell = ids[0], ids[-1]
+    for cell_id, color in ((player_cell, (0, 0, 235)), (enemy_cell, (235, 40, 20))):
+        cell = grid.cell_by_id(cell_id)
+        cv2.ellipse(image, (cell.center[0], cell.center[1] - 10), (7, 14), 0, 0, 360, (40, 60, 90), -1)
+        cv2.circle(image, (cell.center[0] - 3, cell.center[1] - 12), 2, (230, 230, 230), -1)
+        cv2.ellipse(image, cell.center, (int(half_w * 0.52), int(half_h * 0.52)), 0, 0, 360, color, 3)
+    profile = player_profile_from_cell(image, grid, player_cell, layout_signature="smoke-layout")
+    teams = TeamMarkerProfile(None, MarkerColorClass(120.0, 12.0, 0.0, 0.0, 1), layout_signature="smoke-layout")
+    result = CellEntityDetector().detect(image, grid, VisualProfiles(profile, teams),
+                                         DetectionContext(grid_visible=True, grid_aligned=True,
+                                                          layout_signature="smoke-layout"))
+    tracker = EntityTracker()
+    tracked = tracker.update(result, 0.0)
+    hidden = tracker.update([], 0.4)
+    recovered = tracker.update(result, 0.8)
+    return {"detector_imported": True, "tracker_initialized": True,
+            "player_detected": result.player is not None and result.player.cell_id == player_cell,
+            "enemy_detected": [item.cell_id for item in result.enemies] == [enemy_cell],
+            "track_ids": [item.track_id for item in tracked],
+            "occlusion_distinct": all(not item.observed_this_frame and item.cell_id is None for item in hidden),
+            "recovered_same_ids": [item.track_id for item in tracked] == [item.track_id for item in recovered],
+            "action_executed": False}
+
+
 def run_packaging_smoke(app, storage, window) -> int:
     report_path = Path(os.environ.get(
         "PYTHONBOT_SMOKE_REPORT", str(app_data_root() / "logs" / "packaging-smoke.json")
@@ -107,6 +160,15 @@ def run_packaging_smoke(app, storage, window) -> int:
             app.processEvents()
         checks["navigation_pages"] = window.stack.count()
         checks["corpus_entries"] = len(window.corpus.repository.list_entries())
+        from combatbot.ui.entity_annotation_dialog import EntityAnnotationDialog
+        annotation = EntityAnnotationDialog(window.corpus.repository, window)
+        annotation.showMaximized()
+        app.processEvents()
+        checks["entity_annotation"] = {"opened": annotation.isVisible(),
+                                       "projected_frames": len(annotation.entries),
+                                       "image_loaded": annotation.image is not None,
+                                       "human_labels": len(annotation.labels)}
+        annotation.close()
         checks["sqlite_profiles"] = len(storage.list_profiles())
         checks["sqlite_statistics"] = storage.statistics()
 
@@ -117,6 +179,7 @@ def run_packaging_smoke(app, storage, window) -> int:
         checks["gamedata_grid"] = _gamedata_grid_check()
         checks["grid_validation"] = _grid_validation_check()
         checks["hud_reader"] = _hud_reader_check()
+        checks["entities"] = _entity_check()
 
         ocr_image = np.full((100, 420, 3), 255, dtype=np.uint8)
         cv2.putText(ocr_image, "3 PA  Portee 1-4", (8, 55), cv2.FONT_HERSHEY_SIMPLEX, 1,
@@ -147,6 +210,11 @@ def run_packaging_smoke(app, storage, window) -> int:
             checks["hud_reader"]["fixture_value"] == 7,
             checks["hud_reader"]["fallback_available"],
             not checks["hud_reader"]["action_executed"],
+            checks["entities"]["player_detected"], checks["entities"]["enemy_detected"],
+            checks["entities"]["track_ids"] == ["player", "enemy_1"],
+            checks["entities"]["occlusion_distinct"], checks["entities"]["recovered_same_ids"],
+            checks["entity_annotation"]["opened"],
+            not checks["entities"]["action_executed"],
         ))
     except Exception as exc:
         results["success"] = False

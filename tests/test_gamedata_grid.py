@@ -410,13 +410,27 @@ def _calibration():
 
 
 def test_observer_uses_projected_grid_and_records_corpus_fields(tmp_path):
+    from entity_fixtures import draw_ring, draw_sprite
+    from combatbot.vision.entity_models import MarkerColorClass, TeamMarkerProfile, VisualProfiles
     topology = make_topology(walk_ratio=1.0)
     crop = render(topology)
-    enemy = GridProjector(TRANSFORM).project(topology).cell(287).center.rounded()
-    cv2.circle(crop, enemy, 7, (0, 0, 255), -1)
+    projected = GridProjector(TRANSFORM).project(topology).cell(287)
+
+    class _Cell:  # polygone projeté de la cellule 287 dans le crop combat
+        polygon = tuple((round(p.x), round(p.y)) for p in projected.polygon)
+        center = projected.center.rounded()
+
+    # LOT 3B-5 : un ennemi est un anneau au sol + sprite ; l'équipe vient d'un profil humain.
+    draw_sprite(crop, _Cell)
+    draw_ring(crop, _Cell, (0, 0, 255), thickness=2)
+    teams = TeamMarkerProfile(None, MarkerColorClass(0.0, 10.0, 0.0, 0.0, 1),
+                              layout_signature="observer-test")
     frame = _frame(crop)
-    observer = RealCombatObserver(7, _calibration(), frame_provider=lambda: frame,
-                                  number_reader=lambda image: (None, 0.0), grid_resolver=resolver(topology))
+    from dataclasses import replace
+    calibration = replace(_calibration(), layout_signature="observer-test")
+    observer = RealCombatObserver(7, calibration, frame_provider=lambda: frame,
+                                  number_reader=lambda image: (None, 0.0), grid_resolver=resolver(topology),
+                                  entity_profiles=VisualProfiles(None, teams))
     packet = observer.observe()
     grid = packet.observation.grid
     assert grid.grid_source == GRID_SOURCE_GAMEDATA and len(grid.cells) == 560

@@ -20,6 +20,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="LOT 3B-4 : inventaire et mesure du lecteur spécialisé PA/PM")
     parser.add_argument("--hud-rapidocr", action="store_true",
                         help="Inclut le fallback RapidOCR dans le benchmark HUD")
+    parser.add_argument("--entity-splits", nargs="+", choices=("train", "validation", "test"))
+    parser.add_argument("--entity-layout", help="Digest de disposition à mesurer")
+    parser.add_argument("--entities", action="store_true",
+                        help="LOT 3B-5 : entités par cellule et suivi global (vérité humaine)")
     parser.add_argument("--hud-split", action="store_true",
                         help="LOT 3B-4R2 : reconstruit explicitement le split HUD (TEST gelé) et affiche la distribution")
     parser.add_argument("--client", type=Path, help="Dossier client GameData (défaut : réglage de l'application)")
@@ -27,6 +31,22 @@ def main(argv: list[str] | None = None) -> int:
     repository = CorpusRepository(args.corpus_root)
     if args.grid_validation:
         return _grid_validation(repository, args)
+    if args.entities:
+        from combatbot.corpus.entity_benchmark import run_entity_benchmark, write_entity_report
+        report = run_entity_benchmark(repository, splits=tuple(args.entity_splits) if args.entity_splits else None,
+                                      layout=args.entity_layout)
+        output = args.output_dir or (app_data_root() / "data" / "benchmarks")
+        json_path, markdown_path = write_entity_report(report, output)
+        print(f"Entités : {report['frames']} frame(s) annotée(s), splits {report['splits']}, "
+              f"groupes {report['groups']} — statut {report['status']}")
+        for scope in ("test", "validation", "all"):
+            if scope in report["after"]:
+                print(f"  {scope.upper()} AVANT {report['before'][scope]['enemies']}")
+                print(f"  {scope.upper()} APRÈS {report['after'][scope]['enemies']}")
+                print(f"  {scope.upper()} joueur APRÈS {report['after'][scope]['player']}")
+        print(f"JSON : {json_path}")
+        print(f"Markdown : {markdown_path}")
+        return 0
     if args.hud_split:
         from combatbot.corpus.hud_dataset import build_split_registry, distribution_text, inventory
         registry = build_split_registry(repository)

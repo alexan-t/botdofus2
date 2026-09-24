@@ -16,9 +16,14 @@ from combatbot.runtime import app_data_root
 from combatbot import __version__
 from combatbot.vision.capture import capture_client
 from combatbot.vision.combat_grid import classify_cell_occupancy, infer_combat_grid
+from combatbot.vision.background_model import CellBackgroundModel
 from combatbot.vision.combat_models import (
-    GRID_SOURCE_GAMEDATA, CombatObservation, EnemyObservation, GridCalibration, ObservationPacket,
+    GRID_SOURCE_GAMEDATA, CellVisualState, CombatObservation, EnemyObservation, GridCalibration,
+    ObservationPacket,
 )
+from combatbot.vision.entity_detector import CellEntityDetector, DetectionContext
+from combatbot.vision.entity_models import EntityKind, TrackState, VisualProfiles
+from combatbot.vision.entity_tracker import EntityTracker
 from combatbot.vision.combat_ocr import NumberReader, read_small_number
 from combatbot.vision.combat_tracker import CombatObservationTracker
 from combatbot.vision.coordinates import CombatPoint, LayoutTransform
@@ -35,6 +40,26 @@ from combatbot.vision.hud_reader import (
 
 
 FrameProvider = Callable[[], CapturedFrame]
+
+
+def _load_profiles(calibration: Calibration) -> VisualProfiles:
+    """Profils persistés (joueur par profil de calibration, équipes issues d'annotations)."""
+    from combatbot.vision.entity_profiles import (
+        load_player_profile, load_team_profile, load_train_player_profile,
+    )
+    root = app_data_root() / "data"
+    try:
+        # Profil multi-exemples TRAIN du layout courant d'abord ; sinon désignation unique.
+        player = load_train_player_profile(root, calibration.layout_signature)
+        if player is None and calibration.profile_id is not None:
+            player = load_player_profile(root, calibration.profile_id)
+    except (OSError, ValueError, KeyError):
+        player = None
+    try:
+        teams = load_team_profile(root, calibration.layout_signature)
+    except (OSError, ValueError, KeyError):
+        teams = None
+    return VisualProfiles(player, teams)
 
 
 def _zone(frame: CapturedFrame, calibration: Calibration, transform: LayoutTransform,
@@ -68,7 +93,11 @@ class RealCombatObserver:
                  tracker: CombatObservationTracker | None = None,
                  capture_context: dict[str, object] | None = None,
                  grid_resolver: GameDataGridResolver | None = None,
-                 overlay_options: "OverlayOptions | None" = None) -> None:
+                 overlay_options: "OverlayOptions | None" = None,
+                 entity_detector: CellEntityDetector | None = None,
+                 entity_tracker: EntityTracker | None = None,
+                 entity_profiles: VisualProfiles | None = None,
+                 background_model: CellBackgroundModel | None = None) -> None:
         self.hwnd = hwnd
         self.calibration = calibration
         self.frame_provider = frame_provider or (lambda: capture_client(hwnd, activate=False))
@@ -101,6 +130,12 @@ class RealCombatObserver:
         self.drift: DriftTracker | None = None
         self._validation_debug: dict[str, object] = {}
         self._last_visibility = None
+        # LOT 3B-5 : entités par cellule projetée et suivi global (grille GameData uniquement).
+        self.entity_detector = entity_detector or CellEntityDetector()
+        self.entity_tracker = entity_tracker or EntityTracker()
+        self.background_model = background_model or CellBackgroundModel()
+        self.entity_profiles = entity_profiles if entity_profiles is not None else _load_profiles(calibration)
+        self._entity_map: int | None = None
         self.capture_context = dict(capture_context or {})
         self.session_id = str(self.capture_context.get("session_id") or f"session_{uuid4().hex[:12]}")
         self._frame_index = 0
@@ -127,16 +162,24 @@ class RealCombatObserver:
             grid = self._validate_grid(resolution, combat_image)
         else:
             grid = infer_combat_grid(combat_image, self.grid_calibration)
-        player_reference = self.grid_calibration.player_reference_hsv if self.grid_calibration else None
-        grid, player_cell, player_confidence, raw_enemies = classify_cell_occupancy(
-            combat_image, grid, player_reference,
-        )
-        # With GAMEDATA_PROJECTED, occupancy is attached to the canonical DofusCellId.
-        cell_ids = {cell.logical: cell.cell_id for cell in grid.cells} if grid.grid_source == GRID_SOURCE_GAMEDATA else {}
-        enemies = tuple(EnemyObservation("", cell, center, confidence, cell_ids.get(cell))
-                        for cell, center, confidence in raw_enemies)
-
         now = time.monotonic()
+        entity_fields: dict[str, object] = {}
+        entity_timings: dict[str, float] = {}
+        if grid.grid_source == GRID_SOURCE_GAMEDATA and self.entity_detector is not None:
+            grid, player_cell, player_cell_id, player_confidence, enemies, entity_fields, entity_timings = \
+                self._observe_entities(combat_image, grid, now)
+        else:
+            # Ancien pipeline (grille historique) conservé tant que le remplacement n'est pas mesuré.
+            player_reference = self.grid_calibration.player_reference_hsv if self.grid_calibration else None
+            grid, player_cell, player_confidence, raw_enemies = classify_cell_occupancy(
+                combat_image, grid, player_reference,
+            )
+            cell_ids = {cell.logical: cell.cell_id for cell in grid.cells} \
+                if grid.grid_source == GRID_SOURCE_GAMEDATA else {}
+            enemies = tuple(EnemyObservation("", cell, center, confidence, cell_ids.get(cell))
+                            for cell, center, confidence in raw_enemies)
+            player_cell_id = cell_ids.get(player_cell) if player_cell is not None else None
+
         ap_image = _zone(frame, self.calibration, transform, "ap")
         mp_image = _zone(frame, self.calibration, transform, "mp")
         if self.hud_reader is not None:
@@ -199,9 +242,10 @@ class RealCombatObserver:
             player_cell, player_confidence, enemies, grid, ap, mp,
             confidence_ap, confidence_mp, observation_confidence,
             signals=signals, timestamp=time.time(),
-            player_cell_id=cell_ids.get(player_cell) if player_cell is not None else None,
+            player_cell_id=player_cell_id,
             combat_state=state.state.value,
             ap_read=ap_read.to_dict(), mp_read=mp_read.to_dict(),
+            **entity_fields,  # type: ignore[arg-type]
         )
         observation = self.tracker.update(raw)
         annotated = draw_diagnostic_overlay(combat_image, observation, self.overlay_options,
@@ -255,6 +299,8 @@ class RealCombatObserver:
             "phase": phase,
             "analysis_ms": elapsed_ms,
             "global_confidence": observation.observation_confidence,
+            "entities": {"pipeline": "CELL_ENTITY_DETECTOR" if entity_timings else "LEGACY_CLASSIFY",
+                         **entity_timings},
             "hud_reader": {
                 "ap": observation.ap_read, "mp": observation.mp_read,
                 "specialized_ap_ms": ap_read.timings_ms.get("specialized"),
@@ -270,6 +316,87 @@ class RealCombatObserver:
         hud_crops = {name: value for name, value in (("ap", ap_image), ("mp", mp_image))
                      if value is not None and value.size > 0}
         return ObservationPacket(observation, combat_image, annotated, elapsed_ms, metadata, hud_crops)
+
+    def _observe_entities(self, combat_image: np.ndarray, grid, now: float):
+        """Détecteur par cellule + suivi global ; l'identité est toujours le DofusCellId."""
+        from dataclasses import replace as _replace
+        if grid.map_id_declared != self._entity_map:
+            # Nouvelle map : anciennes pistes et ancien fond n'ont plus de sens.
+            self._entity_map = grid.map_id_declared
+            self.entity_tracker = EntityTracker(self.entity_tracker.config)
+            self.background_model.reset()
+        context = DetectionContext(
+            grid_visible=grid.grid_visibility_state == "VISIBLE" if grid.grid_visibility_state else None,
+            grid_aligned=(grid.alignment or {}).get("status") == "ALIGNED" if grid.alignment else None,
+            map_id=grid.map_id_declared, layout_signature=self.calibration.layout_signature, timestamp=now)
+        detection = self.entity_detector.detect(combat_image, grid, self.entity_profiles, context,
+                                                self.background_model)
+        started = time.perf_counter()
+        tracked = self.entity_tracker.update(detection, now)
+        tracker_ms = (time.perf_counter() - started) * 1000
+        by_id = {cell.cell_id: cell for cell in grid.cells if cell.cell_id is not None}
+        confidence_by_cell = {item.cell_id: item.confidence for item in detection.entities}
+        cells = tuple(
+            _replace(cell, state=CellVisualState(detection.occupancy.get(cell.cell_id, "UNKNOWN")),
+                     confidence=confidence_by_cell.get(cell.cell_id, 0.0))
+            for cell in grid.cells)
+        grid = _replace(grid, cells=cells)
+        player_cell = player_cell_id = None
+        player_confidence = 0.0
+        player_track = next((item for item in tracked if item.kind is EntityKind.PLAYER), None)
+        if player_track is not None and player_track.observed_this_frame and player_track.cell_id in by_id:
+            player_cell_id = player_track.cell_id
+            player_cell = by_id[player_cell_id].logical
+            player_confidence = player_track.confidence
+        enemies = []
+        for item in tracked:
+            if item.kind is not EntityKind.ENEMY or item.state is TrackState.LOST:
+                continue
+            cell = by_id.get(item.cell_id if item.observed_this_frame else item.last_known_cell_id)
+            if cell is None:
+                continue
+            evidence = item.evidence
+            enemies.append(EnemyObservation(
+                item.track_id, cell.logical,
+                evidence.center if evidence and evidence.center else cell.center,
+                item.confidence, cell.cell_id, item.state.value, item.observed_this_frame,
+                evidence.marker_score if evidence else None,
+                {"marker_hue": evidence.marker_hue} if evidence else None,
+                evidence.to_dict() if evidence else None))
+        unknown = tuple({"track_id": None, "kind": "UNKNOWN", "cell_id": item.cell_id,
+                         "confidence": item.confidence, "state": "OBSERVED", "observed_this_frame": True}
+                        for item in detection.entities if item.kind is EntityKind.UNKNOWN)
+        summary = detection.occupancy_summary()
+        summary["NOT_ANALYSED"] = len(grid.cells) - len(detection.occupancy)
+        fields = {
+            "entities": tuple(item.to_dict() for item in tracked if item.state is not TrackState.LOST) + unknown,
+            "player_track": player_track.to_dict() if player_track else None,
+            "entity_evidence": tuple(item.to_dict() for item in detection.entities),
+            "occupancy_summary": summary,
+        }
+        timings = {"detector_ms": detection.timings_ms.get("total", 0.0), "tracker_ms": tracker_ms,
+                   "roi_maps_ms": detection.timings_ms.get("roi_maps", 0.0),
+                   "player_profile": detection.diagnostics.get("player_profile"),
+                   "team_profile": detection.diagnostics.get("team_profile")}
+        return grid, player_cell, player_cell_id, player_confidence, tuple(enemies), fields, timings
+
+    def designate_player_cell(self, pixel: CombatPoint | tuple[int, int], packet: ObservationPacket):
+        """« Cette cellule est mon personnage » : crée un PlayerVisualProfile confirmé.
+
+        La cellule doit porter un anneau mesurable ; aucun clic n'est envoyé au client DOFUS.
+        """
+        from combatbot.vision.entity_profiles import ProfileError, player_profile_from_cell
+        grid = packet.observation.grid
+        if grid.grid_source != GRID_SOURCE_GAMEDATA:
+            raise ProfileError("Grille GameData projetée requise pour désigner une cellule")
+        cell_id = grid.pixel_to_cell_id(pixel)
+        if cell_id is None:
+            raise ProfileError("Aucune cellule projetée à cet endroit")
+        profile = player_profile_from_cell(np.asarray(packet.original), grid, cell_id,
+                                           layout_signature=self.calibration.layout_signature,
+                                           detector=self.entity_detector)
+        self.entity_profiles = VisualProfiles(profile, self.entity_profiles.teams if self.entity_profiles else None)
+        return profile
 
     def _validate_grid(self, resolution, combat_image: np.ndarray):
         """Visibility → alignment → temporal drift → map consistency (GAMEDATA_PROJECTED only)."""
@@ -350,6 +477,14 @@ class OverlayOptions:
     candidates: bool = False
     anchors: bool = False
     alignment_debug: bool = False   # base vs effective, inliers/outliers, régions, correction
+    # LOT 3B-5 : diagnostic des entités (aucune injection dans DOFUS).
+    entity_rois: bool = False
+    player_evidence: bool = False
+    enemy_evidence: bool = False
+    track_ids: bool = True
+    occluded_tracks: bool = True
+    background_delta: bool = False
+    occupancy_states: bool = False
     label_every: int = 7
 
 
@@ -414,6 +549,9 @@ def draw_diagnostic_overlay(image: np.ndarray, observation: CombatObservation,
             cv2.drawMarker(output, (round(point[0]), round(point[1])), (255, 0, 255), cv2.MARKER_CROSS, 12, 2)
             cv2.putText(output, str(cell_id), (round(point[0]) + 6, round(point[1]) - 6),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 255), 1, cv2.LINE_AA)
+    if observation.entities is not None:
+        _draw_entities(output, observation, options)
+        return output
     if observation.player_cell is not None:
         item = grid.cell_at(observation.player_cell)
         if item:
@@ -425,6 +563,65 @@ def draw_diagnostic_overlay(image: np.ndarray, observation: CombatObservation,
         cv2.putText(output, enemy.id, (enemy.center[0] + 7, enemy.center[1] + 14),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.38, (60, 70, 245), 1, cv2.LINE_AA)
     return output
+
+
+def _short_track(track_id: str | None) -> str:
+    if not track_id:
+        return "?"
+    return "P" if track_id == "player" else "E" + track_id.rsplit("_", 1)[-1]
+
+
+def _draw_entities(output: np.ndarray, observation: CombatObservation, options: "OverlayOptions") -> None:
+    """P @ 287 0.94 · E1 @ 301 0.88 · E2 OCCLUDED last=315 ; UNKNOWN reste distinct."""
+    from combatbot.vision.entity_geometry import RING_BAND, cell_basis
+    grid = observation.grid
+    by_id = {cell.cell_id: cell for cell in grid.cells if cell.cell_id is not None}
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    # FREE n'existe que si le modèle de fond l'a prouvé ; « Background delta » montre ces cellules.
+    shown = ({"OCCUPIED": (40, 160, 245)} if options.occupancy_states else {}) | (
+        {"FREE": (70, 190, 70)} if options.occupancy_states or options.background_delta else {})
+    for state, color in shown.items():
+        polygons = [np.asarray(c.polygon, np.int32) for c in grid.cells if c.state.value == state]
+        _blend_cells(output, polygons, color, 0.30)
+    if options.entity_rois:
+        for evidence in observation.entity_evidence or ():
+            cell = by_id.get(evidence.get("cell_id"))
+            if cell is None:
+                continue
+            middle, u, v = cell_basis(cell.polygon, cell.center)
+            for radius in RING_BAND:
+                axes = (max(1, int(np.hypot(*u) * radius)), max(1, int(np.hypot(*v) * radius)))
+                cv2.ellipse(output, (int(middle[0]), int(middle[1])), axes, 0, 0, 180, (255, 255, 0), 1, cv2.LINE_AA)
+    for entity in observation.entities or ():
+        kind, state = entity.get("kind"), entity.get("state")
+        observed = bool(entity.get("observed_this_frame"))
+        cell = by_id.get(entity.get("cell_id") if observed else entity.get("last_known_cell_id"))
+        if cell is None:
+            continue
+        color = {"PLAYER": (80, 235, 120), "ENEMY": (60, 70, 245)}.get(str(kind), (200, 200, 200))
+        if not observed:
+            if not options.occluded_tracks:
+                continue
+            cv2.circle(output, cell.center, 11, (150, 150, 150), 1, cv2.LINE_AA)
+            cv2.putText(output, f"{_short_track(entity.get('track_id'))} {state} last={cell.cell_id}",
+                        (cell.center[0] + 10, cell.center[1] + 16), font, 0.38, (170, 170, 170), 1, cv2.LINE_AA)
+            continue
+        cv2.circle(output, cell.center, 10, color, 3 if kind != "UNKNOWN" else 1, cv2.LINE_AA)
+        if options.track_ids:
+            label = _short_track(entity.get("track_id")) if kind != "UNKNOWN" else "?"
+            cv2.putText(output, f"{label} @ {cell.cell_id} {float(entity.get('confidence', 0.0)):.2f}",
+                        (cell.center[0] + 10, cell.center[1] - 10), font, 0.42, color, 1, cv2.LINE_AA)
+    wanted = {"PLAYER": options.player_evidence, "ENEMY": options.enemy_evidence}
+    for evidence in observation.entity_evidence or ():
+        if not wanted.get(str(evidence.get("kind"))):
+            continue
+        cell = by_id.get(evidence.get("cell_id"))
+        if cell is None:
+            continue
+        text = (f"m{float(evidence.get('marker_score', 0)):.2f} c{float(evidence.get('color_score', 0)):.2f} "
+                f"s{float(evidence.get('shape_score', 0)):.2f} p{float(evidence.get('profile_score', 0)):.2f}")
+        cv2.putText(output, text, (cell.center[0] - 40, cell.center[1] + 28), font, 0.34, (255, 255, 255), 1,
+                    cv2.LINE_AA)
 
 
 def _draw_alignment_debug(output: np.ndarray, grid, validation: dict) -> None:

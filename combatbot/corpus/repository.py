@@ -245,6 +245,23 @@ class CorpusRepository:
             shutil.rmtree(destination, ignore_errors=True)
             raise
 
+    def import_packet(self, packet, *, tags: tuple[str, ...] = ("entity-sequence",)) -> CorpusEntry:
+        """Enregistre une observation de « Vision réelle » dans le corpus (séquence d'entités).
+
+        Réutilise le format debug (frame, overlay, crops HUD, grille projetée) puis l'import
+        explicite ; le dossier temporaire est supprimé. Aucune vérité n'est créée.
+        """
+        import tempfile
+        from combatbot.vision.combat_observer import save_debug_observation
+
+        self.ensure_layout()
+        temporary = Path(tempfile.mkdtemp(prefix="packet-", dir=self.root))
+        try:
+            json_path = save_debug_observation(packet, temporary)
+            return self.import_debug(json_path, tags=tags)
+        finally:
+            shutil.rmtree(temporary, ignore_errors=True)
+
     def save_annotation(self, annotation: Annotation) -> CorpusEntry:
         annotation.validate()
         manifest = self.load_manifest()
@@ -258,9 +275,17 @@ class CorpusRepository:
         errors = set(entry.known_errors) - {"1_vs_7"}
         if annotation.digit_issue:
             errors.add(annotation.digit_issue)
+        entity = annotation.entities_confirmed
         updated = replace(entry, paths={**entry.paths, "annotation": relative}, annotation_available=True,
                           ap_truth=annotation.ap_truth, mp_truth=annotation.mp_truth,
-                          known_errors=tuple(sorted(errors)))
+                          known_errors=tuple(sorted(errors)),
+                          player_cell_id_truth=annotation.player_cell_id_truth if entity else None,
+                          enemy_cells_truth=tuple(int(item["cell_id"]) for item in annotation.enemy_cells_truth)
+                          if entity else (),
+                          enemy_track_truth={str(item["track_id"]): int(item["cell_id"])
+                                             for item in annotation.enemy_cells_truth if item.get("track_id")}
+                          if entity else None,
+                          entity_annotation_source=annotation.entity_annotation_source if entity else None)
         entries = tuple(updated if item.observation_id == updated.observation_id else item for item in manifest.entries)
         self.save_manifest(CorpusManifest(entries))
         return updated
@@ -303,6 +328,29 @@ class CorpusRepository:
             mp_crop_quality=mp_crop_quality if mp_crop_quality is not None else previous.mp_crop_quality,
             truth_source="human_confirmed", confirmed_at=stamp, confirmed_by=confirmed_by,
             session_id=entry.session_id, hud_review=review, truth_history=history,
+        )
+        self.save_annotation(annotation)
+        return annotation
+
+    def confirm_entities(self, observation_id: str, *, player_cell_id: int | None, player_visible: bool,
+                         enemies: list[tuple[int, str | None]], occluded_tracks: list[str] = (),
+                         empty_cells: list[int] = (), frame_phase: str | None = None,
+                         occlusion: bool | None = None, tactical_mode: bool | None = None,
+                         confirmed_at: str | None = None, tracking_identity_source: str | None = None) -> Annotation:
+        """Enregistre une vérité entités humaine ; les champs HUD et grille restent intacts."""
+        entry = self.get_entry(observation_id)
+        previous = self.read_annotation(entry) or Annotation(observation_id)
+        stamp = confirmed_at or datetime.now().astimezone().isoformat(timespec="seconds")
+        annotation = replace(
+            previous, entity_annotation_source="human_confirmed", entity_confirmed_at=stamp,
+            player_cell_id_truth=player_cell_id if player_visible else None,
+            player_visibility="VISIBLE" if player_visible else "NOT_VISIBLE",
+            enemy_cells_truth=tuple({"cell_id": int(cell), "track_id": track or None} for cell, track in enemies),
+            enemy_occluded_tracks=tuple(occluded_tracks), empty_confirmed_cells=tuple(int(c) for c in empty_cells),
+            frame_phase=frame_phase, occlusion=occlusion, tactical_mode=tactical_mode,
+            tracking_identity_confirmed=bool(tracking_identity_source),
+            tracking_identity_source=tracking_identity_source,
+            session_id=previous.session_id or entry.session_id,
         )
         self.save_annotation(annotation)
         return annotation

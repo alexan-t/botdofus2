@@ -7,6 +7,8 @@ from dataclasses import replace
 import json
 import time
 
+import cv2
+import numpy as np
 from PySide6.QtCore import QEvent, QRect, Qt, QTimer
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
@@ -686,6 +688,7 @@ class MainWindow(QMainWindow):
                 combat_image, layout_signature=signature, topology=self._declared_topology,
                 map_id=declared.map_id if declared else None, current=self._load_grid_profile(profile_id), parent=self,
             )
+            dialog.showMaximized()
             if dialog.exec() and dialog.result_profile is not None:
                 self.storage.set_profile_setting(profile_id, PROFILE_SETTING_KEY, dialog.result_profile.to_dict())
                 observer = self._observer
@@ -864,6 +867,8 @@ class MainWindow(QMainWindow):
                 return
             self._last_observation = value
             self.combat.set_observation(value)
+            if self.combat.sequence_capture.isChecked():
+                self._capture_sequence(value)
 
         def failure(message: str) -> None:
             self._observation_pending = False
@@ -887,6 +892,28 @@ class MainWindow(QMainWindow):
         self.jobs.submit(lambda: save_debug_observation(packet), saved,
                          lambda message: QMessageBox.warning(self, "Enregistrement", message))
 
+    def _capture_sequence(self, packet: ObservationPacket) -> None:
+        """Séquence d'entités en lecture seule : frames quasi identiques ignorées (≥ 1 s d'écart)."""
+        if packet.observation.grid.grid_source != "GAMEDATA_PROJECTED":
+            self.combat.observation_help.setText(
+                "Séquence non enregistrée : déclarez la map et calibrez la projection (grille GameData).")
+            return
+        image = np.asarray(packet.original)
+        small = cv2.resize(image, None, fx=0.125, fy=0.125, interpolation=cv2.INTER_AREA).astype(np.int16)
+        now = time.monotonic()
+        last = getattr(self, "_sequence_last", None)
+        if last is not None and (now - last[0] < 1.0 or (
+                last[1].shape == small.shape and float(np.abs(small - last[1]).mean()) < 1.0)):
+            return
+        self._sequence_last = (now, small)
+        try:
+            entry = self.corpus.repository.import_packet(packet)
+        except (OSError, ValueError) as exc:
+            self.combat.observation_help.setText(f"Séquence : enregistrement impossible ({exc})")
+            return
+        self.combat.observation_help.setText(
+            f"Séquence : {entry.session_id} frame {entry.frame_index} ajoutée au corpus (à annoter).")
+
     def _set_player_reference(self, point: tuple[int, int]) -> None:
         observer, packet = self._observer, self._last_observation
         profile_id = self.client_panel.profile_id
@@ -894,6 +921,20 @@ class MainWindow(QMainWindow):
             return
         if self._observation_pending:
             self.combat.observation_help.setText("Une analyse est en cours ; recliquez sur le personnage après sa mise à jour.")
+            return
+        if packet.observation.grid.grid_source == "GAMEDATA_PROJECTED":
+            # LOT 3B-5 : « Cette cellule est mon personnage » → profil visuel versionné, confirmé.
+            from combatbot.vision.entity_profiles import ProfileError, save_player_profile
+            try:
+                profile = observer.designate_player_cell(CombatPoint(*point), packet)
+            except ProfileError as exc:
+                self.combat.observation_help.setText(str(exc))
+                return
+            save_player_profile(app_data_root() / "data", profile_id, profile)
+            self.combat.observation_help.setText(
+                f"Profil joueur enregistré (cellule {profile.source_cell_id}, anneau teinte {profile.marker.hue:.0f}).")
+            self._on_event(CombatEvent("INFO", "vision.player",
+                                       f"Profil joueur confirmé manuellement sur la cellule {profile.source_cell_id}"))
             return
         if not observer.set_player_reference(CombatPoint(*point), packet):
             self.combat.observation_help.setText("Signature insuffisante à cet endroit ; cliquez sur un marqueur coloré du personnage.")

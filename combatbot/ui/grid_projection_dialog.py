@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 import numpy as np
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QCheckBox, QDialog, QDoubleSpinBox, QFormLayout, QGraphicsPixmapItem, QGraphicsScene,
@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 from combatbot.gamedata.models import DofusCellId, GameMapCell, GridTopology
 from combatbot.gamedata.topology import CELL_COUNT
 from combatbot.ui.images import bgr_to_pixmap
+from combatbot.ui.jobs import JobRunner
 from combatbot.vision.grid_fit import candidate_union
 from combatbot.vision.combat_models import CombatObservation
 from combatbot.vision.combat_observer import OverlayOptions, draw_diagnostic_overlay
@@ -91,6 +92,12 @@ class GridProjectionDialog(QDialog):
         self.alignment = 0.0
         self._updating = False
         self._alternative = 0
+        self.jobs = JobRunner()
+        self._auto_started = False
+        self._busy = False
+        self._close_pending = False
+        self.jobs.all_done.connect(self._auto_finished)
+        self.setWindowFlag(Qt.WindowType.WindowMaximizeButtonHint, True)
 
         layout = QVBoxLayout(self)
         notice = QLabel(
@@ -106,7 +113,7 @@ class GridProjectionDialog(QDialog):
         content.addWidget(self.view, 3)
         side = QVBoxLayout()
         self.auto_button = QPushButton("Proposition automatique")
-        self.auto_button.clicked.connect(self.propose_auto)
+        self.auto_button.clicked.connect(self.start_auto)
         side.addWidget(self.auto_button)
         self.next_button = QPushButton("Hypothèse suivante")
         self.next_button.setToolTip("Placements proches classés par le fit ; choisissez celui qui coïncide")
@@ -189,7 +196,7 @@ class GridProjectionDialog(QDialog):
         self._updating = False
 
     def _manual_changed(self) -> None:
-        if self._updating:
+        if self._updating or self._busy:
             return
         self.set_transform(GridScreenTransform.from_cell_size(
             (self.origin_x.value(), self.origin_y.value()), self.cell_w.value(), self.cell_h.value(),
@@ -203,19 +210,27 @@ class GridProjectionDialog(QDialog):
         self.render()
 
     def nudge(self, dx: float, dy: float) -> None:
+        if self._busy:
+            return
         self.set_transform(self.transform.translated(dx, dy), "manual")
 
     def resize_cells(self, dw: float, dh: float) -> None:
+        if self._busy:
+            return
         t = self.transform
         self.set_transform(GridScreenTransform.from_cell_size(
             t.origin, max(4.0, t.cell_width + dw), max(2.0, t.cell_height + dh),
             shear=(t.basis_x.y + t.basis_y.y) / 2), "manual")
 
-    def propose_auto(self) -> GridFitResult:
+    def _calculate_auto(self):
         # Union of legacy and sensitive thresholds; duplicates only add weight to the same lattice points.
-        self.candidates = candidate_union(self.image)
-        self.fit = fit_grid_from_candidates(self.candidates, (self.image.shape[1], self.image.shape[0]),
-                                            topology=self.topology if self.has_topology else None)
+        candidates = candidate_union(self.image)
+        fit = fit_grid_from_candidates(candidates, (self.image.shape[1], self.image.shape[0]),
+                                       topology=self.topology if self.has_topology else None)
+        return candidates, fit
+
+    def _apply_auto(self, result) -> GridFitResult:
+        self.candidates, self.fit = result
         self._alternative = 0
         self.next_button.setEnabled(len(self.fit.alternatives) > 1)
         if self.fit.transform is not None:
@@ -225,14 +240,63 @@ class GridProjectionDialog(QDialog):
             self.render()
         return self.fit
 
+    def propose_auto(self) -> GridFitResult:
+        """Synchronous entry point for offline tests; UI uses the worker below."""
+        return self._apply_auto(self._calculate_auto())
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        if not self._auto_started and self.has_topology:
+            self._auto_started = True
+            QTimer.singleShot(0, self.start_auto)
+        QTimer.singleShot(0, lambda: self.view.fitInView(
+            self.view.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio))
+
+    def start_auto(self) -> None:
+        if self.jobs.active or self._close_pending:
+            return
+        self._busy = True
+        for widget in (self.auto_button, self.confirm_button, self.next_button, self.anchor_fit,
+                       self.origin_x, self.origin_y, self.cell_w, self.cell_h, self.shear):
+            widget.setEnabled(False)
+        self.metrics.setText("Calcul automatique de la grille en cours…")
+        self.jobs.submit(self._calculate_auto, self._apply_auto, self._auto_error)
+
+    def _auto_error(self, message: str) -> None:
+        self.metrics.setText(f"Calibration automatique impossible : {message}\n"
+                             "Vérifiez la map chargée et la visibilité de la grille.")
+
+    def _auto_finished(self) -> None:
+        self._busy = False
+        for widget in (self.auto_button, self.confirm_button, self.anchor_fit,
+                       self.origin_x, self.origin_y, self.cell_w, self.cell_h, self.shear):
+            widget.setEnabled(True)
+        self.next_button.setEnabled(bool(self.fit and len(self.fit.alternatives) > 1))
+        if self._close_pending:
+            super().reject()
+
+    def reject(self) -> None:
+        if self.jobs.active:
+            self._close_pending = True
+            self.metrics.setText("Fermeture dès la fin du calcul en cours…")
+            return
+        super().reject()
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        if self.jobs.active:
+            event.ignore()
+            self.reject()
+            return
+        super().closeEvent(event)
+
     def next_hypothesis(self) -> None:
-        if self.fit is None or not self.fit.alternatives:
+        if self._busy or self.fit is None or not self.fit.alternatives:
             return
         self._alternative = (self._alternative + 1) % len(self.fit.alternatives)
         self.set_transform(self.fit.alternatives[self._alternative], "auto+human")
 
     def _image_clicked(self, x: float, y: float) -> None:
-        if not self.anchor_mode.isChecked():
+        if self._busy or not self.anchor_mode.isChecked():
             return
         cell = int(self.anchor_cell.value())
         self.anchors = [item for item in self.anchors if item[0] != cell] + [(cell, (x, y))]
@@ -275,6 +339,8 @@ class GridProjectionDialog(QDialog):
         self.metrics.setText("\n".join(lines))
 
     def confirm(self) -> None:
+        if self._busy:
+            return
         metrics = {"alignment_confidence": self.alignment, "orientation": self.transform.orientation.value,
                    "fit": self.fit.metrics() if self.fit else None}
         self.result_profile = CombatGridProfileV2(

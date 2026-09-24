@@ -134,3 +134,55 @@ def test_main_window_map_declaration_wiring(qapp, tmp_path, monkeypatch):
     window.controller.thread = None
     window.close()
     storage.close()
+
+
+def test_opening_dialog_computes_automatically_in_worker(qapp, monkeypatch):
+    import threading
+    from PySide6.QtCore import QElapsedTimer
+    from PySide6.QtTest import QTest
+    from combatbot.vision.grid_fit import GridFitResult
+    main_thread = threading.get_ident()
+    worker_threads = []
+    window = dialog(make_topology(seed=9))
+
+    def calculate():
+        worker_threads.append(threading.get_ident())
+        return [], GridFitResult(FitStatus.ACCEPTED, "auto", TRANSFORM, score=0.9)
+
+    monkeypatch.setattr(window, "_calculate_auto", calculate)
+    window.show()
+    timer = QElapsedTimer()
+    timer.start()
+    while (not worker_threads or window.jobs.active) and timer.elapsed() < 5000:
+        QTest.qWait(10)
+    assert worker_threads and worker_threads[0] != main_thread
+    assert not window.jobs.active and window.method == "auto"
+    assert window.result_profile is None  # no silent confirmation of the proposal
+    assert window.confirm_button.isEnabled()
+    window.close()
+
+
+def test_dialog_can_close_during_automatic_calculation(qapp, monkeypatch):
+    import threading
+    from PySide6.QtCore import QElapsedTimer
+    from PySide6.QtTest import QTest
+    window = dialog(make_topology(seed=9))
+    release = threading.Event()
+
+    def calculate():
+        release.wait(2)
+        raise ValueError("fixture illisible")
+
+    monkeypatch.setattr(window, "_calculate_auto", calculate)
+    window.show()
+    qapp.processEvents()
+    assert window.jobs.active
+    window.reject()
+    assert window._close_pending
+    release.set()
+    timer = QElapsedTimer()
+    timer.start()
+    while window.jobs.active and timer.elapsed() < 5000:
+        QTest.qWait(10)
+    assert not window.jobs.active and not window.isVisible()
+    assert window.result_profile is None

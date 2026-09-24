@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from combatbot.corpus.benchmark import run_benchmark, write_reports
-from combatbot.corpus.models import Annotation, CorpusEntry, HUD_CROP_QUALITIES, PixelAnnotation
+from combatbot.corpus.models import ENTITY_FIELDS, Annotation, CorpusEntry, HUD_CROP_QUALITIES, PixelAnnotation
 from combatbot.corpus.repository import CorpusRepository
 from combatbot.runtime import app_data_root
 from combatbot.ui.images import bgr_to_pixmap
@@ -70,6 +70,8 @@ def _carry_hud_provenance(previous: Annotation | None, annotation: Annotation) -
     """
     if previous is None:
         return annotation
+    # La vérité entités (LOT 3B-5) ne s'édite pas ici : elle est toujours conservée telle quelle.
+    annotation = replace(annotation, **{name: getattr(previous, name) for name in ENTITY_FIELDS})
     same = (previous.ap_truth, previous.mp_truth) == (annotation.ap_truth, annotation.mp_truth)
     if same:
         return replace(annotation, truth_source=previous.truth_source, confirmed_at=previous.confirmed_at,
@@ -415,8 +417,11 @@ class CorpusPage(QWidget):
         hud_buttons = QHBoxLayout()
         self.hud_review_button = QPushButton("Revue HUD PA/PM…")
         self.hud_collection_button = QPushButton("Collecte HUD réelle (lecture seule)…")
+        self.entity_button = QPushButton("Annoter les entités…")
         hud_buttons.addWidget(self.hud_review_button)
         hud_buttons.addWidget(self.hud_collection_button)
+        hud_buttons.addWidget(self.entity_button)
+        self.entity_button.clicked.connect(self._annotate_entities)
         hud_buttons.addStretch()
         outer.addLayout(hud_buttons)
         self.hud_review_button.clicked.connect(self._hud_review)
@@ -506,6 +511,17 @@ class CorpusPage(QWidget):
             if not dialog.continue_requested:
                 break
             index += 1
+
+    def _annotate_entities(self) -> None:
+        from combatbot.ui.entity_annotation_dialog import EntityAnnotationDialog
+
+        try:
+            dialog = EntityAnnotationDialog(self.repository, self)
+            dialog.showMaximized()
+            dialog.exec()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Annotation des entités", str(exc))
+        self.refresh()
 
     def _hud_review(self) -> None:
         from combatbot.ui.hud_review_dialog import HUDReviewDialog

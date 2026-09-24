@@ -18,6 +18,12 @@ HUD_CROP_QUALITIES = {
 TRUTH_SOURCES = {"human_confirmed", "unverified_import"}
 # Décision humaine par compteur lors de la revue HUD.
 HUD_REVIEW_DECISIONS = {"confirmed", "corrected", "entered", "unreadable"}
+# LOT 3B-5 : phase de la frame annotée (entités).
+ENTITY_FRAME_PHASES = {"placement", "debut_combat", "mon_tour", "tour_ennemi", "animation_sort",
+                       "changement_tour", "exploration", "autre"}
+ENTITY_FIELDS = ("entity_annotation_source", "entity_confirmed_at", "player_cell_id_truth", "player_visibility",
+                 "enemy_cells_truth", "enemy_occluded_tracks", "empty_confirmed_cells", "frame_phase",
+                 "occlusion", "tactical_mode", "tracking_identity_confirmed", "tracking_identity_source")
 
 
 def _optional_bool(value: object, field_name: str) -> bool | None:
@@ -110,7 +116,69 @@ class Annotation:
     session_id: str | None = None
     hud_review: dict[str, str] | None = None
     truth_history: tuple[dict[str, object], ...] = ()
+    # LOT 3B-5 : vérité entités par DofusCellId (jamais une ancienne prédiction).
+    entity_annotation_source: str | None = None
+    entity_confirmed_at: str | None = None
+    player_cell_id_truth: int | None = None
+    player_visibility: str | None = None                 # VISIBLE | NOT_VISIBLE
+    enemy_cells_truth: tuple[dict[str, object], ...] = ()  # {"cell_id": int, "track_id": "E1" | None}
+    enemy_occluded_tracks: tuple[str, ...] = ()           # ennemis connus mais non localisables
+    empty_confirmed_cells: tuple[int, ...] = ()
+    frame_phase: str | None = None
+    occlusion: bool | None = None
+    tracking_identity_confirmed: bool = False
+    tracking_identity_source: str | None = None
+    tactical_mode: bool | None = None
     schema_version: int = SCHEMA_VERSION
+
+    @property
+    def entities_confirmed(self) -> bool:
+        return self.entity_annotation_source == "human_confirmed" and bool(self.entity_confirmed_at)
+
+    def validate_entities(self) -> None:
+        _optional_bool(self.tracking_identity_confirmed, "tracking_identity_confirmed")
+        if self.tracking_identity_confirmed and not self.tracking_identity_source:
+            raise ValueError("Une identité suivie exige sa provenance explicite")
+        if self.entity_annotation_source not in (None, "human_confirmed"):
+            raise ValueError("entity_annotation_source doit valoir human_confirmed")
+        if self.entity_annotation_source == "human_confirmed" and not self.entity_confirmed_at:
+            raise ValueError("Une vérité entités human_confirmed exige entity_confirmed_at")
+        if self.player_visibility not in (None, "VISIBLE", "NOT_VISIBLE"):
+            raise ValueError("player_visibility invalide")
+        if self.player_visibility == "NOT_VISIBLE" and self.player_cell_id_truth is not None:
+            raise ValueError("Joueur non visible : aucune cellule joueur ne doit être inscrite")
+        if self.frame_phase is not None and self.frame_phase not in ENTITY_FRAME_PHASES:
+            raise ValueError(f"frame_phase non reconnu : {self.frame_phase}")
+        cells: list[int] = []
+        tracks: list[str] = []
+        for item in self.enemy_cells_truth:
+            cell_id = item.get("cell_id")
+            if isinstance(cell_id, bool) or not isinstance(cell_id, int) or not 0 <= cell_id < 560:
+                raise ValueError("Cellule ennemie invalide")
+            cells.append(cell_id)
+            if item.get("track_id"):
+                tracks.append(str(item["track_id"]))
+        tracks.extend(self.enemy_occluded_tracks)
+        if len(cells) != len(set(cells)):
+            raise ValueError("Une cellule ne peut porter qu'un ennemi annoté")
+        if len(tracks) != len(set(tracks)):
+            raise ValueError("Un identifiant d'ennemi ne peut apparaître qu'une fois par frame")
+        if self.player_cell_id_truth is not None:
+            if (isinstance(self.player_cell_id_truth, bool) or not isinstance(self.player_cell_id_truth, int)
+                    or not 0 <= self.player_cell_id_truth < 560):
+                raise ValueError("Cellule joueur invalide")
+            if self.player_cell_id_truth in cells:
+                raise ValueError("Une cellule ne peut pas être à la fois PLAYER et ENEMY")
+        occupied = set(cells) | ({self.player_cell_id_truth} if self.player_cell_id_truth is not None else set())
+        if occupied & set(self.empty_confirmed_cells):
+            raise ValueError("Une cellule vide confirmée ne peut pas porter d'entité")
+        if any(isinstance(cell, bool) or not isinstance(cell, int) or not 0 <= cell < 560
+               for cell in self.empty_confirmed_cells):
+            raise ValueError("Cellule vide confirmée invalide")
+        if self.player_visibility == "VISIBLE" and self.player_cell_id_truth is None:
+            raise ValueError("Joueur VISIBLE : exactement une cellule joueur est requise")
+        if self.entities_confirmed and self.player_visibility is None:
+            raise ValueError("Une vérité entités exige player_visibility")
 
     @property
     def human_confirmed(self) -> bool:
@@ -153,6 +221,7 @@ class Annotation:
             truth = self.ap_truth if kind == "ap" else self.mp_truth
             if (self.hud_review or {}).get(kind) == "unreadable" and truth is not None:
                 raise ValueError(f"{kind.upper()} marqué illisible ne peut pas porter de vérité")
+        self.validate_entities()
 
     def to_dict(self) -> dict[str, object]:
         self.validate()
@@ -176,10 +245,25 @@ class Annotation:
             "confirmed_by": self.confirmed_by,
             "session_id": self.session_id,
             "hud_review": dict(self.hud_review) if self.hud_review else None,
+            "entity_annotation_source": self.entity_annotation_source,
+            "entity_confirmed_at": self.entity_confirmed_at,
+            "player_cell_id_truth": self.player_cell_id_truth,
+            "player_visibility": self.player_visibility,
+            "frame_phase": self.frame_phase,
+            "occlusion": self.occlusion,
+            "tactical_mode": self.tactical_mode,
+            "tracking_identity_confirmed": self.tracking_identity_confirmed,
+            "tracking_identity_source": self.tracking_identity_source,
         }
         result.update({key: value for key, value in scalar_values.items() if value is not None})
         if self.truth_history:
             result["truth_history"] = [dict(item) for item in self.truth_history]
+        if self.enemy_cells_truth:
+            result["enemy_cells_truth"] = [dict(item) for item in self.enemy_cells_truth]
+        if self.enemy_occluded_tracks:
+            result["enemy_occluded_tracks"] = list(self.enemy_occluded_tracks)
+        if self.empty_confirmed_cells:
+            result["empty_confirmed_cells"] = list(self.empty_confirmed_cells)
         if self.player is not None:
             result["player"] = self.player.to_dict()
         for key, values in (
@@ -231,6 +315,23 @@ class Annotation:
                         if isinstance(raw.get("hud_review"), dict) else None),
             truth_history=tuple(dict(item) for item in raw.get("truth_history", ())
                                 if isinstance(item, dict)),
+            entity_annotation_source=(str(raw["entity_annotation_source"])
+                                      if raw.get("entity_annotation_source") is not None else None),
+            entity_confirmed_at=(str(raw["entity_confirmed_at"])
+                                 if raw.get("entity_confirmed_at") is not None else None),
+            player_cell_id_truth=(int(raw["player_cell_id_truth"])
+                                  if raw.get("player_cell_id_truth") is not None else None),
+            player_visibility=str(raw["player_visibility"]) if raw.get("player_visibility") is not None else None,
+            enemy_cells_truth=tuple({"cell_id": int(item["cell_id"]),
+                                     "track_id": str(item["track_id"]) if item.get("track_id") else None}
+                                    for item in raw.get("enemy_cells_truth", ()) if isinstance(item, dict)),
+            enemy_occluded_tracks=tuple(str(item) for item in raw.get("enemy_occluded_tracks", ())),
+            empty_confirmed_cells=tuple(int(item) for item in raw.get("empty_confirmed_cells", ())),
+            frame_phase=str(raw["frame_phase"]) if raw.get("frame_phase") is not None else None,
+            occlusion=_optional_bool(raw.get("occlusion"), "occlusion"),
+            tactical_mode=_optional_bool(raw.get("tactical_mode"), "tactical_mode"),
+            tracking_identity_confirmed=_optional_bool(raw.get("tracking_identity_confirmed", False), "tracking_identity_confirmed"),
+            tracking_identity_source=raw.get("tracking_identity_source"),
             schema_version=int(raw.get("schema_version", SCHEMA_VERSION)),
         )
         item.validate()
@@ -250,6 +351,11 @@ class CorpusEntry:
     ap_truth: int | None = None
     mp_truth: int | None = None
     known_errors: tuple[str, ...] = ()
+    # LOT 3B-5 : copie de la vérité entités humaine (jamais une prédiction).
+    player_cell_id_truth: int | None = None
+    enemy_cells_truth: tuple[int, ...] = ()
+    enemy_track_truth: dict[str, int] | None = None
+    entity_annotation_source: str | None = None
 
     def validate(self) -> None:
         if not self.observation_id.strip() or not self.session_id.strip():
@@ -284,6 +390,11 @@ class CorpusEntry:
             result["ap_truth"] = self.ap_truth
         if self.mp_truth is not None:
             result["mp_truth"] = self.mp_truth
+        if self.entity_annotation_source is not None:
+            result["entity_annotation_source"] = self.entity_annotation_source
+            result["player_cell_id_truth"] = self.player_cell_id_truth
+            result["enemy_cells_truth"] = list(self.enemy_cells_truth)
+            result["enemy_track_truth"] = dict(self.enemy_track_truth or {})
         return result
 
     @classmethod
@@ -302,6 +413,13 @@ class CorpusEntry:
             ap_truth=_optional_counter(raw.get("ap_truth"), "ap_truth"),
             mp_truth=_optional_counter(raw.get("mp_truth"), "mp_truth"),
             known_errors=tuple(str(value) for value in raw.get("known_errors", ())),
+            player_cell_id_truth=(int(raw["player_cell_id_truth"])
+                                  if raw.get("player_cell_id_truth") is not None else None),
+            enemy_cells_truth=tuple(int(value) for value in raw.get("enemy_cells_truth", ())),
+            enemy_track_truth=({str(key): int(value) for key, value in raw["enemy_track_truth"].items()}
+                               if isinstance(raw.get("enemy_track_truth"), dict) else None),
+            entity_annotation_source=(str(raw["entity_annotation_source"])
+                                      if raw.get("entity_annotation_source") is not None else None),
         )
         item.validate()
         return item
