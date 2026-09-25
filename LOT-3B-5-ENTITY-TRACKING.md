@@ -1166,3 +1166,125 @@ IMPLEMENTATION PASS porte sur ce sous-lot seulement. LOT 3B-5 non finalisé, pas
 pas de LOT 3B-6. Décision suivante à prendre par l'utilisateur : (A) améliorer 3B-5 sur de
 nouvelles données indépendantes, ou (B) accepter 3B-5 en PARTIAL prudent et ouvrir 3B-6 en
 lecture seule.
+
+## 16. 3B-5D — validation indépendante sur PC local
+
+Reprise du 25 septembre 2026 sur un second PC (compte Windows `Thoma`). Version **0.4.3**
+inchangée. Détecteur, tracker, seuils, coûts et profils **non modifiés**. Aucune action DOFUS.
+
+### 16.1 Récupération Git et environnement
+
+- `C:\Users\Thoma\Documents\pythonbot_test` absent : clone de `alexan-t/botdofus2`
+  (authentification Git déjà configurée). Aucun dossier local écrasé. L'ancien dossier
+  `OneDrive\Documents\pythonbot_test` de ce PC est vide.
+- `origin/main` = `origin/lot-3b-5-entity-tracking` = `8a324a2` (aucun commit plus récent) ;
+  `22e1f35`, `5812af5`, `577d089`, `8a324a2` ancêtres de HEAD ; `pull --ff-only` sans changement.
+- Branche `lot-3b-5d-independent-validation` créée depuis `main` propre.
+- Aucun Python global utilisable (alias Microsoft Store, `py` sans interpréteur). `.venv` créé
+  avec le seul Python 3.12 présent (3.12.14, runtime local sous `~/.cache/codex-runtimes`),
+  puis `requirements-dev.txt` installé dans le venv uniquement (PySide6 6.11.2, OpenCV 4.14,
+  NumPy 2.5.3, RapidOCR 3.9.2, onnxruntime 1.30, PyInstaller 6.22.3). Requirements inchangés.
+- Baseline avant développement : **391 tests réussis**, `compileall` et `git diff --check` OK.
+
+### 16.2 Client local
+
+- `C:\Users\Thoma\AppData\Local\Alea\Client` : présent, `Dofus.exe` (188 704 o, SHA-256
+  `206e91fc…e56835`), `data/` et `content/maps` présents.
+- Topologie GameData chargée en lecture seule : 12 154 maps, map témoin 560 cellules, 1,7 s.
+- Chemin enregistré par le mécanisme existant (réglage `dofus_client_directory` de
+  `%LOCALAPPDATA%\PythonBot\data\pythonbot.sqlite3`). Aucun chemin codé en dur ; aucune
+  occurrence de `Alpha5` dans le code.
+
+### 16.3 Runtime local avant 3B-5D
+
+`%LOCALAPPDATA%\PythonBot` **n'existait pas** : pas de SQLite, corpus (0 fichier,
+0 observation), gabarits HUD, `entity_profiles`, `active.json`, layout connu ni calibration.
+Rien à hacher ; l'inventaire est dans `data/validation/lot3b5d-local-resume/runtime-before.json`
+(ignoré par Git). La seule écriture runtime de cette reprise est la création de la base SQLite
+avec le réglage du dossier client. Aucun profil de l'autre PC importé.
+
+Conséquences :
+- **Layout local : inconnu tant qu'aucune calibration n'est faite sur ce PC** (la signature
+  dépend des zones calibrées). Même s'il égalait `e561118fd8115c8f` ou `9a0751d48681994e`
+  (cas A), aucun profil compatible n'existe localement : on traite donc le cas B — nouveau
+  TRAIN, VALIDATION puis TEST propres à ce PC.
+- Le TEST historique (16 frames) et les corpus GRID/HUD de référence ne sont pas sur ce PC :
+  ils ne peuvent être ni réutilisés ni rejoués ici.
+
+### 16.4 Build initial
+
+`.\build_exe.ps1` : `dist\PythonBot\PythonBot.exe`, 342,2 Mio. Smoke `--package-smoke-test`
+(données isolées, fenêtre DOFUS non recherchée) : `success=true`, `frozen=true`, grille GameData
+560 cellules, HUD fixture 7, RapidOCR « 3 PA Portee 1-4 » (0,9995), détecteur/tracker/UI de
+suivi présents, `action_executor_invoked=false`, `action_executed=false`.
+
+### 16.5 Outillage 3B-5D (commit `de260f5`)
+
+- **Vérités EMPTY aveugles** (`combatbot/corpus/empty_sampling.py`) : par frame, 9 cellules
+  traversables entièrement visibles, une par zone 3 × 3 (haut/centre/bas × gauche/centre/droite),
+  ordonnées par SHA-256 de (version, observation, cell ID). La sélection ne lit ni prédiction ni
+  annotation. Dans « Annoter les entités », elles apparaissent en jaune « ? » ; menu
+  « Échantillon : VIDE / OCCUPÉE / INCONNU ». Une cellule annotée JOUEUR/E1… vaut OCCUPÉE.
+  « Confirmer cette frame » est refusé tant qu'une cellule jaune n'est pas tranchée. Stockage :
+  `sampled_cells_truth` + `sampled_cells_version` (les VIDE alimentent aussi
+  `empty_confirmed_cells`). L'outil n'affiche toujours aucune prédiction.
+- **Split déclaré par combat** : liste « Split : TRAIN / VALIDATION / TEST » à côté de
+  « Enregistrer la séquence », figée pendant l'observation, écrite dans chaque observation
+  (`capture.entity_split_declared`). Le split déclaré s'impose ; la couverture de layout ne
+  déplace jamais un combat déclaré ; un combat aux frames de splits différents, ou en désaccord
+  avec le registre, est une erreur.
+- **Mesures** : occupation sur vérités humaines seulement (EMPTY échantillonnées ; OCCUPÉES
+  échantillonnées + cellules JOUEUR/ENNEMI) : FREE correct, faux FREE, faux FREE sur
+  joueur/ennemi, UNKNOWN, précision et couverture FREE. Suivi : portée VALIDATION, taux de
+  switch et de réassociation fausse. Performance : P95 et effectifs.
+- **Critères fixés avant TEST** (`combatbot/corpus/validation_3b5d.py`) : joueur précision
+  acceptée 1,000 et couverture ≥ 0,90 ; ennemis précision ≥ 0,98 et rappel ≥ 0,90 ; suivi
+  switch ≤ 5 % et réassociation fausse ≤ 5 % ; occupation 0 faux FREE sur joueur/ennemi,
+  précision FREE ≥ 0,98, au moins 50 vérités EMPTY sinon PARTIAL.
+- **Garde TEST** : `python -m combatbot.benchmark --entities-3b5d --entity-splits test
+  --freeze-sha <SHA>` refuse si `combatbot/` diffère du commit de gel ou si ces combats TEST
+  ont déjà été mesurés (registre `entity_test_runs.json` ; `--diagnostic-rerun` marque la
+  mesure « diagnostic », plus jamais TEST indépendant).
+- Installation runtime des profils sans registre historique : seuls les combats déclarés
+  sont lus, profils appris sur TRAIN uniquement.
+- Tests : 12 nouveaux (`tests/test_entity_3b5d.py`) ; 4 tests UI existants tranchent désormais
+  l'échantillon avant d'enregistrer ; suite complète **403 réussis** ; `compileall` et
+  `git diff --check` OK. Rebuild + smoke : `success=true`, mêmes contrôles qu'en 16.4.
+
+### 16.6 Corpus, splits et mesures
+
+| Élément | État |
+|---|---|
+| Combats TRAIN / VALIDATION / TEST | 0 / 0 / 0 — collecte à faire par l'utilisateur |
+| Frames, vérités PLAYER / ENEMY / identités / EMPTY | 0 |
+| SHA de gel | à créer après TRAIN/VALIDATION |
+| TEST final | non commencé |
+| Performance locale (detector/tracker/observer) | non mesurable sans corpus local |
+
+### 16.7 Non-régressions sur ce PC
+
+- GRID : tests unitaires et smoke (projection 560 cellules, visibilité/alignement synthétiques)
+  OK. Le corpus GRID de référence (14/12/26/12) n'est pas sur ce PC : pas de nouvelle mesure réelle.
+- HUD : tests et fixture 7 OK ; corpus HUD de référence absent : 1/7 reste validé sur l'autre PC,
+  non remesuré ici. Les nouvelles mesures locales seront rapportées séparément.
+
+### 16.8 Statuts à ce point d'arrêt
+
+```text
+IMPLEMENTATION: PASS (outillage 3B-5D)
+RUNTIME PROFILES: PASS (hérité 3B-5C-FIX ; aucun profil local — nouveau layout à apprendre)
+TRACKING UI: PASS
+REAL ENTITY CORPUS (PC local): EMPTY — collecte requise
+PLAYER DETECTION: PARTIAL (inchangé, aucune donnée indépendante)
+ENEMY DETECTION: PARTIAL (inchangé)
+GLOBAL TRACKING: PARTIAL (inchangé)
+CELL OCCUPANCY: PARTIAL (mécanisme EMPTY prêt, 0 vérité)
+OCCLUSION HANDLING: NOT OBSERVED
+GRID REGRESSION: NONE (tests/smoke ; corpus de référence absent de ce PC)
+HUD REGRESSION: NONE (tests/smoke ; corpus de référence absent de ce PC)
+ACTIONS: NONE
+```
+
+LOT 3B-5 non clôturé, pas de 0.5.0, pas de 3B-6. Prochaine étape : calibration locale puis
+collecte TRAIN (≥ 2 combats) et VALIDATION (≥ 1 combat) par l'utilisateur, annotation, puis
+profils TRAIN, diagnostic VALIDATION et gel.
