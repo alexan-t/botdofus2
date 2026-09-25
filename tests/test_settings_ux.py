@@ -114,3 +114,20 @@ def test_browser_titled_dofus_is_not_a_game_window(monkeypatch) -> None:
                                                         2: "Guide Dofus - Google Chrome", 3: "DOFUS"}[hwnd])
     monkeypatch.setattr(window, "_process_name", lambda hwnd: {1: "dofus.exe", 2: "chrome.exe", 3: None}[hwnd])
     assert [item.hwnd for item in window.list_dofus_windows()] == [1, 3]
+
+
+def test_stacked_heart_hp_is_read_top_current_bottom_max() -> None:
+    from combatbot.vision.character import parse_hp
+    assert parse_hp("3516\n3585") == (3516, 3585)        # cœur du HUD : actuels en haut, max en bas
+    assert parse_hp("3516/3585") == (3516, 3585)
+    assert parse_hp("3585\n3516") is None                 # incohérent : jamais deviné
+    assert parse_hp("3516") is None and parse_hp("") is None
+
+
+def test_resize_handle_stays_small_on_small_zones() -> None:
+    from PySide6.QtCore import QRectF
+    from combatbot.ui.calibration_dialog import ResizableRectItem
+    _app()
+    item = ResizableRectItem("PA", "#8eaaf0", QRectF(0, 0, 60, 45))
+    handle = item._handle_rect()
+    assert handle.width() <= 15 and handle.center() == item.rect().bottomRight()

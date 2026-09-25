@@ -34,6 +34,9 @@ ZONE_HINTS = {
 }
 MANUAL = "ajustée manuellement"
 HUMAN = "vérification humaine"
+HANDLE_SCREEN_PX = 10   # poignée de redimensionnement : taille fixe à l'écran, quel que soit le zoom
+GRAB_SCREEN_PX = 18     # zone cliquable autour de la poignée (invisible, plus confortable)
+TAG_SCREEN_PX = 12
 SHORT_TAGS = {"combat": "Combat", "spell_bar": "Sorts", "hp": "PV", "ap": "PA", "mp": "PM",
               "end_turn": "Fin de tour", "identity": "Nom"}
 
@@ -61,7 +64,7 @@ def with_note(method: str, note: str) -> str:
 
 
 class ResizableRectItem(QGraphicsRectItem):
-    def __init__(self, label: str, color: str, rect: QRectF, on_edit=None, handle: float = 13) -> None:
+    def __init__(self, label: str, color: str, rect: QRectF, on_edit=None) -> None:
         super().__init__(QRectF(0, 0, rect.width(), rect.height()))
         self.label = label
         self.color = QColor(color)
@@ -75,15 +78,35 @@ class ResizableRectItem(QGraphicsRectItem):
         self.setAcceptHoverEvents(True)
         self._resizing = False
         self._moved = False
-        self._handle = handle
+
+    def _scale(self) -> float:
+        """Pixels écran par pixel de capture (la capture 2560 px est réduite dans la fenêtre)."""
+        views = self.scene().views() if self.scene() else []
+        scale = views[0].transform().m11() if views else 1.0
+        return scale if scale > 0 else 1.0
+
+    def _corner_square(self, screen_px: float, cap: bool) -> QRectF:
+        size = screen_px / self._scale()
+        if cap:   # jamais plus d'un tiers d'une petite zone (compteur PA/PM)
+            size = max(2.0, min(size, self.rect().width() / 3, self.rect().height() / 3))
+        corner = self.rect().bottomRight()
+        return QRectF(corner.x() - size / 2, corner.y() - size / 2, size, size)
 
     def _handle_rect(self) -> QRectF:
-        return QRectF(self.rect().right() - self._handle, self.rect().bottom() - self._handle,
-                      self._handle, self._handle)
+        """Petite poignée centrée sur le coin : elle déborde du cadre au lieu de masquer son contenu."""
+        return self._corner_square(HANDLE_SCREEN_PX, cap=True)
+
+    def _grab_rect(self) -> QRectF:
+        return self._corner_square(GRAB_SCREEN_PX, cap=False)
+
+    def refresh_geometry(self) -> None:
+        """À appeler quand le zoom de la vue change (tailles exprimées en pixels écran)."""
+        self.prepareGeometryChange()
+        self.update()
 
     def _font(self) -> QFont:
         font = QFont("Segoe UI")
-        font.setPixelSize(max(12, int(self._handle * 0.9)))
+        font.setPixelSize(max(4, round(TAG_SCREEN_PX / self._scale())))
         font.setBold(True)
         return font
 
@@ -91,13 +114,14 @@ class ResizableRectItem(QGraphicsRectItem):
         """Étiquette au-dessus du cadre (dedans s'il touche le haut de l'image), jamais tronquée."""
         from PySide6.QtGui import QFontMetricsF
         font = self._font()
-        width = QFontMetricsF(font).horizontalAdvance(self.label) + 14
-        height = font.pixelSize() + 8
+        pad = 6 / self._scale()
+        width = QFontMetricsF(font).horizontalAdvance(self.label) + 2 * pad
+        height = font.pixelSize() + pad
         top = -height if self.pos().y() >= height else 0
         return QRectF(0, top, width, height)
 
     def boundingRect(self) -> QRectF:  # noqa: N802 - API Qt
-        return super().boundingRect().united(self._tag_rect()).adjusted(-2, -2, 2, 2)
+        return super().boundingRect().united(self._tag_rect()).united(self._grab_rect()).adjusted(-2, -2, 2, 2)
 
     def paint(self, painter: QPainter, option, widget=None) -> None:
         pen = QPen(self.color, 3 if self.isSelected() else 2)
@@ -107,22 +131,23 @@ class ResizableRectItem(QGraphicsRectItem):
         fill.setAlpha(55 if self.isSelected() else 28)
         painter.setBrush(QBrush(fill))
         painter.drawRect(self.rect())
-        painter.setBrush(self.color)
+        painter.setBrush(QColor("#ffffff"))
         painter.drawRect(self._handle_rect())
         painter.setFont(self._font())
         tag = self._tag_rect()
+        painter.setBrush(self.color)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRect(tag)
         painter.setPen(QColor("#0b1220"))
         painter.drawText(tag, Qt.AlignmentFlag.AlignCenter, self.label)
 
     def hoverMoveEvent(self, event) -> None:
-        self.setCursor(Qt.CursorShape.SizeFDiagCursor if self._handle_rect().contains(event.pos())
+        self.setCursor(Qt.CursorShape.SizeFDiagCursor if self._grab_rect().contains(event.pos())
                        else Qt.CursorShape.SizeAllCursor)
         super().hoverMoveEvent(event)
 
     def mousePressEvent(self, event) -> None:
-        self._resizing = self._handle_rect().contains(event.pos())
+        self._resizing = self._grab_rect().contains(event.pos())
         self._moved = False
         if self._resizing:
             self.setSelected(True)
@@ -134,8 +159,10 @@ class ResizableRectItem(QGraphicsRectItem):
         self._moved = True
         if self._resizing:
             scene = self.scene().sceneRect() if self.scene() else QRectF(0, 0, 10000, 10000)
-            width = max(16, min(event.pos().x(), scene.right() - self.pos().x()))
-            height = max(16, min(event.pos().y(), scene.bottom() - self.pos().y()))
+            minimum = 6 / self._scale()
+            width = max(minimum, min(event.pos().x(), scene.right() - self.pos().x()))
+            height = max(minimum, min(event.pos().y(), scene.bottom() - self.pos().y()))
+            self.prepareGeometryChange()
             self.setRect(0, 0, width, height)
             event.accept()
         else:
@@ -195,6 +222,9 @@ class _ImageDialog(QDialog):
 
     def _fit_image(self) -> None:
         self.view.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+        for item in self.scene.items():
+            if isinstance(item, ResizableRectItem):
+                item.refresh_geometry()
 
 
 class _ZoneRow(QFrame):
@@ -260,7 +290,6 @@ class CalibrationDialog(_ImageDialog):
         self.evidence: dict[str, ZoneEvidence] = {}
         self.rows: dict[str, _ZoneRow] = {}
         self.selected: str | None = None
-        self._handle = max(14.0, frame.client.width * 0.012)
         review = zones_needing_review(existing, frame, suggestions or {}) if existing else set()
         compatible = bool(existing and existing.layout_compatibility(frame.client.width, frame.client.height).compatible)
         initial: dict[str, QRectF] = {}
@@ -341,8 +370,7 @@ class CalibrationDialog(_ImageDialog):
     # ------------------------------------------------------------------ zones
     def _add_item(self, zone: str, rect: QRectF) -> None:
         index = ALL_ZONES.index(zone)
-        item = ResizableRectItem(SHORT_TAGS[zone], COLORS[index], rect, on_edit=lambda zone=zone: self._edited(zone),
-                                 handle=self._handle)
+        item = ResizableRectItem(SHORT_TAGS[zone], COLORS[index], rect, on_edit=lambda zone=zone: self._edited(zone))
         self.scene.addItem(item)
         self.items[zone] = item
 
@@ -447,8 +475,7 @@ class ImageCropDialog(_ImageDialog):
         layout.addWidget(self.view, 1)
         width, height = frame.client.width, frame.client.height
         self.item = ResizableRectItem("Infobulle", "#f0bc65",
-                                      QRectF(width * 0.25, height * 0.18, width * 0.5, height * 0.5),
-                                      handle=max(14.0, width * 0.012))
+                                      QRectF(width * 0.25, height * 0.18, width * 0.5, height * 0.5))
         self.scene.addItem(self.item)
         buttons = QHBoxLayout()
         accept = QPushButton("Analyser cette zone")
