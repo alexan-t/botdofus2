@@ -179,6 +179,15 @@ def test_digit_seen_in_single_group_is_learned_in_train() -> None:
         assert _assign_splits(groups, fixed)["first-eight"] == "train"
 
 
+def test_ap_digit_is_stratified_separately_from_mp_digit() -> None:
+    # Cas réel : 2 PM déjà en TRAIN, 12 PA seulement en TEST gelé ; un nouveau 12 PA doit être appris.
+    groups = {"mp-two": {"MP:2", "AP:5"}, "frozen-ap-twelve": {"AP:1", "AP:2", "MP:6"},
+              "new-ap-twelve": {"AP:1", "AP:2", "MP:6"}, **{f"g{i}": {"AP:5", "MP:6"} for i in range(8)}}
+    result = _assign_splits(groups, {"mp-two": "train", "frozen-ap-twelve": "test"})
+    assert result["frozen-ap-twelve"] == "test" and result["mp-two"] == "train"
+    assert result["new-ap-twelve"] == "train"
+
+
 def test_frozen_test_group_never_moves() -> None:
     groups = {f"g{index}": {"5"} for index in range(8)}
     result = _assign_splits(groups, {"g0": "test", "g1": "test"})

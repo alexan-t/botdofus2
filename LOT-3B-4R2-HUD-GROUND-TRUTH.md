@@ -281,3 +281,31 @@ Limites documentées : 8 appris mais non testé, PA = 1 seul observé une fois, 
 4, 7 et 8 en TRAIN reposent sur un seul crop chacun ; nouvelles captures uniquement en combat.
 
 Arrêt après ce rapport. LOT 3B-5 non commencé.
+
+
+## 16. Complément : premier 12 PA appris (25 septembre 2026)
+
+Constat en jeu : 12 PA affiché « Inconnu ». Cause : aucun gabarit du chiffre 2 côté PA. Le seul
+12 PA confirmé était dans un groupe TEST gelé. Le lecteur répondait UNKNOWN, conformément à la règle.
+
+Nouvelle vérité humaine : `hud-collect-20260925-173806/obs_4616a54805f341df` (12 PA, 6 PM),
+plus la confirmation HUD d'une frame existante (15 PA, 6 PM).
+
+Défaut de répartition corrigé : la stratification des chiffres rares ne distinguait pas PA et PM.
+Le 2 PM déjà en TRAIN faisait considérer le chiffre 2 comme couvert : le nouveau 12 PA partait en
+VALIDATION, alors que les gabarits sont appris séparément par compteur. Les chiffres sont
+maintenant qualifiés (`AP:2`, `MP:2`). Les groupes déjà enregistrés et le TEST gelé ne bougent pas.
+
+Banc sur copie isolée (`data/validation/hud-ap12` avant, `hud-ap12b` après) :
+
+| | Gabarits PA | TEST : 12 PA gelé | Précision acceptée TRAIN / VAL / TEST | Couverture TEST | 1/7 |
+|---|---|---|---|---|---|
+| avant | 0 1 3 4 5 7 8 9 | UNKNOWN | 1,000 / 1,000 / 1,000 | 0,923 | VALIDATED |
+| après | 0 1 **2** 3 4 5 7 8 9 | **12** | 1,000 / 1,000 / 1,000 | 0,962 | VALIDATED |
+
+Le 12 PA du TEST vient d'un groupe indépendant, jamais utilisé pour apprendre. Aucun seuil n'est
+modifié. Le 2 PA repose encore sur un seul exemple TRAIN.
+
+Gabarits installés dans `%LOCALAPPDATA%\PythonBot\data\hud_templates`. L'ancien jeu est
+sauvegardé sous `data\backup\hud_templates-20260925-174535`. Le registre de split du corpus
+utilisateur n'est pas réécrit.

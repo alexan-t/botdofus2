@@ -237,11 +237,17 @@ def _groups(repository: CorpusRepository, entries, annotations) -> dict[str, str
 
 
 def _group_digits(entries, annotations, group_by_observation, require_human: bool) -> dict[str, set[str]]:
+    """Chiffres par groupe, qualifiés par compteur (``AP:2``, ``MP:2``).
+
+    Les templates sont appris séparément pour PA et PM : un 2 PM en TRAIN n'apprend pas le 2 PA.
+    La stratification doit donc garantir chaque chiffre de chaque compteur en TRAIN.
+    """
     digits: dict[str, set[str]] = defaultdict(set)
     for entry in entries:
-        for truth in _confirmed_truths(annotations[entry.observation_id], require_human):
+        truths = _confirmed_truths(annotations[entry.observation_id], require_human)
+        for field, truth in zip(("AP", "MP"), truths):
             if truth is not None:
-                digits[group_by_observation[entry.observation_id]].update(str(truth))
+                digits[group_by_observation[entry.observation_id]].update(f"{field}:{digit}" for digit in str(truth))
     return digits
 
 
