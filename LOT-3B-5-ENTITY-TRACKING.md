@@ -1010,3 +1010,159 @@ ACTIONS: NONE
 ```
 
 Les autres statuts de 15.13 sont inchangés. **LOT 3B-5 non finalisé**, version 0.4.3.
+
+
+### 15.15 Correctif UI et activation runtime réelle
+
+LOT 3B-5C-FIX, 25 septembre 2026. Détecteur et tracker non modifiés, aucun seuil changé, TEST
+non réutilisé, aucune nouvelle collecte. Version **0.4.3**.
+
+**Git initial.** Branche `lot-3b-5-entity-tracking`, HEAD
+`b8d86fc080983ff9cb61fe221a69d23c75762367` (`b8d86fc`). Working tree propre, aucun fichier
+modifié ni non suivi. `git diff --check` propre.
+
+**Bug UI reproduit et cause.** Dans « Annoter les entités », la case de confirmation de suivi
+était relue depuis le corpus à chaque changement de frame. Cochée puis suivie d'une navigation,
+elle était décochée au clic sur « Enregistrer la confirmation de la séquence ». Le premier essai
+réel de l'utilisateur a été perdu ainsi, sans message. Un premier correctif (`df43418`)
+conservait la coche pendant la navigation. Ce sous-lot le complète :
+
+- état local **par séquence** (`tracking_sequence_id`) : la valeur non enregistrée survit à la
+  navigation entre les frames de la séquence ;
+- état « dirty » explicite (`tracking_confirmation_dirty()`) : valeur locale différente de la
+  valeur enregistrée. Une ligne d'état l'affiche sous la case (enregistrée, cochée non
+  enregistrée, retrait non enregistré, invalidée) ;
+- en quittant une séquence avec une modification non enregistrée (sélecteur, frame suivante qui
+  change de séquence, fermeture) : « Vous avez une modification de confirmation non
+  enregistrée. », avec [Enregistrer] [Ignorer] [Annuler]. Annuler garde la séquence et la coche ;
+  rien n'est perdu en silence ;
+- modification, effacement ou déplacement d'une identité E1…E8 : case décochée et message
+  « Confirmation de suivi invalidée après modification des identités. » ;
+- bouton sans case cochée : avertissement, aucune écriture ;
+- écriture de séquence inchangée : toutes les annotations de la séquence, rollback complet en cas
+  d'échec.
+
+**Tests UI** (`tests/test_tracking_review_ui.py`, 7/7) :
+`test_tracking_checkbox_survives_frame_navigation_before_save`,
+`test_tracking_confirmation_is_sequence_scoped`,
+`test_switch_sequence_warns_when_tracking_confirmation_dirty`,
+`test_save_tracking_confirmation_clears_dirty_state`,
+`test_editing_enemy_id_invalidates_sequence_confirmation`,
+`test_failed_sequence_confirmation_rolls_back_all_annotations` (échec simulé à la 3ᵉ écriture :
+octets identiques à l'origine, séquence non confirmée),
+`test_old_unverified_sequence_remains_unverified`.
+
+**État runtime avant.** `%LOCALAPPDATA%\PythonBot\data\entity_profiles` : `active.json` présent,
+génération active `20260925-133324-6172ee19`, seule génération. Aucun ancien fichier racine
+(`team_markers.json`, `player_<id>.json`). Six fichiers, tous valides (`validate_payload`) :
+
+| Fichier | SHA-256 (16) | Contenu |
+|---|---|---|
+| `player_train_9a0751d48681994e.json` | `1b232415d7687fa4` | V2, human_confirmed, 9 exemples, 7 prototypes, tol. 20 / marge 5 |
+| `player_train_e561118fd8115c8f.json` | `07c80853f00bf79d` | V2, human_confirmed, 10 exemples, 8 prototypes, tol. 20 / marge 5 |
+| `team_markers_9a0751d48681994e.json` | `d73b1b26e17ec93b` | v1, joueur 3,78, ennemi 120,52, partiel ennemi autorisé |
+| `team_markers_e561118fd8115c8f.json` | `5f36b11df6767dc6` | v1, joueur 2,20, ennemi 118,84, partiel refusé |
+| `entity_split_registry.v2.json` | `7376dfad9c9aa412` | v2, 10 groupes, 1 migration, TEST gelé conservé |
+| `installation.json` | `d5689612c23d7d52` | provenance TRAIN |
+
+**Dry-run, sans écriture.** `prepare_installation` sur le corpus runtime avec le registre actif :
+les six fichiers produits sont **identiques** aux fichiers actifs, hors dates et empreinte
+corpus. Pourtant le corpus a reçu depuis 13 h 33 les confirmations d'identité et des vérités
+HUD : ces changements n'affectent pas les profils TRAIN. Corpus runtime avant et après : 980
+fichiers, 0 différence.
+
+```text
+RUNTIME INSTALL: ALREADY ACTIVE
+```
+
+Aucune réinstallation. Sauvegarde `data\backup\entity-runtime-20260925-133324-6172ee19` :
+`backup.json` et registre vide. Elle décrit l'état antérieur à la première installation :
+aucun pointeur, aucun profil. Empreintes de la sauvegarde intactes. Une restauration retirerait
+le pointeur (vérifié sans restauration réelle).
+
+**Pointeur atomique.** Un correctif de chargement : `load_team_profile` pouvait compléter une
+génération active privée de profil d'équipe par l'ancien `team_markers.json` racine, donc mélanger
+deux générations. Avec `active.json`, ce repli est désormais interdit ; il reste seulement sans
+génération active (compatibilité 3B-5). Test ajouté
+`test_runtime_pointer_failures_are_prudent`. Génération inexistante, `active.json` illisible,
+chemin hors des générations et JSON non objet donnent tous zéro profil. Un profil joueur corrompu
+donne un joueur absent. Un profil d'équipe manquant donne une équipe absente, sans repli.
+
+**Chargement réel par RealCombatObserver** (`data/validation/lot3b5c-fix/runtime-load-proof.json`).
+Stockage réel `%LOCALAPPDATA%\PythonBot\data`, calibration réelle du profil 1 lue en lecture seule,
+profils chargés par le constructeur `RealCombatObserver` (donc `_load_profiles`) :
+
+```text
+LAYOUT: 9a0751d48681994e            LAYOUT: e561118fd8115c8f
+PLAYER PROFILE: player_train_9a0751d48681994e.json    PLAYER PROFILE: player_train_e561118fd8115c8f.json
+PLAYER PROFILE VERSION: 2           PLAYER PROFILE VERSION: 2
+PLAYER SAMPLES: 9 (7 prototypes)    PLAYER SAMPLES: 10 (8 prototypes)
+TEAM PROFILE: team_markers_9a0751d48681994e.json      TEAM PROFILE: team_markers_e561118fd8115c8f.json
+LOAD STATUS: PASS                   LOAD STATUS: PASS
+PROFILE ROOT: C:\Users\Alpha5\AppData\Local\PythonBot\data\entity_profiles\generations\20260925-133324-6172ee19
+```
+
+- La calibration courante de l'utilisateur correspond au nouveau layout `9a0751d48681994e` et
+  charge ses profils (PASS).
+- Layout inconnu : aucun profil chargé (`NO_PROFILE`), aucun profil d'un autre layout.
+- Aucun repli caché : il n'existe aucune désignation manuelle `player_<id>.json` dans les
+  données. Si une désignation existait pour un autre layout, elle serait écartée par le contrôle
+  de compatibilité.
+- Stockage inchangé pendant la preuve : profils (7 fichiers), corpus (980), gabarits HUD (21),
+  base SQLite.
+
+**Build canonique et smoke.** `.\build_exe.ps1` : `dist\PythonBot\PythonBot.exe`, 339,1 Mio.
+Smoke `--package-smoke-test` depuis cet exécutable, sur une copie des données runtime vérifiée
+identique fichier par fichier (corpus, profils, gabarits HUD, GameData, SQLite) :
+`success=true`, `frozen=true`.
+
+- Génération active et deux layouts chargés par `RealCombatObserver`, PASS ; layout inconnu :
+  aucun profil.
+- `PlayerVisualProfileV2`, `TeamMarkerProfile`, `CellEntityDetector`, `EntityTracker` présents.
+- UI de suivi importable, séquence-scopée, message d'avertissement présent.
+- Grille GameData 560 cellules (`GridProjector`), HUD (fixture 7), RapidOCR (« 3 PA Portee 1-4 »,
+  0,9995), `action_executor_invoked=false`.
+- Détection de fenêtre DOFUS volontairement désactivée : la fenêtre du jeu n'est pas activée.
+  Le libellé « aucune fenêtre détectée » du rapport désigne cette désactivation, pas une recherche.
+
+**Non-régressions**, sur une copie fidèle du corpus runtime (980 fichiers identiques). Lancé
+directement sur le corpus runtime, le banc HUD réécrirait `hud_manifest.json`, le registre HUD
+et les gabarits installés, ce qui contredit le corpus immuable. Seul le `hud_manifest.json` de la
+copie a changé ; celui du corpus runtime reste daté du 24/09 14 h 38.
+
+- GRID : exploration faux combat 0/14, combat 12/12, visibilité 26/26, alignement 12/12.
+- HUD : 142 vérités humaines, précision acceptée 1,000 en TRAIN, VALIDATION et TEST
+  (spécialisé et combiné), 0 lecture acceptée fausse, 1/7 VALIDATED, PASS. Gabarits recalculés
+  identiques aux gabarits installés.
+
+**Tracking gelé.** Aucune modification du tracker, des coûts, de la persistance ni des seuils.
+Aucun bug métrique trouvé. Mesures conservées : TEST 35/45 associations, 3 ID switches,
+5 fragmentations, 2 réassociations fausses ; référence gloutonne 9 switches.
+
+**Tests.** `test_entity_runtime` 8, `test_entity_corpus` 18, `test_entity_tracking` 18,
+`test_entity_repair` 15, `test_tracking_review_ui` 7 ; suite complète **391 réussis** ;
+`compileall` et `git diff --check` réussis.
+
+**Limites.** Détection et suivi inchangés, donc toujours PARTIAL. Aucune occultation réelle.
+Aucune vérité EMPTY suffisante. Nouveau layout sans VALIDATION indépendante. Le 4 PM du HUD n'a
+pas d'exemple hors TRAIN. Aucune vérification visuelle en partie réelle dans ce sous-lot.
+
+```text
+IMPLEMENTATION: PASS
+REAL ENTITY CORPUS: PARTIAL
+PLAYER DETECTION: PARTIAL
+ENEMY DETECTION: PARTIAL
+GLOBAL TRACKING: PARTIAL
+OCCLUSION HANDLING: NOT OBSERVED
+CELL OCCUPANCY: PARTIAL
+HUD REGRESSION: NONE
+GRID REGRESSION: NONE
+RUNTIME PROFILES: PASS
+TRACKING UI: PASS
+ACTIONS: NONE
+```
+
+IMPLEMENTATION PASS porte sur ce sous-lot seulement. LOT 3B-5 non finalisé, pas de 0.5.0,
+pas de LOT 3B-6. Décision suivante à prendre par l'utilisateur : (A) améliorer 3B-5 sur de
+nouvelles données indépendantes, ou (B) accepter 3B-5 en PARTIAL prudent et ouvrir 3B-6 en
+lecture seule.
