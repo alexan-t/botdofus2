@@ -24,6 +24,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--entity-layout", help="Digest de disposition à mesurer")
     parser.add_argument("--entities", action="store_true",
                         help="LOT 3B-5 : entités par cellule et suivi global (vérité humaine)")
+    parser.add_argument("--entities-3b5d", action="store_true",
+                        help="LOT 3B-5D : splits déclarés par combat, vérités EMPTY échantillonnées, verdicts")
+    parser.add_argument("--freeze-sha", help="3B-5D : commit de gel exigé pour mesurer TEST")
+    parser.add_argument("--diagnostic-rerun", action="store_true",
+                        help="3B-5D : re-mesure TEST déjà vus, enregistrée comme diagnostic (pas un TEST)")
     parser.add_argument("--hud-split", action="store_true",
                         help="LOT 3B-4R2 : reconstruit explicitement le split HUD (TEST gelé) et affiche la distribution")
     parser.add_argument("--client", type=Path, help="Dossier client GameData (défaut : réglage de l'application)")
@@ -46,6 +51,8 @@ def main(argv: list[str] | None = None) -> int:
     repository = CorpusRepository(args.corpus_root)
     if args.grid_validation:
         return _grid_validation(repository, args)
+    if args.entities_3b5d:
+        return _entities_3b5d(repository, args)
     if args.entities:
         from combatbot.corpus.entity_benchmark import run_entity_benchmark, write_entity_report
         report = run_entity_benchmark(repository, splits=tuple(args.entity_splits) if args.entity_splits else None,
@@ -95,6 +102,33 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def _entities_3b5d(repository: CorpusRepository, args) -> int:
+    import json
+    from combatbot.corpus.entity_benchmark import run_entity_benchmark, write_entity_report
+    from combatbot.corpus.validation_3b5d import check_freeze, guard_test_run, markdown_3b5d, verdicts
+    splits = tuple(args.entity_splits or ("train", "validation"))
+    run = None
+    if "test" in splits:
+        if not args.freeze_sha:
+            raise SystemExit("TEST exige --freeze-sha : geler et committer le code avant la mesure.")
+        freeze = check_freeze(args.freeze_sha, PROJECT_ROOT)
+    report = run_entity_benchmark(repository, splits=splits, layout=args.entity_layout, declared_only=True)
+    if "test" in splits:
+        groups = sorted({f["group_id"] for f in report["frames_detail"] if f["split"] == "test"})
+        if not groups:
+            raise SystemExit("Aucun combat TEST déclaré et annoté.")
+        run = guard_test_run(repository, groups, freeze, diagnostic_rerun=args.diagnostic_rerun)
+    results = [verdicts(report, split) for split in splits]
+    output = args.output_dir or (PROJECT_ROOT / "data" / "validation" / "lot3b5d" / "benchmarks")
+    write_entity_report(report, output)
+    stem = "-".join(splits)
+    (output / f"verdicts-{stem}.json").write_text(json.dumps({"run": run, "results": results}, indent=2),
+                                                  encoding="utf-8")
+    (output / f"entities-3b5d-{stem}.md").write_text(markdown_3b5d(report, results, run), encoding="utf-8")
+    print(markdown_3b5d(report, results, run))
+    return 0
+
+
 def _install_entities(args) -> int:
     import json
     from combatbot.entity_runtime import (
@@ -105,9 +139,13 @@ def _install_entities(args) -> int:
     if not registry_path.is_file():
         # Préserve le TEST 3B-5B du projet lors de la première installation, sans répartition nouvelle.
         registry_path = PROJECT_ROOT / "data/validation/lot3b5b-reprise/corpus/manifests/entity_split_registry.json"
-    if not registry_path.is_file():
-        raise ValueError("Registre gelé requis : préciser --entity-split-registry")
-    plan = prepare_installation(data, read_json(registry_path))
+    declared_only = not registry_path.is_file()
+    if declared_only:
+        # LOT 3B-5D (runtime neuf) : aucun registre historique ; seuls les combats au split déclaré
+        # à la capture sont utilisés, TRAIN seulement pour les profils.
+        print("Aucun registre historique : splits déclarés à la capture uniquement.", flush=True)
+    seed = {"schema_version": 1, "groups": {}} if declared_only else read_json(registry_path)
+    plan = prepare_installation(data, seed, declared_only=declared_only)
     print("DRY-RUN : corpus lu uniquement ; apprentissage TRAIN ; destination :", data, flush=True)
     print(json.dumps([{k: v for k, v in s.items() if k != "diagnostics"} for s in plan["summary"]], indent=2), flush=True)
     print("Fichiers prévus :", ", ".join(plan["files"]), flush=True)

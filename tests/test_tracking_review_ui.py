@@ -9,6 +9,7 @@ import pytest
 pytest.importorskip("PySide6")
 from PySide6.QtWidgets import QApplication
 
+from entity_fixtures import decide_samples
 from test_entity_corpus import at, build_corpus
 from combatbot.corpus import repository as repository_module
 from combatbot.corpus.tracking_metrics import tracking_metrics
@@ -124,6 +125,7 @@ def test_editing_enemy_id_invalidates_sequence_confirmation(dialog, app) -> None
     assert not dialog.tracking_confirmed.isChecked()
     assert dialog_module.TRACKING_INVALIDATED in dialog.tracking_state.text()
     assert dialog.status.text() == dialog_module.TRACKING_INVALIDATED
+    decide_samples(dialog)
     dialog._save()
     assert not dialog.repository.tracking_sequence_confirmed(sequence)
     assert all(not dialog.repository.read_annotation(e).tracking_identity_confirmed

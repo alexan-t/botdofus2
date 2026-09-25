@@ -12,7 +12,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
 
-from entity_fixtures import BLUE, RED, draw_entity, ground, region, synthetic_grid
+from entity_fixtures import BLUE, RED, decide_samples, draw_entity, ground, region, synthetic_grid
 from combatbot.corpus.entity_benchmark import entity_inventory, grid_from_document, run_entity_benchmark
 from combatbot.corpus.models import Annotation, CorpusEntry, CorpusManifest
 from combatbot.corpus.repository import CorpusRepository
@@ -126,7 +126,7 @@ def test_entity_benchmark_before_after_and_tracking(tmp_path) -> None:
     assert tracking["occlusions_observed"] == 3 and tracking["occlusion_recovered"] == 3
     assert all("tracked_entities" in frame and "greedy_tracks" in frame for frame in report["frames_detail"])
     # BEFORE est mesuré sur les mêmes frames (le banc réel compare ; ici on vérifie sa présence).
-    assert set(report["before"]["all"]) == {"player", "enemies", "cells"}
+    assert set(report["before"]["all"]) == {"player", "enemies", "cells", "occupancy_truth"}
     assert report["before"]["all"]["player"]["correct"] == 0  # aucune référence joueur dans le corpus
 
 
@@ -167,6 +167,7 @@ def test_annotation_dialog_saves_human_truth_without_prediction(tmp_path) -> Non
     dialog._assign(at(-1), "PLAYER")
     dialog._assign(at(3), "E1")
     dialog._assign(at(3, 1), "EMPTY")
+    decide_samples(dialog)
     dialog._save()
     annotation = repository.read_annotation(repository.list_entries()[0].observation_id)
     assert annotation.player_cell_id_truth == at(-1)
@@ -196,6 +197,7 @@ def test_annotation_hidden_player_and_multiple_anonymous_enemies(tmp_path) -> No
     dialog._assign(at(2), "ENEMY")
     dialog._assign(at(3), "ENEMY")
     dialog.tactical.setCheckState(Qt.CheckState.Unchecked)
+    decide_samples(dialog)
     dialog._save()
     saved = repository.read_annotation(repository.list_entries()[0])
     assert saved.player_visibility == "NOT_VISIBLE" and saved.player_cell_id_truth is None
@@ -261,6 +263,7 @@ def test_identity_review_ui_preserves_source_and_invalidates_changed_labels(tmp_
                for e in dialog.entries)
     dialog._assign(at(3), "E1")
     assert not dialog.tracking_confirmed.isChecked()
+    decide_samples(dialog)
     dialog._save()
     assert not repository.tracking_sequence_confirmed(sequence_id)
     assert all(not repository.read_annotation(e).tracking_identity_confirmed for e in dialog.entries)

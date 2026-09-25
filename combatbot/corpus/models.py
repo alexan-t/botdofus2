@@ -23,7 +23,10 @@ ENTITY_FRAME_PHASES = {"placement", "debut_combat", "mon_tour", "tour_ennemi", "
                        "changement_tour", "exploration", "autre"}
 ENTITY_FIELDS = ("entity_annotation_source", "entity_confirmed_at", "player_cell_id_truth", "player_visibility",
                  "enemy_cells_truth", "enemy_occluded_tracks", "empty_confirmed_cells", "frame_phase",
-                 "occlusion", "tactical_mode", "tracking_identity_confirmed", "tracking_identity_source", "tracking_confirmed_at", "tracking_sequence_id")
+                 "occlusion", "tactical_mode", "tracking_identity_confirmed", "tracking_identity_source", "tracking_confirmed_at", "tracking_sequence_id",
+                 "sampled_cells_truth", "sampled_cells_version")
+# LOT 3B-5D : décision humaine sur une cellule tirée indépendamment des prédictions.
+SAMPLED_CELL_LABELS = {"EMPTY", "OCCUPIED", "UNKNOWN"}
 
 
 def _optional_bool(value: object, field_name: str) -> bool | None:
@@ -131,6 +134,9 @@ class Annotation:
     tracking_confirmed_at: str | None = None
     tracking_sequence_id: str | None = None
     tactical_mode: bool | None = None
+    # LOT 3B-5D : {"cell_id": int, "label": EMPTY | OCCUPIED | UNKNOWN}, échantillon versionné.
+    sampled_cells_truth: tuple[dict[str, object], ...] = ()
+    sampled_cells_version: str | None = None
     schema_version: int = SCHEMA_VERSION
 
     @property
@@ -181,6 +187,18 @@ class Annotation:
             raise ValueError("Joueur VISIBLE : exactement une cellule joueur est requise")
         if self.entities_confirmed and self.player_visibility is None:
             raise ValueError("Une vérité entités exige player_visibility")
+        sampled = [item.get("cell_id") for item in self.sampled_cells_truth]
+        if self.sampled_cells_truth and not self.sampled_cells_version:
+            raise ValueError("Un échantillon de cellules exige sa version")
+        if any(isinstance(cell, bool) or not isinstance(cell, int) or not 0 <= cell < 560 for cell in sampled):
+            raise ValueError("Cellule échantillonnée invalide")
+        if len(sampled) != len(set(sampled)):
+            raise ValueError("Une cellule échantillonnée ne peut apparaître qu'une fois")
+        for item in self.sampled_cells_truth:
+            if item.get("label") not in SAMPLED_CELL_LABELS:
+                raise ValueError(f"Décision de cellule échantillonnée invalide : {item.get('label')}")
+            if item["label"] == "EMPTY" and item["cell_id"] in occupied:
+                raise ValueError("Une cellule échantillonnée VIDE ne peut pas porter d'entité")
 
     @property
     def human_confirmed(self) -> bool:
@@ -258,6 +276,7 @@ class Annotation:
             "tracking_identity_source": self.tracking_identity_source,
             "tracking_confirmed_at": self.tracking_confirmed_at,
             "tracking_sequence_id": self.tracking_sequence_id,
+            "sampled_cells_version": self.sampled_cells_version,
         }
         result.update({key: value for key, value in scalar_values.items() if value is not None})
         if self.truth_history:
@@ -268,6 +287,8 @@ class Annotation:
             result["enemy_occluded_tracks"] = list(self.enemy_occluded_tracks)
         if self.empty_confirmed_cells:
             result["empty_confirmed_cells"] = list(self.empty_confirmed_cells)
+        if self.sampled_cells_truth:
+            result["sampled_cells_truth"] = [dict(item) for item in self.sampled_cells_truth]
         if self.player is not None:
             result["player"] = self.player.to_dict()
         for key, values in (
@@ -338,6 +359,9 @@ class Annotation:
             tracking_identity_source=raw.get("tracking_identity_source"),
             tracking_confirmed_at=raw.get("tracking_confirmed_at"),
             tracking_sequence_id=raw.get("tracking_sequence_id"),
+            sampled_cells_truth=tuple({"cell_id": int(item["cell_id"]), "label": str(item.get("label"))}
+                                      for item in raw.get("sampled_cells_truth", ()) if isinstance(item, dict)),
+            sampled_cells_version=raw.get("sampled_cells_version"),
             schema_version=int(raw.get("schema_version", SCHEMA_VERSION)),
         )
         item.validate()

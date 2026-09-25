@@ -99,6 +99,30 @@ class EntitySample:
     tracking_identity_source: str | None = None
     tracking_confirmed_at: str | None = None
     tracking_sequence_id: str | None = None
+    sampled_cells: tuple[tuple[int, str], ...] = ()
+    split_declared: bool = False
+
+
+DECLARABLE_SPLITS = ("train", "validation", "test")
+
+
+def declared_split(document: dict) -> str | None:
+    """LOT 3B-5D : split choisi par l'utilisateur au démarrage de la capture du combat."""
+    value = (document.get("capture") or {}).get("entity_split_declared")
+    return value if value in DECLARABLE_SPLITS else None
+
+
+def _declared_groups(rows) -> dict[str, str | None]:
+    """Un combat entier appartient à un seul split : toute frame divergente est une erreur."""
+    values: dict[str, set] = defaultdict(set)
+    for entry, _annotation, document in rows:
+        values[_group(entry, document)].add(declared_split(document))
+    result = {}
+    for group, splits in values.items():
+        if len(splits) > 1:
+            raise ValueError(f"Split déclaré incohérent dans le combat {group} : {sorted(map(str, splits))}")
+        result[group] = next(iter(splits))
+    return result
 
 
 def _group(entry, document) -> str:
@@ -116,11 +140,14 @@ def _registry(repository: CorpusRepository) -> dict[str, Any]:
 
 
 def entity_inventory(repository: CorpusRepository, *, freeze: bool = True,
-                     layout_coverage: bool = True, registry_override: dict | None = None) -> list[EntitySample]:
+                     layout_coverage: bool = True, registry_override: dict | None = None,
+                     declared_only: bool = False) -> list[EntitySample]:
     """Observations annotées (human_confirmed) ; split par combat, TEST gelé une fois attribué.
 
     ``layout_coverage`` (LOT 3B-5B) : chaque disposition annotée reçoit si possible un groupe TRAIN,
     jamais pris dans TEST. ``False`` sert uniquement à reproduire la baseline historique.
+    LOT 3B-5D : un split déclaré à la capture s'impose (jamais déplacé par la couverture de layout) ;
+    un désaccord avec le registre est une erreur. ``declared_only`` écarte les combats non déclarés.
     """
     rows = []
     for entry in repository.list_entries():
@@ -131,15 +158,25 @@ def entity_inventory(repository: CorpusRepository, *, freeze: bool = True,
         if grid_from_document(document) is None:
             continue
         rows.append((entry, annotation, document))
+    declared = _declared_groups(rows)
+    if declared_only:
+        rows = [row for row in rows if declared[_group(row[0], row[2])]]
     registry = registry_override if registry_override is not None else _registry(repository)
     groups = {_group(entry, document) for entry, _annotation, document in rows}
+    for group in groups:
+        known = registry.get("groups", {}).get(group)
+        if declared[group] and known and known != declared[group]:
+            raise ValueError(f"Combat {group} : split déclaré {declared[group]} ≠ registre {known}")
     layouts = defaultdict(set)
     for entry, _annotation, document in rows:
+        if declared[_group(entry, document)]:
+            continue
         signature = ((document.get("capture") or {}).get("calibration") or {}).get("layout_signature")
         layouts[layout_digest(signature)].add(_group(entry, document))
     if layout_coverage:
         registry = cover_layouts(registry, layouts)
     fixed = {group: split for group, split in registry["groups"].items() if group in groups}
+    fixed.update({group: declared[group] for group in groups if declared[group]})
     splits = _assign_splits({group: set() for group in groups}, fixed) if groups else {}
     if freeze and groups:
         # Une fois attribué, un groupe TEST reste TEST ; les autres groupes gardent leur split.
@@ -160,7 +197,9 @@ def entity_inventory(repository: CorpusRepository, *, freeze: bool = True,
             calibration.get("layout_signature"), capture.get("analysis_ms"), document,
             bool(annotation.tracking_identity_confirmed and annotation.tracking_identity_source),
             annotation.tracking_identity_source, annotation.tracking_confirmed_at,
-            annotation.tracking_sequence_id))
+            annotation.tracking_sequence_id,
+            tuple((int(item["cell_id"]), str(item["label"])) for item in annotation.sampled_cells_truth),
+            declared[_group(entry, document)] is not None))
     return sorted(samples, key=lambda item: (item.session_id, item.frame_index))
 
 
@@ -392,6 +431,22 @@ def _frame_metrics(sample: EntitySample, player: int | None, enemies: list[int],
         elif state == "FREE":
             c.add("free_wrong" if cell_id in entity_cells else
                   "free_correct" if cell_id in empty_cells else "free_unlabelled")
+    # LOT 3B-5D : FREE mesuré seulement sur des vérités humaines (échantillon aveugle + entités).
+    sampled_empty = {cell for cell, label in sample.sampled_cells if label == "EMPTY"}
+    sampled_occupied = {cell for cell, label in sample.sampled_cells if label == "OCCUPIED"}
+    occupied_truth = entity_cells | sampled_occupied
+    c.add("sample_cells", len(sample.sampled_cells))
+    c.add("sample_empty_truth", len(sampled_empty))
+    c.add("sample_occupied_truth", len(sampled_occupied))
+    c.add("sample_unknown_truth", sum(label == "UNKNOWN" for _cell, label in sample.sampled_cells))
+    c.add("truth_occupied_cells", len(occupied_truth))
+    for cell_id in sampled_empty:
+        c.add(f"sample_empty_pred_{occupancy.get(cell_id, 'UNSCORED')}")
+    for cell_id in occupied_truth:
+        state = occupancy.get(cell_id, "UNSCORED")
+        c.add(f"occupied_truth_pred_{state}")
+        if state == "FREE":
+            c.add("false_free_entity" if cell_id in entity_cells else "false_free_sampled")
     return {"observation_id": sample.observation_id, "split": sample.split, "player_truth": sample.player_cell,
             "player_pred": player, "enemies_truth": truth, "enemies_pred": enemies, "unknown": unknown}
 
@@ -425,7 +480,24 @@ def _summaries(counts: dict[str, _Counts]) -> dict[str, object]:
                   "free_unlabelled": c["free_unlabelled"],
                   "occupied_unlabelled": c["occupied_unlabelled"],
                   "unknown_rate": _ratio(c["state_UNKNOWN"], cells), "cells_scored": cells},
+        "occupancy_truth": _occupancy_truth(c),
     }
+
+
+def _occupancy_truth(c: Counter) -> dict[str, object]:
+    """FREE sur vérités humaines : EMPTY échantillonnées vs cellules PLAYER/ENEMY/OCCUPIED."""
+    free_correct = c["sample_empty_pred_FREE"]
+    false_free = c["false_free_entity"] + c["false_free_sampled"]
+    return {"sampled_cells": c["sample_cells"], "empty_truth": c["sample_empty_truth"],
+            "occupied_truth_sampled": c["sample_occupied_truth"], "unknown_truth": c["sample_unknown_truth"],
+            "occupied_truth_total": c["truth_occupied_cells"],
+            "free_correct": free_correct, "false_free": false_free,
+            "false_free_on_player_or_enemy": c["false_free_entity"],
+            "empty_predicted_occupied": c["sample_empty_pred_OCCUPIED"],
+            "empty_predicted_unknown": c["sample_empty_pred_UNKNOWN"] + c["sample_empty_pred_UNSCORED"],
+            "occupied_predicted_unknown": c["occupied_truth_pred_UNKNOWN"] + c["occupied_truth_pred_UNSCORED"],
+            "free_precision": _ratio(free_correct, free_correct + false_free),
+            "free_coverage": _ratio(free_correct, c["sample_empty_truth"])}
 
 
 def _new_counts() -> dict[str, _Counts]:
@@ -521,8 +593,10 @@ def replay_timestamps(samples: list[EntitySample]) -> dict[str, tuple[float, str
 
 def run_entity_benchmark(repository: CorpusRepository, *, save_profiles: bool = False,
                          splits: tuple[str, ...] | None = None, layout: str | None = None,
-                         layout_coverage: bool = True, freeze: bool = False) -> dict[str, Any]:
-    samples = entity_inventory(repository, freeze=freeze, layout_coverage=layout_coverage)
+                         layout_coverage: bool = True, freeze: bool = False,
+                         declared_only: bool = False) -> dict[str, Any]:
+    samples = entity_inventory(repository, freeze=freeze, layout_coverage=layout_coverage,
+                               declared_only=declared_only)
     detector = CellEntityDetector()
     profiles_by_layout, diagnostics_by_layout = {}, {}
     # Nom distinct du paramètre ``layout`` (filtre) : la boucle ne doit pas l'écraser.
@@ -635,8 +709,10 @@ def run_entity_benchmark(repository: CorpusRepository, *, save_profiles: bool = 
         "tracking_verified": tracking_scopes(frames_after),
         "tracking_global": _tracking_metrics(sequences),
         "tracking_greedy_same_detections": _tracking_metrics(greedy_sequences),
-        "performance_ms": {name: {"mean": mean(values), "median": median(values), "max": max(values)}
+        "performance_ms": {name: {"mean": mean(values), "median": median(values),
+                                  "p95": float(np.percentile(values, 95)), "max": max(values), "count": len(values)}
                            for name, values in timings.items() if values},
+        "declared_splits": declared_only,
         "status": "INSUFFICIENT" if not split_counts.get("test") else "MEASURED",
         "frames_detail": frames_after,
     }

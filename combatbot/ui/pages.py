@@ -287,6 +287,13 @@ class CombatPage(QWidget):
             self.overlay_boxes[key] = box
         self.sequence_capture = QCheckBox("Enregistrer la séquence dans le corpus (entités, lecture seule)")
         entity_row.addWidget(self.sequence_capture)
+        # LOT 3B-5D : le split appartient au combat entier, déclaré avant la capture.
+        self.sequence_split = QComboBox()
+        for caption, value in (("Split : non déclaré", None), ("Split : TRAIN", "train"),
+                               ("Split : VALIDATION", "validation"), ("Split : TEST", "test")):
+            self.sequence_split.addItem(caption, value)
+        self.sequence_split.setToolTip("Combat entier. Fixé au démarrage de l'observation, non modifiable ensuite.")
+        entity_row.addWidget(self.sequence_split)
         entity_row.addStretch()
         real_layout.addLayout(entity_row)
         self.hover_info = QLabel("Survolez l'aperçu pour inspecter une cellule projetée.")
@@ -417,6 +424,7 @@ class CombatPage(QWidget):
     def set_observing(self, active: bool) -> None:
         self.observation_start.setEnabled(not active)
         self.observation_stop.setEnabled(active)
+        self.sequence_split.setEnabled(not active)
         self.select_player.setEnabled(active and self.observation_save.isEnabled())
         if not active:
             self.observation_help.setText("Observation arrêtée. Aucun clic n'a été envoyé au client DOFUS.")

@@ -285,6 +285,7 @@ class RealCombatObserver:
                 "capture": "client", "frame": "combat", "grid": "combat", "hud": "client",
             },
             "tactical_mode": self.capture_context.get("tactical_mode", "inconnu"),
+            "entity_split_declared": self.capture_context.get("entity_split_declared"),
             "grid_source": grid.grid_source,
             "grid_source_reason": resolution.reason if resolution else "LEGACY_PIPELINE",
             "map_id_declared": grid.map_id_declared,

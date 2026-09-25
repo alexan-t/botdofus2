@@ -394,8 +394,14 @@ class CorpusRepository:
                          enemies: list[tuple[int, str | None]], occluded_tracks: list[str] = (),
                          empty_cells: list[int] = (), frame_phase: str | None = None,
                          occlusion: bool | None = None, tactical_mode: bool | None = None,
-                         confirmed_at: str | None = None, tracking_identity_source: str | None = None) -> Annotation:
-        """Enregistre une vérité entités humaine ; les champs HUD et grille restent intacts."""
+                         confirmed_at: str | None = None, tracking_identity_source: str | None = None,
+                         sampled_cells: list[tuple[int, str]] | None = None,
+                         sampled_cells_version: str | None = None) -> Annotation:
+        """Enregistre une vérité entités humaine ; les champs HUD et grille restent intacts.
+
+        ``sampled_cells`` (LOT 3B-5D) : décisions EMPTY/OCCUPIED/UNKNOWN sur l'échantillon
+        déterministe ; ``None`` conserve l'échantillon déjà enregistré.
+        """
         entry = self.get_entry(observation_id)
         previous = self.read_annotation(entry) or Annotation(observation_id)
         stamp = confirmed_at or datetime.now().astimezone().isoformat(timespec="seconds")
@@ -410,6 +416,11 @@ class CorpusRepository:
             tracking_identity_source=tracking_identity_source or previous.tracking_identity_source,
             session_id=previous.session_id or entry.session_id,
         )
+        if sampled_cells is not None:
+            annotation = replace(
+                annotation, sampled_cells_truth=tuple({"cell_id": int(cell), "label": label}
+                                                      for cell, label in sampled_cells),
+                sampled_cells_version=sampled_cells_version if sampled_cells else None)
         self.save_annotation(annotation)
         return annotation
 

@@ -838,6 +838,7 @@ class MainWindow(QMainWindow):
                 "dpi": window_dpi(hwnd),
                 "window_id": f"dofus-{hwnd:x}",
                 "tactical_mode": "inconnu",
+                "entity_split_declared": self.combat.sequence_split.currentData(),
             },
         )
         self._last_observation = None

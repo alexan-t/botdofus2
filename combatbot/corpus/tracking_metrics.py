@@ -61,6 +61,8 @@ def tracking_metrics(frames: list[dict], *, greedy: bool = False) -> dict:
             "false_reassociations": false_reassociations if matched else None,
             "lost_tracks": lost, "recovered_tracks": recovered,
             "tracking_coverage": matched / truth_count if truth_count else None,
+            "switch_rate": switches / matched if matched else None,
+            "false_reassociation_rate": false_reassociations / matched if matched else None,
             "explicit_occlusion_annotations": explicit_occlusions,
             "occlusion_status": "NOT_OBSERVED" if not explicit_occlusions else "PARTIAL",
             "definitions": {"exact_track_associations": "Piste observée sur la cellule humaine exacte ; IDs arbitraires",
@@ -72,5 +74,6 @@ def tracking_metrics(frames: list[dict], *, greedy: bool = False) -> dict:
 def tracking_scopes(frames: list[dict]) -> dict:
     return {scope: {"global": tracking_metrics(rows), "greedy": tracking_metrics(rows, greedy=True)}
             for scope, rows in (("train", [f for f in frames if f["split"] == "train"]),
+                                ("validation", [f for f in frames if f["split"] == "validation"]),
                                 ("test", [f for f in frames if f["split"] == "test"]),
                                 ("all_verified", frames))}

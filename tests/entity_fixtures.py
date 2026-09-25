@@ -99,3 +99,10 @@ def draw_ring_arc(image: np.ndarray, cell, color, start: float, end: float, *, r
     points = np.stack([middle[0] + radius * (np.cos(angles) * u[0] + np.sin(angles) * v[0]),
                        middle[1] + radius * (np.cos(angles) * u[1] + np.sin(angles) * v[1])], axis=1)
     cv2.polylines(image, [np.round(points).astype(np.int32)], False, color, thickness, cv2.LINE_AA)
+
+
+def decide_samples(dialog, label: str = "SAMPLE_UNKNOWN") -> None:
+    """LOT 3B-5D : tranche les cellules échantillonnées restantes avant « Confirmer cette frame »."""
+    for cell_id in dialog.sample:
+        if not dialog._sample_decision(cell_id):
+            dialog._assign(cell_id, label)

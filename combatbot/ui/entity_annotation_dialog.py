@@ -4,6 +4,9 @@ La frame d'origine et la grille GameData projetée enregistrée avec l'observati
 le survol donne le cell ID, un zoom local aide à voir le marqueur au sol. Un clic sur une cellule
 choisit JOUEUR, ENNEMI (E1…E8), VIDE confirmé ou INCONNU. Tout se passe dans PythonBot : rien
 n'est cliqué dans DOFUS. La frame précédente n'est jamais recopiée dans la vérité.
+
+LOT 3B-5D : quelques cellules (contour jaune « ? ») sont tirées par ``empty_sampling`` sans
+regarder aucune prédiction ; chacune reçoit VIDE, OCCUPÉE ou INCONNU avant la confirmation.
 """
 
 from __future__ import annotations
@@ -16,11 +19,13 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from combatbot.corpus.empty_sampling import SAMPLE_VERSION, sample_cells
 from combatbot.corpus.models import ENTITY_FRAME_PHASES, CorpusEntry
 from combatbot.corpus.repository import CorpusRepository
 from combatbot.ui.images import bgr_to_pixmap
 
 ENEMY_LABELS = tuple(f"E{index}" for index in range(1, 9))
+SAMPLE_CAPTIONS = {"EMPTY": "vide", "OCCUPIED": "occupée", "UNKNOWN": "inconnu"}
 UNSAVED_TRACKING = "Vous avez une modification de confirmation non enregistrée."
 TRACKING_INVALIDATED = "Confirmation de suivi invalidée après modification des identités."
 PHASE_LABELS = {"placement": "Placement", "debut_combat": "Début de combat", "mon_tour": "Mon tour",
@@ -94,6 +99,8 @@ class EntityAnnotationDialog(QDialog):
         self.index = 0
         self.labels: dict[int, str] = {}   # cell_id -> PLAYER | E1… | ENEMY | EMPTY
         self.cells: list[dict] = []
+        self.sample: list[int] = []                # cellules tirées (indépendantes des prédictions)
+        self.sample_labels: dict[int, str] = {}    # cell_id -> EMPTY | OCCUPIED | UNKNOWN
         self.image: np.ndarray | None = None
         self.offset = (0, 0)               # recadrage sur l'arène (coordonnées de la frame)
         self.setWindowTitle("Annoter les entités — vérité humaine par cell ID")
@@ -214,6 +221,12 @@ class EntityAnnotationDialog(QDialog):
         self.cells = projected_cells(document)
         self.image = cv2.imread(str(self.repository.resolve(entry.paths["frame"])), cv2.IMREAD_COLOR)
         annotation = self.repository.read_annotation(entry)
+        size = None if self.image is None else (self.image.shape[1], self.image.shape[0])
+        self.sample = [item["cell_id"] for item in sample_cells(self.cells, entry.observation_id, frame_size=size)]
+        self.sample_labels = {}
+        if annotation is not None and annotation.sampled_cells_version == SAMPLE_VERSION:
+            self.sample_labels = {int(item["cell_id"]): str(item["label"]) for item in annotation.sampled_cells_truth
+                                  if int(item["cell_id"]) in self.sample}
         self.labels = {}
         if annotation is not None and annotation.entities_confirmed:
             if annotation.player_cell_id_truth is not None:
@@ -279,6 +292,15 @@ class EntityAnnotationDialog(QDialog):
             center = tuple(int(v) for v in cell["center"])
             cv2.putText(output, f"{text} {cell['cell_id']}", (center[0] - 22, center[1] + 5),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2, cv2.LINE_AA)
+        by_id = {int(cell["cell_id"]): cell for cell in self.cells}
+        for cell_id in self.sample:
+            decision = self._sample_decision(cell_id)
+            polygon = np.asarray(by_id[cell_id]["polygon"], np.int32)
+            cv2.polylines(output, [polygon], True, (0, 215, 255), 2 if decision else 3, cv2.LINE_AA)
+            if cell_id not in self.labels:
+                center = tuple(int(v) for v in by_id[cell_id]["center"])
+                cv2.putText(output, SAMPLE_CAPTIONS.get(decision, "?"), (center[0] - 18, center[1] + 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 215, 255), 2, cv2.LINE_AA)
         output = np.ascontiguousarray(output[y0:y1, x0:x1])
         self.canvas.image_size = (output.shape[1], output.shape[0])
         self.canvas.setPixmap(bgr_to_pixmap(output).scaled(
@@ -288,7 +310,17 @@ class EntityAnnotationDialog(QDialog):
         self.summary.setText(
             f"Joueur : {players[0] if players else ('non visible' if self.player_hidden.isChecked() else '—')}\n"
             f"Ennemis : {', '.join(f'{label}@{cell}' for label, cell in enemies) or '—'}\n"
-            f"Vides confirmées : {sum(label == 'EMPTY' for label in self.labels.values())}")
+            f"Vides confirmées : {sum(label == 'EMPTY' for label in self.labels.values())}\n"
+            f"Échantillon (jaune) : {sum(bool(self._sample_decision(c)) for c in self.sample)}/{len(self.sample)} décidées")
+
+    def _sample_decision(self, cell_id: int) -> str | None:
+        """Décision humaine sur une cellule tirée ; une entité annotée y vaut OCCUPÉE."""
+        label = self.labels.get(cell_id)
+        if label == "EMPTY":
+            return "EMPTY"
+        if label is not None:
+            return "OCCUPIED"
+        return self.sample_labels.get(cell_id)
 
     def _hover(self, point) -> None:
         point = self._frame_point(point)
@@ -308,7 +340,14 @@ class EntityAnnotationDialog(QDialog):
             return
         cell_id = int(cell["cell_id"])
         menu = QMenu(self)
-        actions = {menu.addAction("JOUEUR"): "PLAYER"}
+        actions = {}
+        if cell_id in self.sample:
+            for caption, decision in (("Échantillon : VIDE", "SAMPLE_EMPTY"),
+                                      ("Échantillon : OCCUPÉE (sans entité à nommer)", "SAMPLE_OCCUPIED"),
+                                      ("Échantillon : INCONNU", "SAMPLE_UNKNOWN")):
+                actions[menu.addAction(caption)] = decision
+            menu.addSeparator()
+        actions[menu.addAction("JOUEUR")] = "PLAYER"
         enemy_menu = menu.addMenu("ENNEMI")
         for label in ENEMY_LABELS:
             actions[enemy_menu.addAction(label)] = label
@@ -321,6 +360,18 @@ class EntityAnnotationDialog(QDialog):
         self._assign(cell_id, actions[chosen])
 
     def _assign(self, cell_id: int, label: str | None) -> None:
+        if label is not None and label.startswith("SAMPLE_"):
+            decision = label.removeprefix("SAMPLE_")
+            if decision == "EMPTY":
+                self._assign(cell_id, "EMPTY")
+                return
+            if self.labels.get(cell_id) == "EMPTY":
+                self.labels.pop(cell_id)
+            self.sample_labels[cell_id] = decision
+            self._render()
+            return
+        if label is None:
+            self.sample_labels.pop(cell_id, None)
         if label != self.labels.get(cell_id) and (
                 label in ENEMY_LABELS or self.labels.get(cell_id) in ENEMY_LABELS):
             self._invalidate_tracking()
@@ -350,6 +401,7 @@ class EntityAnnotationDialog(QDialog):
         if any(label in ENEMY_LABELS for label in self.labels.values()):
             self._invalidate_tracking()
         self.labels = {}
+        self.sample_labels = {}
         self._render()
 
     def _move(self, step: int) -> None:
@@ -536,6 +588,12 @@ class EntityAnnotationDialog(QDialog):
             QMessageBox.warning(self, "Annotation incomplète",
                                 "Désignez la cellule du joueur ou cochez « Joueur non visible ».")
             return
+        undecided = [cell for cell in self.sample if not self._sample_decision(cell)]
+        if undecided:
+            QMessageBox.warning(self, "Échantillon incomplet",
+                                f"Choisissez VIDE, OCCUPÉE ou INCONNU pour les {len(undecided)} cellule(s) jaunes "
+                                f"restantes : {', '.join(map(str, undecided))}.")
+            return
         enemies = [(cell, None if label == "ENEMY" else label) for cell, label in self.labels.items()
                    if label not in ("PLAYER", "EMPTY")]
         occluded = [value.strip().upper() for value in self.occluded_tracks.text().split(",") if value.strip()]
@@ -547,7 +605,9 @@ class EntityAnnotationDialog(QDialog):
                 empty_cells=[cell for cell, label in self.labels.items() if label == "EMPTY"],
                 frame_phase=self.phase.currentData(), occlusion=self.occlusion.isChecked() or None,
                 tactical_mode=(None if self.tactical.checkState() == Qt.CheckState.PartiallyChecked
-                               else self.tactical.checkState() == Qt.CheckState.Checked))
+                               else self.tactical.checkState() == Qt.CheckState.Checked),
+                sampled_cells=[(cell, self._sample_decision(cell)) for cell in self.sample],
+                sampled_cells_version=SAMPLE_VERSION)
         except ValueError as exc:
             QMessageBox.warning(self, "Annotation invalide", str(exc))
             return

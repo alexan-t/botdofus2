@@ -79,7 +79,7 @@ def validate_payload(name: str, raw: dict) -> None:
     json.dumps(raw, allow_nan=False)
 
 
-def prepare_installation(data: Path, seed_registry: dict) -> dict:
+def prepare_installation(data: Path, seed_registry: dict, *, declared_only: bool = False) -> dict:
     """Calcule en mémoire, sans écrire ni lancer de détection sur TEST."""
     from collections import defaultdict
     from combatbot.corpus.repository import CorpusRepository
@@ -90,7 +90,8 @@ def prepare_installation(data: Path, seed_registry: dict) -> dict:
     if not repository.manifest_path.is_file():
         raise ValueError("Corpus runtime absent")
     before = hashes(repository.root)
-    samples = entity_inventory(repository, freeze=False, registry_override=seed_registry)
+    samples = entity_inventory(repository, freeze=False, registry_override=seed_registry,
+                               declared_only=declared_only)
     layouts = defaultdict(set)
     for sample in samples:
         layouts[layout_digest(sample.layout_signature)].add(sample.group_id)
