@@ -21,6 +21,8 @@ from combatbot.corpus.repository import CorpusRepository
 from combatbot.ui.images import bgr_to_pixmap
 
 ENEMY_LABELS = tuple(f"E{index}" for index in range(1, 9))
+UNSAVED_TRACKING = "Vous avez une modification de confirmation non enregistrée."
+TRACKING_INVALIDATED = "Confirmation de suivi invalidée après modification des identités."
 PHASE_LABELS = {"placement": "Placement", "debut_combat": "Début de combat", "mon_tour": "Mon tour",
                 "tour_ennemi": "Tour ennemi", "animation_sort": "Animation de sort",
                 "changement_tour": "Changement de tour", "exploration": "Exploration", "autre": "Autre"}
@@ -134,10 +136,15 @@ class EntityAnnotationDialog(QDialog):
             "Cochez après avoir comparé cette frame aux autres frames du combat. "
             "Laissez décoché si les numéros ont été attribués à nouveau sur chaque image.")
         self._tracking_source: str | None = None
-        # Choix de la case par séquence, conservé pendant la navigation entre ses frames
-        # jusqu'à l'enregistrement (sinon la case serait rechargée à chaque frame).
+        # La confirmation de suivi appartient à la SÉQUENCE (tracking_sequence_id), pas à une frame.
+        # Valeur locale non enregistrée par séquence : conservée pendant la navigation entre ses
+        # frames ; « dirty » tant qu'elle diffère de la valeur enregistrée dans le corpus.
         self._pending_tracking: dict[str, bool] = {}
+        self._invalidated: set[str] = set()
+        self._current_sequence: str | None = None
         self.tracking_confirmed.toggled.connect(self._tracking_toggled)
+        self.tracking_state = QLabel()
+        self.tracking_state.setWordWrap(True)
         self.save_sequence = QPushButton("Enregistrer la confirmation de la séquence")
         self.save_sequence.clicked.connect(self._save_sequence)
         self._sequence_jobs = None
@@ -145,7 +152,7 @@ class EntityAnnotationDialog(QDialog):
 
         for widget in (self.player_hidden, QLabel("Phase de la frame :"), self.phase, self.occlusion,
                        self.tactical, QLabel("Ennemis occultés :"), self.occluded_tracks,
-                       self.tracking_confirmed, self.save_sequence):
+                       self.tracking_confirmed, self.tracking_state, self.save_sequence):
             side.addWidget(widget)
         self.summary = QLabel()
         self.summary.setWordWrap(True)
@@ -177,7 +184,7 @@ class EntityAnnotationDialog(QDialog):
         self.canvas.hovered.connect(self._hover)
         self.canvas.clicked.connect(self._menu)
         self.player_hidden.toggled.connect(self._player_visibility_changed)
-        self.occluded_tracks.textEdited.connect(lambda: self.tracking_confirmed.setChecked(False))
+        self.occluded_tracks.textEdited.connect(lambda _text: self._invalidate_tracking())
         self.sequence.currentIndexChanged.connect(self._select_sequence)
         self._show()
 
@@ -228,11 +235,16 @@ class EntityAnnotationDialog(QDialog):
         self.sequence.blockSignals(True)
         self.sequence.setCurrentIndex(self.sequence.findData(sequence_id))
         self.sequence.blockSignals(False)
+        self._current_sequence = sequence_id
+        saved = self.repository.tracking_sequence_confirmed(sequence_id)
+        if self._pending_tracking.get(sequence_id) == saved:
+            self._pending_tracking.pop(sequence_id, None)   # plus rien à enregistrer
+            self._invalidated.discard(sequence_id)
         pending = self._pending_tracking.get(sequence_id)
         self.tracking_confirmed.blockSignals(True)
-        self.tracking_confirmed.setChecked(pending if pending is not None
-                                           else self.repository.tracking_sequence_confirmed(sequence_id))
+        self.tracking_confirmed.setChecked(pending if pending is not None else saved)
         self.tracking_confirmed.blockSignals(False)
+        self._update_tracking_state()
         grid = document.get("grid_snapshot") or {}
         self.header.setText(
             f"Frame {self.index + 1}/{len(self.entries)} · <b>{entry.session_id}</b> · frame {entry.frame_index} · "
@@ -311,8 +323,7 @@ class EntityAnnotationDialog(QDialog):
     def _assign(self, cell_id: int, label: str | None) -> None:
         if label != self.labels.get(cell_id) and (
                 label in ENEMY_LABELS or self.labels.get(cell_id) in ENEMY_LABELS):
-            self.tracking_confirmed.setChecked(False)
-            self._tracking_source = None
+            self._invalidate_tracking()
         if label is None:
             self.labels.pop(cell_id, None)
         else:
@@ -336,43 +347,148 @@ class EntityAnnotationDialog(QDialog):
             self._render()
 
     def _clear(self) -> None:
+        if any(label in ENEMY_LABELS for label in self.labels.values()):
+            self._invalidate_tracking()
         self.labels = {}
-        self.tracking_confirmed.setChecked(False)
-        self._tracking_source = None
         self._render()
 
     def _move(self, step: int) -> None:
         if 0 <= self.index + step < len(self.entries):
+            target = self._sequence_ids[self.entries[self.index + step].observation_id]
+            if target != self._current_sequence and not self._leave_sequence_ok():
+                return
             self.index += step
             self._show()
 
     def _select_sequence(self, _index: int) -> None:
         selected = self.sequence.currentData()
+        if selected != self._current_sequence and not self._leave_sequence_ok():
+            self.sequence.blockSignals(True)
+            self.sequence.setCurrentIndex(self.sequence.findData(self._current_sequence))
+            self.sequence.blockSignals(False)
+            return
         self.index = next((i for i, e in enumerate(self.entries)
                            if self._sequence_ids[e.observation_id] == selected), self.index)
         self._show()
 
-    def _tracking_toggled(self, checked: bool) -> None:
-        if self.entries:
-            self._pending_tracking[self._sequence_ids[self.entries[self.index].observation_id]] = checked
+    # ------------------------------------------------------------------ confirmation de suivi
+    def tracking_confirmation_dirty(self, sequence_id: str | None = None) -> bool:
+        """Vrai si la valeur locale de la séquence diffère de la valeur enregistrée."""
+        sequence_id = sequence_id or self._current_sequence
+        if sequence_id is None or sequence_id not in self._pending_tracking:
+            return False
+        return self._pending_tracking[sequence_id] != self.repository.tracking_sequence_confirmed(sequence_id)
 
-    def _save_sequence(self) -> None:
-        if not self.entries:
+    def _tracking_toggled(self, checked: bool) -> None:
+        if self._current_sequence is None:
             return
-        sequence_id = self.sequence.currentData()
-        if not self.tracking_confirmed.isChecked() and not self.repository.tracking_sequence_confirmed(sequence_id):
-            message = ("Cochez « Mêmes E1/E2… pour les mêmes ennemis dans ce combat » avant d'enregistrer : "
-                       "aucune confirmation n'a été enregistrée.")
-            self.status.setText(message)
-            QMessageBox.warning(self, "Confirmation non cochée", message)
+        self._pending_tracking[self._current_sequence] = checked
+        if checked:
+            self._invalidated.discard(self._current_sequence)
+        self._update_tracking_state()
+
+    def _invalidate_tracking(self) -> None:
+        """Une identité E1/E2/E3 change : la confirmation de toute la séquence tombe, visiblement."""
+        sequence_id = self._current_sequence
+        if sequence_id is None:
             return
+        was_confirmed = self.tracking_confirmed.isChecked() or self.repository.tracking_sequence_confirmed(sequence_id)
+        self.tracking_confirmed.blockSignals(True)
+        self.tracking_confirmed.setChecked(False)
+        self.tracking_confirmed.blockSignals(False)
+        self._pending_tracking[sequence_id] = False
+        self._tracking_source = None
+        if was_confirmed:
+            self._invalidated.add(sequence_id)
+            self.status.setText(TRACKING_INVALIDATED)
+        self._update_tracking_state()
+
+    def _update_tracking_state(self) -> None:
+        sequence_id = self._current_sequence
+        if sequence_id is None:
+            self.tracking_state.setText("")
+            return
+        saved = self.repository.tracking_sequence_confirmed(sequence_id)
+        if self.tracking_confirmation_dirty(sequence_id):
+            if sequence_id in self._invalidated:
+                text = TRACKING_INVALIDATED + " Enregistrez la frame modifiée, puis reconfirmez la séquence."
+            elif self._pending_tracking[sequence_id]:
+                text = "Confirmation cochée, non enregistrée pour cette séquence."
+            else:
+                text = "Retrait de la confirmation non enregistré pour cette séquence."
+        else:
+            text = ("Confirmation de suivi enregistrée pour toute la séquence." if saved
+                    else "Séquence non confirmée pour le suivi.")
+        self.tracking_state.setText(text)
+
+    def _ask_unsaved_tracking(self) -> str:
+        """« save », « discard » ou « cancel » (isolé pour les tests)."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Confirmation de suivi")
+        box.setText(UNSAVED_TRACKING)
+        save = box.addButton("Enregistrer", QMessageBox.ButtonRole.AcceptRole)
+        discard = box.addButton("Ignorer", QMessageBox.ButtonRole.DestructiveRole)
+        cancel = box.addButton("Annuler", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(cancel)
+        box.exec()
+        clicked = box.clickedButton()
+        return "save" if clicked is save else "discard" if clicked is discard else "cancel"
+
+    def _leave_sequence_ok(self) -> bool:
+        sequence_id = self._current_sequence
+        if sequence_id is None or not self.tracking_confirmation_dirty(sequence_id):
+            return True
+        choice = self._ask_unsaved_tracking()
+        if choice == "cancel":
+            return False
+        if choice == "discard":
+            self._pending_tracking.pop(sequence_id, None)
+            self._invalidated.discard(sequence_id)
+            return True
+        return self._save_sequence_now(sequence_id)
+
+    def _sequence_save_blocker(self, sequence_id: str, confirmed: bool) -> str | None:
+        if not confirmed and not self.repository.tracking_sequence_confirmed(sequence_id):
+            return ("Cochez « Mêmes E1/E2… pour les mêmes ennemis dans ce combat » avant d'enregistrer : "
+                    "aucune confirmation n'a été enregistrée.")
         current = self.repository.read_annotation(self.entries[self.index])
         visible = {(cell, None if label == "ENEMY" else label) for cell, label in self.labels.items()
                    if label not in ("PLAYER", "EMPTY")}
         saved = {(int(e["cell_id"]), e.get("track_id")) for e in current.enemy_cells_truth} if current else set()
         occluded = tuple(v.strip().upper() for v in self.occluded_tracks.text().split(",") if v.strip())
         if visible != saved or (current and occluded != current.enemy_occluded_tracks):
-            self.status.setText("Enregistrez les modifications de cette frame avant de confirmer la séquence.")
+            return "Enregistrez les modifications de cette frame avant de confirmer la séquence."
+        return None
+
+    def _save_sequence_now(self, sequence_id: str) -> bool:
+        """Enregistrement synchrone (sortie de séquence) ; atomique côté dépôt."""
+        confirmed = self._pending_tracking.get(sequence_id, self.tracking_confirmed.isChecked())
+        blocker = self._sequence_save_blocker(sequence_id, confirmed)
+        if blocker:
+            self.status.setText(blocker)
+            return False
+        try:
+            count = self.repository.confirm_tracking_sequence(sequence_id, confirmed=confirmed)
+        except (OSError, ValueError) as exc:
+            self.status.setText(f"Confirmation non enregistrée : {exc}")
+            return False
+        self._pending_tracking.pop(sequence_id, None)
+        self._invalidated.discard(sequence_id)
+        self.status.setText(f"{sequence_id} : confirmation {'enregistrée' if confirmed else 'retirée'} "
+                            f"pour la séquence ({count} annotations).")
+        self._update_tracking_state()
+        return True
+
+    def _save_sequence(self) -> None:
+        if not self.entries:
+            return
+        sequence_id = self._current_sequence
+        blocker = self._sequence_save_blocker(sequence_id, self.tracking_confirmed.isChecked())
+        if blocker:
+            self.status.setText(blocker)
+            if blocker.startswith("Cochez"):
+                QMessageBox.warning(self, "Confirmation non cochée", blocker)
             return
         from combatbot.ui.jobs import JobRunner
         if self._sequence_jobs is None:
@@ -391,8 +507,9 @@ class EntityAnnotationDialog(QDialog):
         self.setEnabled(True)
         if self._sequence_saving is not None and self.repository.tracking_sequence_confirmed(
                 self._sequence_saving) == self._pending_tracking.get(self._sequence_saving):
-            # Enregistré : l'état affiché redevient celui du corpus.
+            # Enregistré : l'état affiché redevient celui du corpus. Un échec laisse l'état « dirty ».
             self._pending_tracking.pop(self._sequence_saving, None)
+            self._invalidated.discard(self._sequence_saving)
         self._sequence_saving = None
         self._show()
 
@@ -400,10 +517,14 @@ class EntityAnnotationDialog(QDialog):
         if self._sequence_jobs and self._sequence_jobs.active:
             self.status.setText("Enregistrement de la séquence en cours…")
             return
+        if not self._leave_sequence_ok():
+            return
         super().reject()
 
     def accept(self) -> None:
         if self._sequence_jobs and self._sequence_jobs.active:
+            return
+        if not self._leave_sequence_ok():
             return
         super().accept()
 
