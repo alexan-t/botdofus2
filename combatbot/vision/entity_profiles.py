@@ -268,7 +268,9 @@ def load_team_profile(root: Path, layout_signature: str | None = None, *, direct
     directory = directory or active_profile_directory(root)
     candidates = ([directory / f"team_markers_{_digest(layout_signature)}.json"]
                   if layout_signature else [])
-    candidates.append(profile_directory(root) / "team_markers.json")
+    if not (profile_directory(root) / "active.json").is_file():
+        # Compatibilité 3B-5 seulement sans génération active : jamais mélanger deux générations.
+        candidates.append(profile_directory(root) / "team_markers.json")
     for path in candidates:
         if path.is_file():
             return TeamMarkerProfile.from_dict(json.loads(path.read_text(encoding="utf-8")))

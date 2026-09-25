@@ -126,3 +126,38 @@ def test_tracking_metrics_from_saved_frames_separates_splits():
     assert measured["id_switches"] == 1 and measured["fragmentations"] == 1
     assert measured["tracking_coverage"] == pytest.approx(2/3)
     assert measured["occlusion_status"] == "NOT_OBSERVED"
+
+
+def test_runtime_pointer_failures_are_prudent(prepared, monkeypatch):
+    """§18 : pointeur cassé ou génération incomplète → aucun profil, jamais un mélange."""
+    from combatbot.vision.combat_observer import _load_profiles
+    from combatbot.vision.models import Calibration
+    repository, plan = prepared
+    data = repository.root.parent
+    install_prepared(data, plan)
+    monkeypatch.setenv("PYTHONBOT_DATA_DIR", str(data.parent))
+    base = data / "entity_profiles"
+    pointer = base / "active.json"
+    good = pointer.read_bytes()
+    generation = active_profile_directory(data)
+    calibration = Calibration(1, 2560, 1377, {}, layout_signature="layout-a")
+    loaded = _load_profiles(calibration)
+    assert loaded.player is not None and loaded.teams is not None
+    for broken in (b'{"schema_version": 1, "generation": "inexistante"}', b"{pas du json",
+                   b'{"schema_version": 1, "generation": "../generations"}', b"[]"):
+        pointer.write_bytes(broken)
+        empty = _load_profiles(calibration)
+        assert empty.player is None and empty.teams is None, broken
+    pointer.write_bytes(good)
+    # Profil joueur corrompu : pas de joueur, rien d'une autre génération.
+    player_file = next(generation.glob("player_train_*.json"))
+    saved_player = player_file.read_bytes()
+    player_file.write_text("{corrompu", encoding="utf-8")
+    assert _load_profiles(calibration).player is None
+    player_file.write_bytes(saved_player)
+    # Profil d'équipe absent de la génération + ancien fichier racine : pas de mélange de générations.
+    team_file = next(generation.glob("team_markers_*.json"))
+    (base / "team_markers.json").write_bytes(team_file.read_bytes())
+    team_file.unlink()
+    partial = _load_profiles(calibration)
+    assert partial.teams is None and partial.player is not None

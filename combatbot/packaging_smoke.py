@@ -17,12 +17,43 @@ from combatbot.vision.tooltip import read_visible_text
 from combatbot.vision.window import list_dofus_windows
 
 
-def runtime_profiles_check(data: Path) -> dict:
-    """Charge le vrai stockage choisi, sans capture et sans écriture de données utilisateur."""
-    from combatbot.entity_runtime import active_profile_directory, read_json
-    from combatbot.vision.combat_observer import RealCombatObserver, _load_profiles
-    from combatbot.vision.models import Calibration
+def _profile_load_row(calibration, directory: Path) -> dict:
+    """Charge via le constructeur réel de RealCombatObserver (donc ``_load_profiles``)."""
     from combatbot.corpus.entity_split import layout_digest
+    from combatbot.vision.combat_observer import RealCombatObserver
+    observer = RealCombatObserver(calibration.profile_id, calibration, number_reader=lambda *_: (None, 0.0),
+                                  frame_provider=lambda: (_ for _ in ()).throw(AssertionError("Aucune capture")))
+    profiles = observer.entity_profiles
+    digest = layout_digest(calibration.layout_signature)
+    player, teams = profiles.player, profiles.teams
+    player_file = directory / f"player_train_{digest}.json"
+    team_file = directory / f"team_markers_{digest}.json"
+    loaded = player is not None and teams is not None
+    # Aucun mauvais profil : tout profil chargé porte exactement le layout demandé.
+    no_foreign = all(item is None or layout_digest(item.layout_signature) == digest for item in (player, teams))
+    return {"layout": digest, "player_profile": player_file.name if player_file.is_file() else None,
+            "player_version": getattr(player, "schema_version", None),
+            "player_samples": getattr(player, "accepted", None),
+            "player_prototypes": len(getattr(player, "prototypes", ()) or ()),
+            "team_profile": team_file.name if team_file.is_file() else None,
+            "team_version": getattr(teams, "schema_version", None),
+            "enemy_partial_allowed": bool(teams and teams.enemy_team and teams.enemy_team.partial_allowed),
+            "profile_root": str(directory), "no_foreign_profile": no_foreign,
+            "compatible": loaded and player.compatible(calibration.layout_signature)
+                          and teams.compatible(calibration.layout_signature),
+            "detector": type(observer.entity_detector).__name__,
+            "tracker": type(observer.entity_tracker).__name__,
+            "load_status": "PASS" if loaded and no_foreign else ("NO_PROFILE" if no_foreign else "FAIL")}
+
+
+def runtime_profiles_check(data: Path, current=None) -> dict:
+    """Charge le vrai stockage choisi, sans capture et sans écriture de données utilisateur.
+
+    ``current`` : calibration réelle du profil utilisateur, rapportée à part.
+    """
+    from dataclasses import replace
+    from combatbot.entity_runtime import active_profile_directory, read_json
+    from combatbot.vision.models import Calibration
     previous = os.environ.get("PYTHONBOT_DATA_DIR")
     os.environ["PYTHONBOT_DATA_DIR"] = str(data.parent)
     rows = []
@@ -30,21 +61,22 @@ def runtime_profiles_check(data: Path) -> dict:
         directory = active_profile_directory(data)
         for path in sorted(directory.glob("player_train_*.json")):
             raw = read_json(path)
-            calibration = Calibration(0, 2560, 1377, {}, layout_signature=raw["layout_signature"])
-            observer = RealCombatObserver(0, calibration, number_reader=lambda *_: (None, 0.0),
-                                          frame_provider=lambda: (_ for _ in ()).throw(AssertionError("Aucune capture")))
-            profiles = observer.entity_profiles
-            rows.append({"layout": layout_digest(raw["layout_signature"]), "player_version": profiles.player.schema_version,
-                         "player_samples": profiles.player.accepted, "team_version": profiles.teams.schema_version,
-                         "compatible": profiles.player.compatible(calibration.layout_signature)
-                                       and profiles.teams.compatible(calibration.layout_signature),
-                         "detector": type(observer.entity_detector).__name__,
-                         "tracker": type(observer.entity_tracker).__name__})
-        missing = _load_profiles(Calibration(0, 2560, 1377, {}, layout_signature="missing-incompatible-layout"))
-        return {"data": str(data.resolve()), "generation": str(directory), "layouts": rows,
-                "missing_unknown": missing.player is None and missing.teams is None,
-                "success": bool(rows) and all(r["compatible"] for r in rows)
-                           and missing.player is None and missing.teams is None, "actions": "NONE"}
+            base = current or Calibration(0, 2560, 1377, {})
+            rows.append(_profile_load_row(replace(base, layout_signature=raw["layout_signature"]), directory))
+        unknown = _profile_load_row(Calibration(0, 2560, 1377, {}, layout_signature="missing-incompatible-layout"),
+                                    directory)
+        missing_unknown = unknown["player_version"] is None and unknown["team_version"] is None
+        result = {"data": str(data.resolve()), "generation": str(directory),
+                  "active_generation": read_json(data / "entity_profiles" / "active.json").get("generation")
+                  if (data / "entity_profiles" / "active.json").is_file() else None,
+                  "layouts": rows, "unknown_layout": unknown, "missing_unknown": missing_unknown,
+                  "actions": "NONE"}
+        if current is not None:
+            result["current_calibration"] = _profile_load_row(current, directory)
+        result["success"] = (bool(rows) and all(r["load_status"] == "PASS" and r["compatible"] for r in rows)
+                             and missing_unknown and unknown["no_foreign_profile"]
+                             and (current is None or result["current_calibration"]["no_foreign_profile"]))
+        return result
     finally:
         if previous is None:
             os.environ.pop("PYTHONBOT_DATA_DIR", None)
@@ -218,7 +250,13 @@ def run_packaging_smoke(app, storage, window) -> int:
         checks["entities"] = _entity_check()
         profile_data = os.environ.get("PYTHONBOT_SMOKE_PROFILE_DATA")
         if profile_data:
-            checks["runtime_profiles"] = runtime_profiles_check(Path(profile_data))
+            current = storage.load_calibration(window.client_panel.profile_id or 1)
+            checks["runtime_profiles"] = runtime_profiles_check(Path(profile_data), current)
+        from combatbot.ui import entity_annotation_dialog as tracking_ui
+        checks["tracking_ui"] = {"importable": True,
+                                 "sequence_scoped": hasattr(tracking_ui.EntityAnnotationDialog,
+                                                            "tracking_confirmation_dirty"),
+                                 "unsaved_warning": tracking_ui.UNSAVED_TRACKING}
 
         ocr_image = np.full((100, 420, 3), 255, dtype=np.uint8)
         cv2.putText(ocr_image, "3 PA  Portee 1-4", (8, 55), cv2.FONT_HERSHEY_SIMPLEX, 1,
@@ -254,6 +292,7 @@ def run_packaging_smoke(app, storage, window) -> int:
             checks["entities"]["occlusion_distinct"], checks["entities"]["recovered_same_ids"],
             checks["entity_annotation"]["opened"],
             checks["entity_annotation"]["sequence_review"],
+            checks["tracking_ui"]["sequence_scoped"],
             checks.get("runtime_profiles", {}).get("success", not bool(profile_data)),
             not checks["entities"]["action_executed"],
         ))
