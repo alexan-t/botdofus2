@@ -124,6 +124,7 @@ def test_entity_benchmark_before_after_and_tracking(tmp_path) -> None:
     tracking = report["tracking_global"]
     assert tracking["id_switches"] == 0 and tracking["false_reassociations"] == 0
     assert tracking["occlusions_observed"] == 3 and tracking["occlusion_recovered"] == 3
+    assert all("tracked_entities" in frame and "greedy_tracks" in frame for frame in report["frames_detail"])
     # BEFORE est mesuré sur les mêmes frames (le banc réel compare ; ici on vérifie sa présence).
     assert set(report["before"]["all"]) == {"player", "enemies", "cells"}
     assert report["before"]["all"]["player"]["correct"] == 0  # aucune référence joueur dans le corpus
@@ -238,3 +239,29 @@ def test_benchmark_profiles_do_not_mix_layouts(tmp_path) -> None:
     profiles, _ = build_profiles(samples, CellEntityDetector())
     assert profiles.teams.layout_signature == "layout-a"
     assert not profiles.teams.compatible("layout-b")
+
+
+def test_identity_review_ui_preserves_source_and_invalidates_changed_labels(tmp_path) -> None:
+    import time
+    from combatbot.ui.entity_annotation_dialog import EntityAnnotationDialog
+    app = QApplication.instance() or QApplication([])
+    repository = build_corpus(tmp_path, ("combat-a",))
+    dialog = EntityAnnotationDialog(repository)
+    entry = dialog.entries[0]
+    sequence_id = repository.tracking_sequence_id(entry)
+    assert not dialog.tracking_confirmed.isChecked()  # source fixture != revue UI de séquence
+    dialog.tracking_confirmed.setChecked(True)
+    dialog._save_sequence()
+    deadline = time.monotonic() + 5
+    while dialog._sequence_jobs.active and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+    assert repository.tracking_sequence_confirmed(sequence_id)
+    assert all(repository.read_annotation(e).tracking_identity_source == "human_ui_review"
+               for e in dialog.entries)
+    dialog._assign(at(3), "E1")
+    assert not dialog.tracking_confirmed.isChecked()
+    dialog._save()
+    assert not repository.tracking_sequence_confirmed(sequence_id)
+    assert all(not repository.read_annotation(e).tracking_identity_confirmed for e in dialog.entries)
+    dialog.close()

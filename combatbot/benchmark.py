@@ -7,7 +7,7 @@ from pathlib import Path
 
 from combatbot.corpus.benchmark import run_benchmark, write_reports
 from combatbot.corpus.repository import CorpusRepository
-from combatbot.runtime import app_data_root
+from combatbot.runtime import app_data_root, PROJECT_ROOT
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -27,7 +27,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--hud-split", action="store_true",
                         help="LOT 3B-4R2 : reconstruit explicitement le split HUD (TEST gelé) et affiche la distribution")
     parser.add_argument("--client", type=Path, help="Dossier client GameData (défaut : réglage de l'application)")
+    parser.add_argument("--install-runtime-profiles", action="store_true",
+                        help="Installation explicite TRAIN vers LocalAppData, avec backup et bascule atomique")
+    parser.add_argument("--dry-run", action="store_true", help="Préparer l'installation sans aucune écriture runtime")
+    parser.add_argument("--runtime-data", type=Path, help="Stockage runtime (défaut LocalAppData/PythonBot/data)")
+    parser.add_argument("--entity-split-registry", type=Path, help="Registre gelé à conserver au premier déploiement")
+    parser.add_argument("--restore-runtime-profiles", type=Path, help="Restaurer explicitement une sauvegarde de profils")
     args = parser.parse_args(argv)
+    if args.restore_runtime_profiles:
+        import json
+        from combatbot.entity_runtime import restore_backup, runtime_data_directory
+        print(json.dumps(restore_backup(args.runtime_data or runtime_data_directory(), args.restore_runtime_profiles), indent=2))
+        return 0
+    if args.install_runtime_profiles:
+        if not args.entities:
+            parser.error("--install-runtime-profiles exige --entities")
+        return _install_entities(args)
     repository = CorpusRepository(args.corpus_root)
     if args.grid_validation:
         return _grid_validation(repository, args)
@@ -35,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
         from combatbot.corpus.entity_benchmark import run_entity_benchmark, write_entity_report
         report = run_entity_benchmark(repository, splits=tuple(args.entity_splits) if args.entity_splits else None,
                                       layout=args.entity_layout)
-        output = args.output_dir or (app_data_root() / "data" / "benchmarks")
+        output = args.output_dir or (PROJECT_ROOT / "data" / "benchmarks")
         json_path, markdown_path = write_entity_report(report, output)
         print(f"Entités : {report['frames']} frame(s) annotée(s), splits {report['splits']}, "
               f"groupes {report['groups']} — statut {report['status']}")
@@ -77,6 +92,32 @@ def main(argv: list[str] | None = None) -> int:
           f"{report['corpus']['annotated_observations']} annotée(s)")
     print(f"JSON : {json_path}")
     print(f"Markdown : {markdown_path}")
+    return 0
+
+
+def _install_entities(args) -> int:
+    import json
+    from combatbot.entity_runtime import (
+        active_profile_directory, runtime_data_directory, read_json, prepare_installation, install_prepared,
+    )
+    data = (args.runtime_data or runtime_data_directory()).resolve()
+    registry_path = args.entity_split_registry or active_profile_directory(data) / "entity_split_registry.v2.json"
+    if not registry_path.is_file():
+        # Préserve le TEST 3B-5B du projet lors de la première installation, sans répartition nouvelle.
+        registry_path = PROJECT_ROOT / "data/validation/lot3b5b-reprise/corpus/manifests/entity_split_registry.json"
+    if not registry_path.is_file():
+        raise ValueError("Registre gelé requis : préciser --entity-split-registry")
+    plan = prepare_installation(data, read_json(registry_path))
+    print("DRY-RUN : corpus lu uniquement ; apprentissage TRAIN ; destination :", data, flush=True)
+    print(json.dumps([{k: v for k, v in s.items() if k != "diagnostics"} for s in plan["summary"]], indent=2), flush=True)
+    print("Fichiers prévus :", ", ".join(plan["files"]), flush=True)
+    if args.dry_run:
+        return 0
+    result = install_prepared(data, plan)
+    print(json.dumps(result, ensure_ascii=False, indent=2), flush=True)
+    if args.output_dir:
+        args.output_dir.mkdir(parents=True, exist_ok=True)
+        (args.output_dir / "runtime-installation.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     return 0
 
 

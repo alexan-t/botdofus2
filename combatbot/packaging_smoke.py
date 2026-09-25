@@ -17,6 +17,41 @@ from combatbot.vision.tooltip import read_visible_text
 from combatbot.vision.window import list_dofus_windows
 
 
+def runtime_profiles_check(data: Path) -> dict:
+    """Charge le vrai stockage choisi, sans capture et sans écriture de données utilisateur."""
+    from combatbot.entity_runtime import active_profile_directory, read_json
+    from combatbot.vision.combat_observer import RealCombatObserver, _load_profiles
+    from combatbot.vision.models import Calibration
+    from combatbot.corpus.entity_split import layout_digest
+    previous = os.environ.get("PYTHONBOT_DATA_DIR")
+    os.environ["PYTHONBOT_DATA_DIR"] = str(data.parent)
+    rows = []
+    try:
+        directory = active_profile_directory(data)
+        for path in sorted(directory.glob("player_train_*.json")):
+            raw = read_json(path)
+            calibration = Calibration(0, 2560, 1377, {}, layout_signature=raw["layout_signature"])
+            observer = RealCombatObserver(0, calibration, number_reader=lambda *_: (None, 0.0),
+                                          frame_provider=lambda: (_ for _ in ()).throw(AssertionError("Aucune capture")))
+            profiles = observer.entity_profiles
+            rows.append({"layout": layout_digest(raw["layout_signature"]), "player_version": profiles.player.schema_version,
+                         "player_samples": profiles.player.accepted, "team_version": profiles.teams.schema_version,
+                         "compatible": profiles.player.compatible(calibration.layout_signature)
+                                       and profiles.teams.compatible(calibration.layout_signature),
+                         "detector": type(observer.entity_detector).__name__,
+                         "tracker": type(observer.entity_tracker).__name__})
+        missing = _load_profiles(Calibration(0, 2560, 1377, {}, layout_signature="missing-incompatible-layout"))
+        return {"data": str(data.resolve()), "generation": str(directory), "layouts": rows,
+                "missing_unknown": missing.player is None and missing.teams is None,
+                "success": bool(rows) and all(r["compatible"] for r in rows)
+                           and missing.player is None and missing.teams is None, "actions": "NONE"}
+    finally:
+        if previous is None:
+            os.environ.pop("PYTHONBOT_DATA_DIR", None)
+        else:
+            os.environ["PYTHONBOT_DATA_DIR"] = previous
+
+
 def _gamedata_grid_check() -> dict[str, object]:
     """LOT 3B-2 : modules GameData présents et projection des 560 cellules dans le binaire."""
     import importlib
@@ -168,6 +203,7 @@ def run_packaging_smoke(app, storage, window) -> int:
                                        "projected_frames": len(annotation.entries),
                                        "image_loaded": annotation.image is not None,
                                        "human_labels": len(annotation.labels)}
+        checks["entity_annotation"]["sequence_review"] = hasattr(annotation, "sequence") and hasattr(annotation, "save_sequence")
         annotation.close()
         checks["sqlite_profiles"] = len(storage.list_profiles())
         checks["sqlite_statistics"] = storage.statistics()
@@ -180,6 +216,9 @@ def run_packaging_smoke(app, storage, window) -> int:
         checks["grid_validation"] = _grid_validation_check()
         checks["hud_reader"] = _hud_reader_check()
         checks["entities"] = _entity_check()
+        profile_data = os.environ.get("PYTHONBOT_SMOKE_PROFILE_DATA")
+        if profile_data:
+            checks["runtime_profiles"] = runtime_profiles_check(Path(profile_data))
 
         ocr_image = np.full((100, 420, 3), 255, dtype=np.uint8)
         cv2.putText(ocr_image, "3 PA  Portee 1-4", (8, 55), cv2.FONT_HERSHEY_SIMPLEX, 1,
@@ -214,6 +253,8 @@ def run_packaging_smoke(app, storage, window) -> int:
             checks["entities"]["track_ids"] == ["player", "enemy_1"],
             checks["entities"]["occlusion_distinct"], checks["entities"]["recovered_same_ids"],
             checks["entity_annotation"]["opened"],
+            checks["entity_annotation"]["sequence_review"],
+            checks.get("runtime_profiles", {}).get("success", not bool(profile_data)),
             not checks["entities"]["action_executed"],
         ))
     except Exception as exc:

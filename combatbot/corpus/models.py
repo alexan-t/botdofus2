@@ -23,7 +23,7 @@ ENTITY_FRAME_PHASES = {"placement", "debut_combat", "mon_tour", "tour_ennemi", "
                        "changement_tour", "exploration", "autre"}
 ENTITY_FIELDS = ("entity_annotation_source", "entity_confirmed_at", "player_cell_id_truth", "player_visibility",
                  "enemy_cells_truth", "enemy_occluded_tracks", "empty_confirmed_cells", "frame_phase",
-                 "occlusion", "tactical_mode", "tracking_identity_confirmed", "tracking_identity_source")
+                 "occlusion", "tactical_mode", "tracking_identity_confirmed", "tracking_identity_source", "tracking_confirmed_at", "tracking_sequence_id")
 
 
 def _optional_bool(value: object, field_name: str) -> bool | None:
@@ -128,6 +128,8 @@ class Annotation:
     occlusion: bool | None = None
     tracking_identity_confirmed: bool = False
     tracking_identity_source: str | None = None
+    tracking_confirmed_at: str | None = None
+    tracking_sequence_id: str | None = None
     tactical_mode: bool | None = None
     schema_version: int = SCHEMA_VERSION
 
@@ -254,6 +256,8 @@ class Annotation:
             "tactical_mode": self.tactical_mode,
             "tracking_identity_confirmed": self.tracking_identity_confirmed,
             "tracking_identity_source": self.tracking_identity_source,
+            "tracking_confirmed_at": self.tracking_confirmed_at,
+            "tracking_sequence_id": self.tracking_sequence_id,
         }
         result.update({key: value for key, value in scalar_values.items() if value is not None})
         if self.truth_history:
@@ -332,6 +336,8 @@ class Annotation:
             tactical_mode=_optional_bool(raw.get("tactical_mode"), "tactical_mode"),
             tracking_identity_confirmed=_optional_bool(raw.get("tracking_identity_confirmed", False), "tracking_identity_confirmed"),
             tracking_identity_source=raw.get("tracking_identity_source"),
+            tracking_confirmed_at=raw.get("tracking_confirmed_at"),
+            tracking_sequence_id=raw.get("tracking_sequence_id"),
             schema_version=int(raw.get("schema_version", SCHEMA_VERSION)),
         )
         item.validate()

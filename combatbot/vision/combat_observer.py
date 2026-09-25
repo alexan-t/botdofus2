@@ -48,18 +48,24 @@ def _load_profiles(calibration: Calibration) -> VisualProfiles:
         load_player_profile, load_team_profile, load_train_player_profile,
     )
     root = app_data_root() / "data"
+    from combatbot.entity_runtime import active_profile_directory
+    try:
+        directory = active_profile_directory(root)
+    except (OSError, ValueError, KeyError):
+        return VisualProfiles()
     try:
         # Profil multi-exemples TRAIN du layout courant d'abord ; sinon désignation unique.
-        player = load_train_player_profile(root, calibration.layout_signature)
+        player = load_train_player_profile(root, calibration.layout_signature, directory=directory)
         if player is None and calibration.profile_id is not None:
             player = load_player_profile(root, calibration.profile_id)
     except (OSError, ValueError, KeyError):
         player = None
     try:
-        teams = load_team_profile(root, calibration.layout_signature)
+        teams = load_team_profile(root, calibration.layout_signature, directory=directory)
     except (OSError, ValueError, KeyError):
         teams = None
-    return VisualProfiles(player, teams)
+    return VisualProfiles(player if player and player.compatible(calibration.layout_signature) else None,
+                          teams if teams and teams.compatible(calibration.layout_signature) else None)
 
 
 def _zone(frame: CapturedFrame, calibration: Calibration, transform: LayoutTransform,

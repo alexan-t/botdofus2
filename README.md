@@ -266,3 +266,42 @@ Les tests couvrent le simulateur existant, la migration SQLite, les profils, la 
 - `combatbot/ui/` : écrans existants enrichis, calibration interactive et tâches de vision en arrière-plan.
 - `combatbot/ports.py` : contrats du moteur ; l'exécuteur d'actions n'est connecté à aucun écran d'observation.
 - `combatbot/gamedata/` : lecture offline D2P/DLM/D2O et topologie logique (LOT 3B-2A-R).
+
+
+## LOT 3B-5C : installer les profils et confirmer les identités
+
+Le détecteur 3B-5B reste gelé. Le benchmark `--entities` ne sauvegarde plus de profils ni
+le registre de split. Son rapport par défaut reste dans `data/benchmarks` du projet.
+
+Installation volontaire depuis les annotations du corpus runtime, TRAIN uniquement :
+
+```powershell
+.\.venv\Scripts\python.exe -m combatbot.benchmark --entities --install-runtime-profiles --dry-run
+.\.venv\Scripts\python.exe -m combatbot.benchmark --entities --install-runtime-profiles
+```
+
+Par défaut la destination est `%LOCALAPPDATA%\PythonBot\data`. Le premier déploiement utilise
+le registre TEST gelé de `data/validation/lot3b5b-reprise/corpus/manifests/entity_split_registry.json` ;
+un registre différent doit être indiqué explicitement avec `--entity-split-registry`.
+Les captures, annotations, manifestes et vérités HUD ne sont jamais modifiés par l'installation.
+
+Le dry-run précède toute écriture. Une sauvegarde datée est créée sous `data/backup/entity-runtime-*`.
+Les fichiers validés sont écrits dans une génération de `data/entity_profiles/generations/`, puis
+un unique pointeur `active.json` sélectionne atomiquement tous les profils et le registre v2.
+Une erreur provoque le rollback ; les générations précédentes sont conservées. Pour revenir
+explicitement à une sauvegarde, reprendre le chemin affiché lors de l'installation :
+
+```powershell
+.\.venv\Scripts\python.exe -m combatbot.benchmark --restore-runtime-profiles "CHEMIN_DE_LA_SAUVEGARDE"
+```
+
+Après `./build_exe.ps1`, lancer `dist/PythonBot/PythonBot.exe`, puis **Corpus / Annotation →
+Annoter les entités**. Le sélecteur en haut permet de choisir une séquence. Parcourir ses frames,
+vérifier que chaque identifiant E1/E2/E3 désigne le même ennemi, cocher la confirmation et cliquer
+**Enregistrer la confirmation de la séquence**. Répéter pour la seconde séquence existante.
+Aucun nouveau combat ni capture n'est nécessaire. Les anciennes identités renumérotées restent
+non confirmées. Modifier une identité enregistrée annule la confirmation de toute la séquence.
+
+Le replay tracking est exécuté après cette revue humaine. Il conserve timestamps, vérités,
+pistes, cellules, états, confiances et affectations ; les métriques peuvent ensuite être recalculées
+avec `combatbot.corpus.tracking_metrics.tracking_scopes(report["frames_detail"])` sans relancer la vision.

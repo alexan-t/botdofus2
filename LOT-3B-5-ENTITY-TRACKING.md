@@ -796,12 +796,12 @@ Aucun joueur faux avec haute confiance. Leave-one-frame-out TRAIN : nouveau 8/0/
 | detector_ms TRAIN, modèle de fond actif | 109 / 217 | 92 / 198 |
 | tracker_ms | 0,1 / 0,2 | 0,1 / 0,3 |
 
-Sur le TEST, avant l'optimisation `526bea0`, le détecteur mesurait 269 ms en moyenne. Les sorties
+Sur le TEST, avant l'optimisation `526bea0`, le détecteur mesurait 269 ms en moyenne. Les sorties TRAIN
 sont identiques après optimisation ; le TEST n'est pas relancé pour mesurer le temps.
 
 ### 15.10 Non-régressions (§34) et tests (§35)
 
-- GRID (snapshot, `nonreg/`) : 0/14 faux combats, 12/12 visibles, 26/26 combats, 12/12 alignés.
+- GRID (snapshot, `nonreg/`) : 0/14 faux combats, 12/12 combats, 26/26 états de visibilité corrects, 12/12 alignés.
 - HUD (snapshot) : précision acceptée 1,000 sur TRAIN/VALIDATION/TEST, 1/7 VALIDATED, PASS.
 - `tests/test_entity_repair.py` : les 11 tests exigés, plus l'ordre et les manques d'horodatage,
   la barrière partielle, la persistance par layout et le profil multi-exemples sur corpus.
@@ -828,3 +828,141 @@ ACTIONS: NONE
 - CORPUS : pas de VALIDATION indépendante sur le nouveau layout, aucune vérité vide.
 
 Le LOT 3B-5 **n'est pas finalisé**. Version 0.4.3, pas de 0.5.0, pas de LOT 3B-6.
+
+
+### 15.12 Reprise et vérification du 25 septembre 2026
+
+Au retour, HEAD était `3184517` (rapport), après `526bea0` et `8c8926c`.
+Le working tree suivi était propre ; `.claude/` non suivi est conservé intact.
+Les corrections de détection et leur unique TEST étaient déjà enregistrés. Aucune modification
+supplémentaire du détecteur, du tracker, des profils ni de leurs seuils dans cette reprise.
+Version conservée : **0.4.3**. Aucun nouveau commit de finalisation.
+
+**Réception indépendante des artefacts.** Nouveau snapshot isolé
+`data/validation/lot3b5b-reprise/corpus` ; les 944 empreintes du corpus utilisateur correspondent
+au snapshot de référence. Les TEST ancien et nouveau gardent exactement leur groupe et split.
+Le nouveau TEST n'a été ni rejoué ni inspecté visuellement. Son rapport précédent est conservé :
+`data/validation/lot3b5b-run2/new-layout-test-once/entities.json`.
+
+Complément chiffré du TEST déjà réalisé (aucune nouvelle mesure) :
+
+| Mesure | Valeur |
+|---|---:|
+| Joueur correct / mauvais / UNKNOWN | 13 / 0 / 3 |
+| Précision des positions joueur acceptées | 1,000 |
+| Couverture joueur | 81,25 % |
+| Ennemis exacts / vérités | 35 / 45 |
+| Précision ennemis / rappel | 1,000 / 77,78 % |
+| Erreur absolue moyenne du nombre d'ennemis par frame | 0,625 |
+| Présences UNKNOWN sur ennemis annotés | 0 (10 ennemis sans présence détectée) |
+| Faux FREE sur joueur ou ennemi annoté | 0 |
+| Précision OCCUPIED sur vérités scorables | 1,000 |
+| Cellules UNKNOWN dans le domaine analysé | 47,60 % |
+| FREE sans annotation, exclus de la précision | 3 791 |
+
+Ces scores de précision ne prouvent pas l'absence de faux positifs sur des cellules sans
+vérité humaine. Aucun gain de couverture FREE n'est validé : zéro vérité vide sur ce layout.
+La VALIDATION indépendante ancienne reste distincte : 1 joueur correct / 3 visibles,
+0 mauvais, 2 UNKNOWN et 4 ennemis exacts / 4 ; elle n'a pas été utilisée comme TRAIN.
+
+**Provenance de suivi corrigée.** Contrairement à la conclusion initiale de §15.8, la section 0
+de la demande LOT 3B-5B fournit une confirmation explicite : « Identités E1/E2/E3 : cohérentes
+dans ces nouvelles séquences. » Cette source, son SHA-256 et les 28 identifiants concernés sont
+consignés dans `identity-provenance.json`. Seule la copie des annotations reçoit
+`tracking_identity_confirmed=true` et la référence de cette demande. Les positions ne changent
+pas ; les 28 anciennes annotations renumérotées restent non vérifiées pour le suivi.
+
+Le replay **TRAIN uniquement** des 12 frames nouvelles retrouve les mêmes sorties, frame par
+frame, que le rapport gelé : joueur 9 corrects / 0 mauvais / 2 UNKNOWN ; ennemis 18/21, 0 faux.
+Suivi global : 18/21 observations d'identité appariées, 0 switch, 0 fragmentation selon la
+métrique actuelle (identifiants prédits distincts moins un), 0 réassociation fausse. Ce résultat
+sur une seule séquence TRAIN ne valide pas la généralisation du suivi.
+
+Le suivi TEST demeure non mesurable depuis l'artefact existant : les cellules prédites sont
+présentes, mais les identifiants de pistes n'y ont pas été conservés. On ne les reconstruit pas
+à partir des vérités et on ne relance pas TEST. Le benchmark sauvegarde désormais les pistes
+complètes et la référence gloutonne par frame, permettant une future réévaluation des métriques
+sans nouvelle détection. La comparaison glouton/global n'isole pas l'affectation : les règles de
+coût et de persistance diffèrent ; aucun gain causal n'est revendiqué.
+
+**Interface de revue.** « Annoter les entités » propose maintenant une case confirmant que les
+mêmes identifiants désignent les mêmes ennemis dans le combat. Elle recharge la provenance
+existante, conserve les positions, et se décoche si un identifiant est modifié ou effacé.
+Cette case n'est jamais déduite de la présence du texte E1. Aucune nouvelle collecte demandée.
+
+**Vérifications de reprise :** 70 tests ciblés réussis ; **374 tests complets réussis** (49,74 s) ;
+`compileall` et `git diff --check` réussis (avertissements CRLF uniquement).
+GRID relancé : 0/14 faux combats, 12/12 combats, 26/26 visibilité, 12/12 alignement.
+HUD avec RapidOCR relancé : 128 vérités humaines, PASS, précision acceptée 1,000,
+1/7 VALIDATED. Les 56 crops sans vérité HUD restent exclus des mesures supervisées.
+
+Performance mesurée sur le nouveau TRAIN : détecteur moyenne 94,78 ms, médiane 85,32 ms,
+max 175,98 ms ; tracker moyenne 0,070 ms, max 0,100 ms. Les durées `observer_ms` restent
+historiques, elles ne mesurent pas un lancement complet du nouvel observateur.
+
+Profils appris exportés par layout dans `data/validation/lot3b5b-reprise/entity_profiles/`.
+Ils sont disponibles pour le banc et le smoke isolé ; aucune installation silencieuse dans
+les données AppData du logiciel en cours d'utilisation. Les annotations et profils de
+l'utilisateur sont conservés. Les résultats décrivent un replay de captures, pas une
+validation supplémentaire dans une partie DOFUS en direct.
+
+**Limite logicielle héritée du point de gel :** les exemples de l'ancien layout sans état de
+grille enregistré sont encore acceptés dans l'apprentissage du profil joueur, avec diagnostic
+`grid_unrecorded`. Ils ne satisfont pas une exigence stricte de grille explicitement fiable.
+Ce comportement de compatibilité n'est pas modifié après le passage TEST ; il empêche de
+qualifier la totalité des exigences logicielles de PASS sans réserve. L'anneau partiel exige,
+lui, une grille explicitement fiable.
+
+
+**Build et lancement packagé de reprise.** Construction ONEDIR explicite via `PythonBot.spec`,
+réussie (105 s). Taille totale : **333.35 Mio** ; exécutable : 9,319,970 octets.
+PythonBot était encore ouvert dans `dist/PythonBot` : ce dossier et son processus sont conservés.
+La version reconstruite est disponible par double-clic ici :
+
+`C:\Users\Alpha5\Documents\pythonbot_test\dist\PythonBot-3B5B\PythonBot.exe`
+
+Conserver tout le dossier ONEDIR autour de l'exécutable. Aucun déplacement du dossier de données
+utilisateur n'est nécessaire. Fermer l'ancienne application avant d'ouvrir la nouvelle.
+Le script `build_exe.ps1` habituel demeure disponible pour une reconstruction ultérieure dans
+`dist/PythonBot` lorsque ce dossier n'est plus utilisé. Dans cette reprise, PyInstaller a été
+invoqué avec le même spec, `--distpath` et `--workpath` isolés, pour préserver le programme ouvert.
+
+Smoke réel depuis le `.exe`, puis après son déplacement au chemin livré : sortie 0 et
+`success=true`. Qt **hors écran**, huit pages parcourues, SQLite (copie, un profil), dialogue
+d'annotation et sa capture TRAIN chargés, OpenCV, grille 560 cellules, HUD 7, détecteur et suivi
+sur fixture synthétique. RapidOCR lit « 3 PA Portee 1-4 » (confiance 0,9995).
+PE subsystem 2 confirmé (application graphique). Aucune fenêtre console affichée par le lancement
+masqué du smoke ; une vérification visuelle du double-clic sur le bureau n'est pas revendiquée.
+Détection et capture de fenêtre DOFUS volontairement désactivées dans ce smoke : **non testées**
+pendant cette reprise (le message générique « aucune fenêtre détectée » ne décrit pas une recherche
+effectuée). Aucune action dans le jeu.
+
+Warnings PyInstaller : tkinter absent/exclu (l'UI utilise PySide6), échappements invalides dans
+le backend X11 optionnel de PyAutoGUI et un module PyTorch optionnel de RapidOCR ; liste des imports
+conditionnels non résolus dans `build/PythonBot/warn-PythonBot.txt` sous le dossier de validation.
+L'OCR ONNX et Qt ont réellement fonctionné depuis le binaire livré.
+
+Fichiers modifiés dans cette reprise : `combatbot/corpus/entity_benchmark.py`,
+`combatbot/ui/entity_annotation_dialog.py`, `tests/test_entity_corpus.py`,
+`tests/test_entity_repair.py`, et ce rapport. Les preuves, profils, copies de données et build sont
+sous `data/validation/lot3b5b-reprise/` (hors Git). Aucun fichier client modifié.
+
+### 15.13 Statuts à la fin de la reprise
+
+```text
+IMPLEMENTATION: PARTIAL
+REAL ENTITY CORPUS: PARTIAL
+PLAYER DETECTION: PARTIAL
+ENEMY DETECTION: PARTIAL
+GLOBAL TRACKING: PARTIAL
+OCCLUSION HANDLING: NOT OBSERVED
+CELL OCCUPANCY: PARTIAL
+HUD REGRESSION: NONE
+GRID REGRESSION: NONE
+ACTIONS: NONE
+```
+
+La réparation améliore la détection mesurée, mais la couverture reste incomplète. La compatibilité
+avec les anciennes grilles non renseignées reste une limite d'apprentissage, et le tracking TEST
+n'est pas validé. **LOT 3B-5 non finalisé**, version 0.4.3 conservée. Aucun LOT 3B-6,
+aucune nouvelle collecte et aucun combat automatique.

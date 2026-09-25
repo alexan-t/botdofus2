@@ -268,6 +268,12 @@ class CorpusRepository:
         entry = next((item for item in manifest.entries if item.observation_id == annotation.observation_id), None)
         if entry is None:
             raise ValueError("L'observation annotée n'existe pas dans le manifeste")
+        previous = self.read_annotation(entry)
+        if previous is not None and (previous.enemy_cells_truth != annotation.enemy_cells_truth
+                                     or previous.enemy_occluded_tracks != annotation.enemy_occluded_tracks):
+            self.confirm_tracking_sequence(self.tracking_sequence_id(entry), confirmed=False)
+            annotation = replace(annotation, tracking_identity_confirmed=False, tracking_identity_source=None,
+                                 tracking_confirmed_at=None, tracking_sequence_id=None)
         observation_path = self.resolve(entry.paths["observation"])
         annotation_path = observation_path.parent / "annotation.json"
         _write_json_atomic(annotation_path, annotation.to_dict())
@@ -289,6 +295,58 @@ class CorpusRepository:
         entries = tuple(updated if item.observation_id == updated.observation_id else item for item in manifest.entries)
         self.save_manifest(CorpusManifest(entries))
         return updated
+
+    def tracking_sequence_id(self, entry: CorpusEntry) -> str:
+        document = self.read_observation(entry)
+        return f"{entry.session_id}|map{(document.get('grid_snapshot') or {}).get('map_id_declared')}"
+
+    def tracking_sequence_entries(self, sequence_id: str) -> tuple[CorpusEntry, ...]:
+        session = sequence_id.split("|map", 1)[0]
+        return tuple(e for e in self.list_entries() if e.session_id == session
+                     and self.tracking_sequence_id(e) == sequence_id)
+
+    def tracking_sequence_confirmed(self, sequence_id: str) -> bool:
+        annotations = [self.read_annotation(e) for e in self.tracking_sequence_entries(sequence_id)]
+        return bool(annotations) and all(a and a.entities_confirmed and a.tracking_identity_confirmed
+            and a.tracking_identity_source == "human_ui_review" and a.tracking_confirmed_at
+            and a.tracking_sequence_id == sequence_id for a in annotations)
+
+    def confirm_tracking_sequence(self, sequence_id: str, *, confirmed: bool) -> int:
+        """Revue humaine explicite de toute la séquence. Positions/HUD/manifeste intacts.
+
+        Les écritures de chaque JSON sont atomiques ; retour intégral aux octets précédents en
+        cas d'échec. Une annotation d'identité modifiée révoque la confirmation de toute la séquence.
+        """
+        entries = self.tracking_sequence_entries(sequence_id)
+        if not entries:
+            raise ValueError("Séquence absente")
+        changes = []
+        stamp = datetime.now().astimezone().isoformat(timespec="seconds")
+        for entry in entries:
+            previous = self.read_annotation(entry)
+            if not previous or not previous.entities_confirmed:
+                if confirmed:
+                    raise ValueError("Toutes les frames de la séquence doivent être annotées avant confirmation")
+                continue
+            updated = replace(previous, tracking_identity_confirmed=confirmed,
+                              tracking_identity_source="human_ui_review" if confirmed else None,
+                              tracking_confirmed_at=stamp if confirmed else None,
+                              tracking_sequence_id=sequence_id if confirmed else None)
+            if updated != previous:
+                path = self.resolve(entry.paths["annotation"])
+                changes.append((path, path.read_bytes(), updated.to_dict()))
+        written = []
+        try:
+            for path, previous_bytes, value in changes:
+                written.append((path, previous_bytes))
+                _write_json_atomic(path, value)
+        except BaseException:
+            for path, previous_bytes in reversed(written):
+                temporary = path.with_suffix(".rollback")
+                temporary.write_bytes(previous_bytes)
+                os.replace(temporary, path)
+            raise
+        return len(changes)
 
     def confirm_hud_truth(self, observation_id: str, *, ap: int | None, mp: int | None,
                           ap_unreadable: bool = False, mp_unreadable: bool = False,
@@ -348,8 +406,8 @@ class CorpusRepository:
             enemy_cells_truth=tuple({"cell_id": int(cell), "track_id": track or None} for cell, track in enemies),
             enemy_occluded_tracks=tuple(occluded_tracks), empty_confirmed_cells=tuple(int(c) for c in empty_cells),
             frame_phase=frame_phase, occlusion=occlusion, tactical_mode=tactical_mode,
-            tracking_identity_confirmed=bool(tracking_identity_source),
-            tracking_identity_source=tracking_identity_source,
+            tracking_identity_confirmed=bool(tracking_identity_source) or previous.tracking_identity_confirmed,
+            tracking_identity_source=tracking_identity_source or previous.tracking_identity_source,
             session_id=previous.session_id or entry.session_id,
         )
         self.save_annotation(annotation)

@@ -97,6 +97,8 @@ class EntitySample:
     document: dict
     tracking_identity_confirmed: bool = False
     tracking_identity_source: str | None = None
+    tracking_confirmed_at: str | None = None
+    tracking_sequence_id: str | None = None
 
 
 def _group(entry, document) -> str:
@@ -105,14 +107,16 @@ def _group(entry, document) -> str:
 
 
 def _registry(repository: CorpusRepository) -> dict[str, Any]:
-    path = repository.manifests / SPLIT_REGISTRY
+    from combatbot.entity_runtime import active_profile_directory
+    runtime_registry = active_profile_directory(repository.root.parent) / "entity_split_registry.v2.json"
+    path = runtime_registry if runtime_registry.is_file() else repository.manifests / SPLIT_REGISTRY
     if path.is_file():
         return json.loads(path.read_text(encoding="utf-8"))
     return {"schema_version": 1, "groups": {}}
 
 
 def entity_inventory(repository: CorpusRepository, *, freeze: bool = True,
-                     layout_coverage: bool = True) -> list[EntitySample]:
+                     layout_coverage: bool = True, registry_override: dict | None = None) -> list[EntitySample]:
     """Observations annotées (human_confirmed) ; split par combat, TEST gelé une fois attribué.
 
     ``layout_coverage`` (LOT 3B-5B) : chaque disposition annotée reçoit si possible un groupe TRAIN,
@@ -127,7 +131,7 @@ def entity_inventory(repository: CorpusRepository, *, freeze: bool = True,
         if grid_from_document(document) is None:
             continue
         rows.append((entry, annotation, document))
-    registry = _registry(repository)
+    registry = registry_override if registry_override is not None else _registry(repository)
     groups = {_group(entry, document) for entry, _annotation, document in rows}
     layouts = defaultdict(set)
     for entry, _annotation, document in rows:
@@ -155,7 +159,8 @@ def entity_inventory(repository: CorpusRepository, *, freeze: bool = True,
             annotation.enemy_occluded_tracks, annotation.empty_confirmed_cells, annotation.frame_phase,
             calibration.get("layout_signature"), capture.get("analysis_ms"), document,
             bool(annotation.tracking_identity_confirmed and annotation.tracking_identity_source),
-            annotation.tracking_identity_source))
+            annotation.tracking_identity_source, annotation.tracking_confirmed_at,
+            annotation.tracking_sequence_id))
     return sorted(samples, key=lambda item: (item.session_id, item.frame_index))
 
 
@@ -437,8 +442,11 @@ def _tracking_metrics(sequences: dict[str, list[tuple[EntitySample, dict[str, in
         owners: dict[str, set[str]] = defaultdict(set)
         absent: set[str] = set()
         for sample, predicted_tracks in rows:
-            if not sample.tracking_identity_confirmed:
+            if not (sample.tracking_identity_confirmed and sample.tracking_identity_source):
                 excluded += 1
+                # Ne pas comparer deux identités de part et d'autre d'une frame non vérifiée.
+                last_pred.clear()
+                absent.clear()
                 continue
             frames += 1
             absent.update(sample.occluded_tracks)
@@ -482,7 +490,9 @@ def replay_timestamps(samples: list[EntitySample]) -> dict[str, tuple[float, str
         rows.sort(key=lambda s: s.frame_index)
         anchors = []
         for index, sample in enumerate(rows):
-            raw = (sample.document.get("prediction") or {}).get("timestamp")
+            raw = (sample.document.get("capture") or {}).get("timestamp")
+            if raw is None:
+                raw = (sample.document.get("prediction") or {}).get("timestamp")
             if raw is not None:
                 timestamp = float(raw)
                 if not math.isfinite(timestamp) or (anchors and timestamp <= anchors[-1][1]):
@@ -490,7 +500,7 @@ def replay_timestamps(samples: list[EntitySample]) -> dict[str, tuple[float, str
                 anchors.append((index, timestamp))
         for index, sample in enumerate(rows):
             known = next((t for i, t in anchors if i == index), None)
-            source = "prediction.timestamp"
+            source = "capture.timestamp" if (sample.document.get("capture") or {}).get("timestamp") is not None else "prediction.timestamp"
             if known is None:
                 left = [(i, t) for i, t in anchors if i < index]
                 right = [(i, t) for i, t in anchors if i > index]
@@ -509,9 +519,9 @@ def replay_timestamps(samples: list[EntitySample]) -> dict[str, tuple[float, str
     return result
 
 
-def run_entity_benchmark(repository: CorpusRepository, *, save_profiles: bool = True,
+def run_entity_benchmark(repository: CorpusRepository, *, save_profiles: bool = False,
                          splits: tuple[str, ...] | None = None, layout: str | None = None,
-                         layout_coverage: bool = True, freeze: bool = True) -> dict[str, Any]:
+                         layout_coverage: bool = True, freeze: bool = False) -> dict[str, Any]:
     samples = entity_inventory(repository, freeze=freeze, layout_coverage=layout_coverage)
     detector = CellEntityDetector()
     profiles_by_layout, diagnostics_by_layout = {}, {}
@@ -581,8 +591,18 @@ def run_entity_benchmark(repository: CorpusRepository, *, save_profiles: bool = 
             detail = _frame_metrics(sample, player, enemies, unknown, result.occupancy, after[scope])
             if scope == "all":
                 detail.update({"layout": layout_digest(sample.layout_signature), "timestamp": context.timestamp,
+                               "group_id": sample.group_id, "frame_index": sample.frame_index,
+                               "truth_identities": [{"cell_id": c, "track_id": t} for c, t in sample.enemies],
+                               "occluded_truth": list(sample.occluded_tracks),
+                               "tracking_identity_confirmed": sample.tracking_identity_confirmed,
+                               "tracking_identity_source": sample.tracking_identity_source,
+                               "tracking_confirmed_at": sample.tracking_confirmed_at,
+                               "tracking_sequence_id": sample.tracking_sequence_id,
+                               "global_assignment": dict(tracker.last_diagnostics),
+                               "detections": [e.to_dict() for e in result.entities],
                                "timestamp_source": replay_times[sample.observation_id][1],
                                "detector_player": result.player.cell_id if result.player else None,
+                               "tracked_entities": [item.to_dict() for item in tracked],
                                "diagnostics": result.diagnostics})
                 frames_after.append(detail)
         sequences[sample.group_id].append((sample, {item.track_id: item.cell_id for item in tracked
@@ -597,7 +617,9 @@ def run_entity_benchmark(repository: CorpusRepository, *, save_profiles: bool = 
             track = assignment.get(index) or f"g{len(state) + len(next_state) + 1}_{sample.frame_index}"
             next_state[track] = cell_id
         greedy_state[sample.group_id] = next_state
+        detail["greedy_tracks"] = dict(next_state)
         greedy_sequences[sample.group_id].append((sample, dict(next_state)))
+    from combatbot.corpus.tracking_metrics import tracking_scopes
     split_counts = Counter(sample.split for sample in samples)
     group_counts = {split: len({s.group_id for s in samples if s.split == split}) for split in ("train", "validation", "test")}
     tracked_truth = sum(1 for sample in samples if sample.tracking_identity_confirmed and any(track for _cell, track in sample.enemies))
@@ -610,6 +632,7 @@ def run_entity_benchmark(repository: CorpusRepository, *, save_profiles: bool = 
         "profiles": profile_diagnostics,
         "before": {scope: _summaries(values) for scope, values in before.items()},
         "after": {scope: _summaries(values) for scope, values in after.items()},
+        "tracking_verified": tracking_scopes(frames_after),
         "tracking_global": _tracking_metrics(sequences),
         "tracking_greedy_same_detections": _tracking_metrics(greedy_sequences),
         "performance_ms": {name: {"mean": mean(values), "median": median(values), "max": max(values)}

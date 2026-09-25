@@ -298,6 +298,8 @@ def test_unverified_track_labels_not_scored_as_tracking_truth() -> None:
     mixed = _tracking_metrics({"old": swapped, "new": [(sample, {"t9": 10}) for sample in new]})
     assert mixed["status"] == "MEASURED" and mixed["frames"] == 3 and mixed["excluded_unverified_frames"] == 3
     assert mixed["id_switches"] == 0 and mixed["truth_observations"] == 3
+    forged = replace(new[0], tracking_identity_source=None)
+    assert _tracking_metrics({"x": [(forged, {"t1": 10})]})["status"] == "NOT_EVALUABLE"
 
 
 def test_build_profiles_multi_example_on_corpus(tmp_path) -> None:

@@ -246,10 +246,11 @@ def save_train_player_profile(root: Path, profile: PlayerVisualProfileV2) -> Pat
                   profile.to_dict())
 
 
-def load_train_player_profile(root: Path, layout_signature: str | None) -> PlayerVisualProfileV2 | None:
+def load_train_player_profile(root: Path, layout_signature: str | None, *, directory: Path | None = None) -> PlayerVisualProfileV2 | None:
     if not layout_signature:
         return None
-    path = profile_directory(root) / f"player_train_{_digest(layout_signature)}.json"
+    from combatbot.entity_runtime import active_profile_directory
+    path = (directory or active_profile_directory(root)) / f"player_train_{_digest(layout_signature)}.json"
     if not path.is_file():
         return None
     return PlayerVisualProfileV2.from_dict(json.loads(path.read_text(encoding="utf-8")))
@@ -261,9 +262,11 @@ def save_team_profile(root: Path, profile: TeamMarkerProfile) -> Path:
                   profile.to_dict())
 
 
-def load_team_profile(root: Path, layout_signature: str | None = None) -> TeamMarkerProfile | None:
+def load_team_profile(root: Path, layout_signature: str | None = None, *, directory: Path | None = None) -> TeamMarkerProfile | None:
     """Profil du layout demandé ; à défaut, ancien fichier unique ``team_markers.json`` (3B-5)."""
-    candidates = ([profile_directory(root) / f"team_markers_{_digest(layout_signature)}.json"]
+    from combatbot.entity_runtime import active_profile_directory
+    directory = directory or active_profile_directory(root)
+    candidates = ([directory / f"team_markers_{_digest(layout_signature)}.json"]
                   if layout_signature else [])
     candidates.append(profile_directory(root) / "team_markers.json")
     for path in candidates:
