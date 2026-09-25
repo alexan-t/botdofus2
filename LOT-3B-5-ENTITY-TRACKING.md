@@ -966,3 +966,47 @@ La réparation améliore la détection mesurée, mais la couverture reste incomp
 avec les anciennes grilles non renseignées reste une limite d'apprentissage, et le tracking TEST
 n'est pas validé. **LOT 3B-5 non finalisé**, version 0.4.3 conservée. Aucun LOT 3B-6,
 aucune nouvelle collecte et aucun combat automatique.
+
+
+### 15.14 Mesure du suivi après revue humaine des identités — 25 septembre 2026
+
+**Revue dans l'application (`dist/PythonBot`, commit `0c72484`).** L'utilisateur a confirmé
+les deux séquences du nouveau layout via « Enregistrer la confirmation de la séquence » :
+`session_1f2858ce5c14|map88084225` (12 frames, TRAIN) et `session_325b4d78d112|map88083713`
+(16 frames, TEST). Source `human_ui_review`, horodatée. Les 28 anciennes frames renumérotées
+restent non confirmées et exclues. Comparaison au snapshot `lot3b5b-run2` : sur les 28 annotations
+réécrites, seuls les champs d'identité de suivi et `entity_confirmed_at` changent, aucune position.
+
+Défaut d'interface constaté : la case de confirmation se recharge à chaque changement de frame.
+Cochée puis suivie d'une navigation, elle est donc décochée au clic sur le bouton, sans
+avertissement. Contournement utilisé : cocher puis enregistrer sans changer de frame. Pas encore
+corrigé.
+
+**Mesure.** Snapshot `data/validation/lot3b5c-tracking/corpus` (copie du corpus utilisateur +
+registre v2 gelé de `lot3b5b-reprise`). Pipeline gelé, profils TRAIN, aucun réglage.
+La détection TEST est **identique frame par frame (16/16)** au passage unique gelé
+`new-layout-test-once` : aucune nouvelle décision de détection. Horodatages réels
+(`prediction.timestamp`) : écart médian 1,2 s en TRAIN et 1,7 s en TEST, maximum 4,1 s.
+
+| Portée | Observations d'identité | Associations exactes | ID switches | Fragmentations | Réassociations fausses | Couverture |
+|---|---:|---:|---:|---:|---:|---:|
+| TRAIN (12 frames), global | 21 | 18 | 0 | 2 | 0 | 85,7 % |
+| **TEST (16 frames), global** | 45 | 35 | **3** | 5 | **2** | 77,8 % |
+| TEST, référence gloutonne | 45 | 35 | 9 | 5 | 2 | 77,8 % |
+
+- Les associations manquantes viennent des ennemis non détectés (35/45) : le tracker ne crée
+  pas de piste sans détection.
+- Le suivi global fait moins de switches que la référence gloutonne sur les mêmes détections
+  (3 contre 9). Les règles de coût et de persistance diffèrent : aucun gain causal n'est revendiqué.
+- 3 switches et 2 réassociations fausses sur 35 associations TEST : le suivi n'est pas sans erreur.
+  Ces cas ne sont ni inspectés ni corrigés à partir de TEST.
+- Occlusion : aucune occultation annotée, NOT OBSERVED.
+- Performance de ce passage : détecteur 182 ms en moyenne (max 498 ms), tracker 0,10 ms.
+
+```text
+GLOBAL TRACKING: PARTIAL (mesuré : TEST 3 switches, 2 réassociations fausses / 35 associations)
+OCCLUSION HANDLING: NOT OBSERVED
+ACTIONS: NONE
+```
+
+Les autres statuts de 15.13 sont inchangés. **LOT 3B-5 non finalisé**, version 0.4.3.
