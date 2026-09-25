@@ -1,22 +1,53 @@
-# Environnements et caches Python
-.venv/
+# Python
 __pycache__/
 *.py[cod]
+*$py.class
+
+# Environnements virtuels
+.venv/
+.venv*/
+venv/
+env/
+
+# Tests / couverture
 .pytest_cache/
 .pytest_tmp/
+.coverage
+.coverage.*
+htmlcov/
 
-# Build PyInstaller
-build/
-dist/
+# Build / packaging PyInstaller généré
+/build/
+/dist/
 *.spec.bak
 
-# Données runtime locales : base SQLite, corpus, caches, exports GameData
-# (dont data/gamedata/real-validation/). Jamais de fichiers du client DOFUS.
-data/
-logs/
-*.log
+# Données runtime locales : base SQLite, corpus, captures, profils, caches, exports GameData
+# (dont data/gamedata/real-validation/ et data/validation/). Jamais de fichiers du client DOFUS.
+/data/
+/logs/
+
+# Bases de données runtime
+*.sqlite
 *.sqlite3
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Logs / temporaires
+*.log
+*.tmp
 *.bak
+
+# IDE / assistants locaux
+.idea/
+.vscode/
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
 
 # Archives/données propriétaires du client : ne jamais versionner
 *.d2p
