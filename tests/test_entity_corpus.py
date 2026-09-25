@@ -265,3 +265,31 @@ def test_identity_review_ui_preserves_source_and_invalidates_changed_labels(tmp_
     assert not repository.tracking_sequence_confirmed(sequence_id)
     assert all(not repository.read_annotation(e).tracking_identity_confirmed for e in dialog.entries)
     dialog.close()
+
+
+def test_identity_review_checkbox_survives_navigation_and_warns_when_unchecked(tmp_path, monkeypatch) -> None:
+    import time
+    from combatbot.ui import entity_annotation_dialog as module
+    app = QApplication.instance() or QApplication([])
+    warnings = []
+    monkeypatch.setattr(module.QMessageBox, "warning", lambda *args: warnings.append(args[2]))
+    repository = build_corpus(tmp_path, ("combat-a",))
+    dialog = module.EntityAnnotationDialog(repository)
+    sequence_id = repository.tracking_sequence_id(dialog.entries[0])
+    # Case non cochée : le bouton prévient et n'écrit rien.
+    dialog._save_sequence()
+    assert warnings and "Cochez" in warnings[0] and dialog._sequence_jobs is None
+    assert not repository.tracking_sequence_confirmed(sequence_id)
+    # Cochée puis navigation dans la séquence : la case reste cochée jusqu'à l'enregistrement.
+    dialog.tracking_confirmed.setChecked(True)
+    dialog._move(1)
+    dialog._move(1)
+    assert dialog.tracking_confirmed.isChecked()
+    dialog._save_sequence()
+    deadline = time.monotonic() + 5
+    while dialog._sequence_jobs.active and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+    assert repository.tracking_sequence_confirmed(sequence_id)
+    assert dialog.tracking_confirmed.isChecked() and sequence_id not in dialog._pending_tracking
+    dialog.close()

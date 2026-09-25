@@ -134,9 +134,14 @@ class EntityAnnotationDialog(QDialog):
             "Cochez après avoir comparé cette frame aux autres frames du combat. "
             "Laissez décoché si les numéros ont été attribués à nouveau sur chaque image.")
         self._tracking_source: str | None = None
+        # Choix de la case par séquence, conservé pendant la navigation entre ses frames
+        # jusqu'à l'enregistrement (sinon la case serait rechargée à chaque frame).
+        self._pending_tracking: dict[str, bool] = {}
+        self.tracking_confirmed.toggled.connect(self._tracking_toggled)
         self.save_sequence = QPushButton("Enregistrer la confirmation de la séquence")
         self.save_sequence.clicked.connect(self._save_sequence)
         self._sequence_jobs = None
+        self._sequence_saving: str | None = None
 
         for widget in (self.player_hidden, QLabel("Phase de la frame :"), self.phase, self.occlusion,
                        self.tactical, QLabel("Ennemis occultés :"), self.occluded_tracks,
@@ -223,7 +228,11 @@ class EntityAnnotationDialog(QDialog):
         self.sequence.blockSignals(True)
         self.sequence.setCurrentIndex(self.sequence.findData(sequence_id))
         self.sequence.blockSignals(False)
-        self.tracking_confirmed.setChecked(self.repository.tracking_sequence_confirmed(sequence_id))
+        pending = self._pending_tracking.get(sequence_id)
+        self.tracking_confirmed.blockSignals(True)
+        self.tracking_confirmed.setChecked(pending if pending is not None
+                                           else self.repository.tracking_sequence_confirmed(sequence_id))
+        self.tracking_confirmed.blockSignals(False)
         grid = document.get("grid_snapshot") or {}
         self.header.setText(
             f"Frame {self.index + 1}/{len(self.entries)} · <b>{entry.session_id}</b> · frame {entry.frame_index} · "
@@ -343,8 +352,19 @@ class EntityAnnotationDialog(QDialog):
                            if self._sequence_ids[e.observation_id] == selected), self.index)
         self._show()
 
+    def _tracking_toggled(self, checked: bool) -> None:
+        if self.entries:
+            self._pending_tracking[self._sequence_ids[self.entries[self.index].observation_id]] = checked
+
     def _save_sequence(self) -> None:
         if not self.entries:
+            return
+        sequence_id = self.sequence.currentData()
+        if not self.tracking_confirmed.isChecked() and not self.repository.tracking_sequence_confirmed(sequence_id):
+            message = ("Cochez « Mêmes E1/E2… pour les mêmes ennemis dans ce combat » avant d'enregistrer : "
+                       "aucune confirmation n'a été enregistrée.")
+            self.status.setText(message)
+            QMessageBox.warning(self, "Confirmation non cochée", message)
             return
         current = self.repository.read_annotation(self.entries[self.index])
         visible = {(cell, None if label == "ENEMY" else label) for cell, label in self.labels.items()
@@ -358,8 +378,8 @@ class EntityAnnotationDialog(QDialog):
         if self._sequence_jobs is None:
             self._sequence_jobs = JobRunner()
             self._sequence_jobs.all_done.connect(self._sequence_done)
-        sequence_id = self.sequence.currentData()
         confirmed = self.tracking_confirmed.isChecked()
+        self._sequence_saving = sequence_id
         self.setEnabled(False)
         self._sequence_jobs.submit(
             lambda: self.repository.confirm_tracking_sequence(sequence_id, confirmed=confirmed),
@@ -369,6 +389,11 @@ class EntityAnnotationDialog(QDialog):
 
     def _sequence_done(self) -> None:
         self.setEnabled(True)
+        if self._sequence_saving is not None and self.repository.tracking_sequence_confirmed(
+                self._sequence_saving) == self._pending_tracking.get(self._sequence_saving):
+            # Enregistré : l'état affiché redevient celui du corpus.
+            self._pending_tracking.pop(self._sequence_saving, None)
+        self._sequence_saving = None
         self._show()
 
     def reject(self) -> None:
