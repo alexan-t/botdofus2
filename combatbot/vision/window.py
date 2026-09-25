@@ -68,7 +68,34 @@ def _title(hwnd: int) -> str:
     return buffer.value
 
 
+GAME_EXECUTABLE = "dofus.exe"
+
+
+def _process_name(hwnd: int) -> str | None:
+    """Nom de l'exécutable propriétaire (lecture seule) ; ``None`` si Windows ne le fournit pas."""
+    try:
+        user32 = _user32()
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(wintypes.HWND(hwnd), ctypes.byref(pid))
+        handle = kernel32.OpenProcess(0x1000, False, pid.value)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return None
+        try:
+            size = wintypes.DWORD(1024)
+            buffer = ctypes.create_unicode_buffer(size.value)
+            if not kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+                return None
+            return buffer.value.replace("/", "\\").rsplit("\\", 1)[-1].casefold()
+        finally:
+            kernel32.CloseHandle(handle)
+    except (AttributeError, OSError):
+        return None
+
+
 def list_dofus_windows(fragment: str = "DOFUS") -> list[WindowInfo]:
+    """Fenêtres du jeu. Un navigateur ou le launcher dont le titre contient « Dofus » est écarté
+    dès que Windows identifie un autre exécutable que Dofus.exe."""
     user32 = _user32()
     windows: list[WindowInfo] = []
     callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
@@ -76,7 +103,7 @@ def list_dofus_windows(fragment: str = "DOFUS") -> list[WindowInfo]:
     def visit(hwnd: int, _lparam: int) -> bool:
         if user32.IsWindowVisible(hwnd):
             title = _title(hwnd)
-            if fragment.casefold() in title.casefold():
+            if fragment.casefold() in title.casefold() and _process_name(hwnd) in (None, GAME_EXECUTABLE):
                 windows.append(WindowInfo(int(hwnd), title, bool(user32.IsIconic(hwnd))))
         return True
 

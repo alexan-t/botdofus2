@@ -35,7 +35,7 @@ from combatbot.vision.autocalibration import ZoneSuggestion, suggest_zones, zone
 from combatbot.vision.icons import infer_grid_shape, scan_spell_bar
 from combatbot.vision.tooltip import locate_new_tooltip, recognize_tooltip
 from combatbot.vision.character import recognize_profile
-from combatbot.vision.models import CapturedFrame, ConnectionResult, ZoneEvidence
+from combatbot.vision.models import CapturedFrame, ConnectionResult, ZoneEvidence, ZONE_LABELS
 from combatbot.vision.combat_models import GridCalibration, ObservationPacket
 from combatbot.vision.coordinates import CombatPoint
 from combatbot.vision.combat_observer import RealCombatObserver, save_debug_observation
@@ -159,7 +159,7 @@ class MainWindow(QMainWindow):
         self.client_panel.diagnostic.connect(
             lambda message: self._on_event(CombatEvent("INFO", "vision.connection", message))
         )
-        self.client_panel.capture_requested.connect(self._capture_preview)
+        self.client_panel.capture_confirmed.connect(self._remember_confirmed_window)
         self.client_panel.calibrate_requested.connect(self._calibrate)
         self.client_panel.recognize_requested.connect(self._recognize_character)
         self.combat.observation_start_requested.connect(self._start_observation)
@@ -313,6 +313,10 @@ class MainWindow(QMainWindow):
                 self.client_panel.show_error("Le profil ou la fenêtre a changé pendant la vérification")
                 return
             self.client_panel.set_connection_result(result)
+            self._last_connection_details = dict(result.details)
+            if result.success and result.code == "CONTENT_UNCERTAIN" and self._window_already_confirmed(
+                    profile_id, result.details):
+                self.client_panel._confirm_capture(automatic=True)
             if result.success:
                 rectangles = result.details.get("zone_rects", {})
                 confidences = result.details.get("zone_confidence", {})
@@ -342,6 +346,25 @@ class MainWindow(QMainWindow):
             )
 
         QTimer.singleShot(150, lambda: self.jobs.submit(lambda: connect_window(hwnd, known), success, failure))
+
+    @staticmethod
+    def _window_identity(details: dict) -> dict:
+        return {"title": details.get("title"), "width": details.get("width"), "height": details.get("height")}
+
+    def _window_already_confirmed(self, profile_id: int, details: dict) -> bool:
+        """Même titre de fenêtre et même taille que lors de la dernière confirmation humaine."""
+        saved = self.storage.get_profile_setting(profile_id, "confirmed_window", None)
+        return isinstance(saved, dict) and bool(saved.get("title")) and saved == self._window_identity(details)
+
+    def _remember_confirmed_window(self) -> None:
+        profile_id = self.client_panel.profile_id
+        details = getattr(self, "_last_connection_details", None)
+        if profile_id is None or not details or details.get("hwnd") != self.client_panel.connected_hwnd:
+            return
+        try:
+            self.storage.set_profile_setting(profile_id, "confirmed_window", self._window_identity(details))
+        except (RuntimeError, ValueError) as exc:
+            self.client_panel.diagnostic.emit(f"Confirmation de fenêtre non mémorisée : {exc}")
 
     def _disconnect_client(self) -> None:
         self._stop_observation()
@@ -373,7 +396,7 @@ class MainWindow(QMainWindow):
         calibration = self.storage.load_calibration(profile_id)
         detected = len(self._connection_suggestions) > 1
         if calibration is None:
-            self.client_panel.calibration_status.setText("Calibration absente")
+            self.client_panel.set_calibration_state("absent", "Calibration absente")
             self.client_panel.progress.setValue(3 if detected else 2)
         else:
             compatibility = calibration.layout_compatibility(geometry.width, geometry.height)
@@ -387,13 +410,11 @@ class MainWindow(QMainWindow):
                                if calibration.zone_meta.get(name, ZoneEvidence(1, "ancienne calibration", "confirmée")).status
                                == "confirmée"}
             if review:
-                self.client_panel.calibration_status.setText(
-                    "Zones à revalider : " + ", ".join(sorted(review))
-                )
+                self.client_panel.set_calibration_state(
+                    "review", "Zones à revalider : " + ", ".join(ZONE_LABELS.get(z, z) for z in sorted(review)))
             else:
-                self.client_panel.calibration_status.setText(
-                    f"Calibration compatible : {len(confirmed_zones)}/{len(calibration.zones)} zone(s) confirmée(s)"
-                )
+                self.client_panel.set_calibration_state(
+                    "ok", f"Calibration compatible : {len(confirmed_zones)}/{len(calibration.zones)} zone(s) validée(s)")
             if not self.client_panel.content_confirmed or review or not confirmed_zones:
                 self.client_panel.progress.setValue(3 if detected else 2)
             elif {"combat", "spell_bar", "hp", "ap", "mp"}.issubset(confirmed_zones):
@@ -401,9 +422,8 @@ class MainWindow(QMainWindow):
             else:
                 self.client_panel.progress.setValue(4)
         elif calibration is not None:
-            self.client_panel.calibration_status.setText(
-                "Calibration invalidée : " + compatibility.reason.value + " ; recalibrez"
-            )
+            self.client_panel.set_calibration_state(
+                "review", "Calibration invalidée : " + compatibility.reason.value + " ; recalibrez")
             self.client_panel.progress.setValue(2)
 
     def _run_capture(self, on_success, process=None, delay_ms: int = 450) -> None:
@@ -447,13 +467,6 @@ class MainWindow(QMainWindow):
     def _vision_error(self, message: str) -> None:
         self.client_panel.diagnostic.emit(f"[VISION] {message}")
         QMessageBox.warning(self, "Observation DOFUS", message)
-
-    def _capture_preview(self) -> None:
-        hwnd = self.client_panel.windows.currentData()
-        if hwnd is None:
-            self.client_panel.show_error("Sélectionnez une fenêtre avant de tester la capture")
-            return
-        self._connect_client(int(hwnd))
 
     def _calibrate(self) -> None:
         profile_id = self.client_panel.profile_id

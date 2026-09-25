@@ -1,12 +1,17 @@
-"""Rectangles déplaçables et redimensionnables sur une capture réelle."""
+"""Calibration des zones : grande capture à gauche, liste compacte des zones à droite.
+
+Chaque zone est un cadre déplaçable/redimensionnable sur la capture réelle. La barre latérale ne
+montre qu'un nom, un badge d'état (À placer / À vérifier / Validée) et une action ; la provenance
+détaillée reste en infobulle et n'est jamais concaténée à chaque mouvement de souris.
+"""
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QBrush, QKeySequence, QPainter, QPen, QShortcut
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
+from PySide6.QtGui import QColor, QBrush, QFont, QKeySequence, QPainter, QPen, QShortcut
 from PySide6.QtWidgets import (
-    QDialog, QGraphicsItem, QGraphicsPixmapItem, QGraphicsRectItem,
-    QGraphicsScene, QGraphicsView, QHBoxLayout, QLabel, QPushButton, QVBoxLayout,
+    QDialog, QFrame, QGraphicsItem, QGraphicsPixmapItem, QGraphicsRectItem, QGraphicsScene,
+    QGraphicsView, QHBoxLayout, QLabel, QProgressBar, QPushButton, QVBoxLayout, QWidget,
 )
 
 from combatbot.ui.images import bgr_to_pixmap
@@ -16,10 +21,47 @@ from combatbot.vision.coordinates import ClientBox, ClientSize, LayoutSignature
 
 
 COLORS = ("#5dd6bd", "#f0bc65", "#e77783", "#8eaaf0", "#b59cf2", "#62c0e2", "#ffffff")
+ALL_ZONES = (*ZONE_NAMES, "identity")
+REQUIRED_ZONES = ("combat", "spell_bar", "hp", "ap", "mp")
+ZONE_HINTS = {
+    "combat": "Toute la carte de combat, au-dessus du HUD.",
+    "spell_bar": "Les cases de sorts en bas de l'écran.",
+    "hp": "Le cœur des points de vie.",
+    "ap": "Le chiffre des PA (étoile bleue).",
+    "mp": "Le chiffre des PM (vert).",
+    "end_turn": "Le bouton « Terminer le tour ».",
+    "identity": "Nom et classe du personnage.",
+}
+MANUAL = "ajustée manuellement"
+HUMAN = "vérification humaine"
+SHORT_TAGS = {"combat": "Combat", "spell_bar": "Sorts", "hp": "PV", "ap": "PA", "mp": "PM",
+              "end_turn": "Fin de tour", "identity": "Nom"}
+
+SIDEBAR_STYLE = """
+QFrame#calibrationSidebar { background: #0f1726; border-left: 1px solid #273449; }
+QFrame#zoneRow { background: #172234; border: 1px solid #243249; border-radius: 10px; }
+QFrame#zoneRow[selected="true"] { border: 1px solid #40c8aa; background: #173b43; }
+QLabel#zoneName { font-weight: 600; color: #f1f5f9; }
+QLabel#zoneHint { color: #8b98ab; font-size: 11px; }
+QLabel#chip { border-radius: 9px; padding: 2px 8px; font-size: 11px; font-weight: 600; }
+QLabel#chip[state="ok"] { background: #134e45; color: #7ee8cf; }
+QLabel#chip[state="check"] { background: #4a3a17; color: #f5cf7a; }
+QLabel#chip[state="missing"] { background: #273449; color: #9ca3af; }
+QPushButton#rowAction { padding: 4px 10px; border-radius: 7px; }
+QProgressBar { background: #172234; border: none; border-radius: 4px; height: 8px; }
+QProgressBar::chunk { background: #40c8aa; border-radius: 4px; }
+"""
+
+
+def with_note(method: str, note: str) -> str:
+    """Provenance courte : origine + une seule note, jamais une répétition à chaque mouvement."""
+    origin = next((part for part in method.split(" ; ") if part and part not in (MANUAL, HUMAN)
+                   and "à revalider" not in part), "manuel")
+    return f"{origin} ; {note}"
 
 
 class ResizableRectItem(QGraphicsRectItem):
-    def __init__(self, label: str, color: str, rect: QRectF, on_edit=None) -> None:
+    def __init__(self, label: str, color: str, rect: QRectF, on_edit=None, handle: float = 13) -> None:
         super().__init__(QRectF(0, 0, rect.width(), rect.height()))
         self.label = label
         self.color = QColor(color)
@@ -32,50 +74,83 @@ class ResizableRectItem(QGraphicsRectItem):
         )
         self.setAcceptHoverEvents(True)
         self._resizing = False
-        self._handle = 13
+        self._moved = False
+        self._handle = handle
+
+    def _handle_rect(self) -> QRectF:
+        return QRectF(self.rect().right() - self._handle, self.rect().bottom() - self._handle,
+                      self._handle, self._handle)
+
+    def _font(self) -> QFont:
+        font = QFont("Segoe UI")
+        font.setPixelSize(max(12, int(self._handle * 0.9)))
+        font.setBold(True)
+        return font
+
+    def _tag_rect(self) -> QRectF:
+        """Étiquette au-dessus du cadre (dedans s'il touche le haut de l'image), jamais tronquée."""
+        from PySide6.QtGui import QFontMetricsF
+        font = self._font()
+        width = QFontMetricsF(font).horizontalAdvance(self.label) + 14
+        height = font.pixelSize() + 8
+        top = -height if self.pos().y() >= height else 0
+        return QRectF(0, top, width, height)
+
+    def boundingRect(self) -> QRectF:  # noqa: N802 - API Qt
+        return super().boundingRect().united(self._tag_rect()).adjusted(-2, -2, 2, 2)
 
     def paint(self, painter: QPainter, option, widget=None) -> None:
-        painter.setPen(QPen(self.color, 3 if self.isSelected() else 2))
+        pen = QPen(self.color, 3 if self.isSelected() else 2)
+        pen.setCosmetic(True)   # épaisseur lisible quelle que soit la réduction de la capture
+        painter.setPen(pen)
         fill = QColor(self.color)
-        fill.setAlpha(35)
+        fill.setAlpha(55 if self.isSelected() else 28)
         painter.setBrush(QBrush(fill))
         painter.drawRect(self.rect())
         painter.setBrush(self.color)
-        painter.drawRect(QRectF(self.rect().right() - self._handle, self.rect().bottom() - self._handle,
-                                self._handle, self._handle))
-        painter.setPen(QColor("#ffffff"))
-        painter.drawText(self.rect().adjusted(5, 4, -4, -4), self.label)
+        painter.drawRect(self._handle_rect())
+        painter.setFont(self._font())
+        tag = self._tag_rect()
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRect(tag)
+        painter.setPen(QColor("#0b1220"))
+        painter.drawText(tag, Qt.AlignmentFlag.AlignCenter, self.label)
+
+    def hoverMoveEvent(self, event) -> None:
+        self.setCursor(Qt.CursorShape.SizeFDiagCursor if self._handle_rect().contains(event.pos())
+                       else Qt.CursorShape.SizeAllCursor)
+        super().hoverMoveEvent(event)
 
     def mousePressEvent(self, event) -> None:
-        handle_rect = QRectF(self.rect().right() - self._handle, self.rect().bottom() - self._handle,
-                             self._handle, self._handle)
-        self._resizing = handle_rect.contains(event.pos())
+        self._resizing = self._handle_rect().contains(event.pos())
+        self._moved = False
         if self._resizing:
+            self.setSelected(True)
             event.accept()
         else:
             super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:
+        self._moved = True
         if self._resizing:
             scene = self.scene().sceneRect() if self.scene() else QRectF(0, 0, 10000, 10000)
             width = max(16, min(event.pos().x(), scene.right() - self.pos().x()))
             height = max(16, min(event.pos().y(), scene.bottom() - self.pos().y()))
             self.setRect(0, 0, width, height)
-            if self.on_edit:
-                self.on_edit()
             event.accept()
         else:
             super().mouseMoveEvent(event)
-            if self.on_edit:
-                self.on_edit()
 
     def mouseReleaseEvent(self, event) -> None:
         self._resizing = False
-        if self.on_edit:
-            self.on_edit()
         super().mouseReleaseEvent(event)
+        if self._moved and self.on_edit:
+            self.on_edit()   # une seule notification par geste, pas à chaque pixel
+        self._moved = False
 
     def itemChange(self, change, value):
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange:
+            self.prepareGeometryChange()   # l'étiquette peut passer dedans/dehors
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange and self.scene():
             scene = self.scene().sceneRect()
             pos = value
@@ -94,17 +169,20 @@ class _ImageDialog(QDialog):
         super().__init__(parent)
         self.frame = frame
         self.setWindowTitle(heading)
-        self.resize(1100, 760)
+        self.resize(1280, 800)
         self.scene = QGraphicsScene(self)
         pixmap = bgr_to_pixmap(frame.image)
         self.scene.addItem(QGraphicsPixmapItem(pixmap))
         self.scene.setSceneRect(0, 0, pixmap.width(), pixmap.height())
         self.view = QGraphicsView(self.scene)
         self.view.setRenderHint(QPainter.RenderHint.Antialiasing)
+        self.view.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         self.view.setDragMode(QGraphicsView.DragMode.NoDrag)
         self.view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.view.setMinimumSize(700, 500)
+        self.view.setFrameShape(QFrame.Shape.NoFrame)
+        self.view.setStyleSheet("background: #070b12;")
+        self.view.setMinimumSize(600, 400)
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
@@ -119,128 +197,227 @@ class _ImageDialog(QDialog):
         self.view.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
 
+class _ZoneRow(QFrame):
+    """Une ligne : pastille, nom, consigne courte, badge d'état, action."""
+
+    def __init__(self, zone: str, color: str, on_select, on_action) -> None:
+        super().__init__()
+        self.setObjectName("zoneRow")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._on_select = on_select
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(10)
+        dot = QLabel()
+        dot.setFixedSize(12, 12)
+        dot.setStyleSheet(f"background: {color}; border-radius: 6px;")
+        layout.addWidget(dot, 0, Qt.AlignmentFlag.AlignTop)
+        text = QVBoxLayout()
+        text.setSpacing(1)
+        name = ZONE_LABELS[zone] if zone != "identity" else "Nom et classe"
+        self.name = QLabel(name + ("" if zone in REQUIRED_ZONES else "  ·  facultatif"))
+        self.name.setObjectName("zoneName")
+        hint = QLabel(ZONE_HINTS[zone])
+        hint.setObjectName("zoneHint")
+        hint.setWordWrap(True)
+        text.addWidget(self.name)
+        text.addWidget(hint)
+        layout.addLayout(text, 1)
+        right = QVBoxLayout()
+        right.setSpacing(4)
+        self.chip = QLabel()
+        self.chip.setObjectName("chip")
+        self.chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.action = QPushButton()
+        self.action.setObjectName("rowAction")
+        self.action.clicked.connect(on_action)
+        right.addWidget(self.chip, 0, Qt.AlignmentFlag.AlignRight)
+        right.addWidget(self.action, 0, Qt.AlignmentFlag.AlignRight)
+        layout.addLayout(right)
+
+    def mousePressEvent(self, event) -> None:
+        self._on_select()
+        super().mousePressEvent(event)
+
+    def set_state(self, state: str, caption: str, action: str | None, selected: bool, tooltip: str) -> None:
+        self.chip.setText(caption)
+        self.chip.setProperty("state", state)
+        self.action.setText(action or "")
+        self.action.setVisible(action is not None)
+        self.setProperty("selected", "true" if selected else "false")
+        self.setToolTip(tooltip)
+        for widget in (self, self.chip):
+            widget.style().unpolish(widget)
+            widget.style().polish(widget)
+
+
 class CalibrationDialog(_ImageDialog):
     def __init__(self, frame: CapturedFrame, profile_id: int, existing: Calibration | None = None,
                  parent=None, suggestions: dict[str, ZoneSuggestion] | None = None) -> None:
-        super().__init__(frame, "Calibrer les zones du client", parent)
+        super().__init__(frame, "Calibration des zones", parent)
         self.profile_id = profile_id
         self.items: dict[str, ResizableRectItem] = {}
         self.evidence: dict[str, ZoneEvidence] = {}
-        self.zone_labels: dict[str, QLabel] = {}
+        self.rows: dict[str, _ZoneRow] = {}
+        self.selected: str | None = None
+        self._handle = max(14.0, frame.client.width * 0.012)
         review = zones_needing_review(existing, frame, suggestions or {}) if existing else set()
-        layout = QHBoxLayout(self)
-        layout.addWidget(self.view, 4)
-        side = QVBoxLayout()
-        instruction = QLabel("Vérifiez les zones sur l'image. Glissez les rectangles et tirez leur carré pour les ajuster. "
-                             "Ajoutez individuellement une zone inconnue.")
-        instruction.setWordWrap(True)
-        side.addWidget(instruction)
-        for index, zone in enumerate((*ZONE_NAMES, "identity")):
-            if existing and existing.layout_compatibility(
-                frame.client.width, frame.client.height
-            ).compatible and zone in existing.zones:
-                rect = QRectF(*existing.zones[zone].pixels(frame.client.width, frame.client.height))
+        compatible = bool(existing and existing.layout_compatibility(frame.client.width, frame.client.height).compatible)
+        initial: dict[str, QRectF] = {}
+        for zone in ALL_ZONES:
+            if compatible and zone in existing.zones:
+                initial[zone] = QRectF(*existing.zones[zone].pixels(frame.client.width, frame.client.height))
                 evidence = existing.zone_meta.get(zone, ZoneEvidence(1.0, "calibration existante", "confirmée"))
+                method = (with_note(evidence.method, HUMAN) if evidence.status == "confirmée"
+                          else with_note(evidence.method, "").removesuffix(" ; "))
+                evidence = ZoneEvidence(evidence.confidence, method, evidence.status)
                 if zone in review:
-                    evidence = ZoneEvidence(evidence.confidence, evidence.method + " ; disposition à revalider", "proposée")
+                    evidence = ZoneEvidence(evidence.confidence, with_note(evidence.method, "disposition à revalider"),
+                                            "proposée")
             elif suggestions and zone in suggestions:
-                rect = QRectF(*suggestions[zone].rect)
+                initial[zone] = QRectF(*suggestions[zone].rect)
                 evidence = suggestions[zone].evidence
             else:
-                rect = None
                 evidence = ZoneEvidence(0.0, "aucune preuve", "inconnue")
             self.evidence[zone] = evidence
-            row = QHBoxLayout()
-            label = QLabel()
-            label.setWordWrap(True)
-            label.setStyleSheet(f"color: {COLORS[index]};")
-            self.zone_labels[zone] = label
-            row.addWidget(label, 1)
-            button = QPushButton("Ajouter" if rect is None else "Confirmer")
-            button.clicked.connect(lambda checked=False, zone=zone: self._confirm_or_add(zone))
-            row.addWidget(button)
-            side.addLayout(row)
-            if rect is not None:
-                self._add_item(zone, COLORS[index], rect)
-            self._update_zone_label(zone)
+
+        self.setStyleSheet(SIDEBAR_STYLE)
+        root = QHBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        root.addWidget(self.view, 1)
+        sidebar = QFrame()
+        sidebar.setObjectName("calibrationSidebar")
+        sidebar.setFixedWidth(340)
+        side = QVBoxLayout(sidebar)
+        side.setContentsMargins(18, 18, 18, 18)
+        side.setSpacing(10)
+        heading = QLabel("Calibration")
+        heading.setObjectName("title")
+        side.addWidget(heading)
+        intro = QLabel("Posez chaque cadre sur l'élément du jeu.\nGlisser : déplacer · coin plein : redimensionner.")
+        intro.setObjectName("subtitle")
+        intro.setWordWrap(True)
+        side.addWidget(intro)
+        rows = QWidget()
+        rows_layout = QVBoxLayout(rows)
+        rows_layout.setContentsMargins(0, 4, 0, 4)
+        rows_layout.setSpacing(6)
+        for index, zone in enumerate(ALL_ZONES):
+            row = _ZoneRow(zone, COLORS[index], lambda zone=zone: self._select(zone),
+                           lambda checked=False, zone=zone: self._row_action(zone))
+            self.rows[zone] = row
+            rows_layout.addWidget(row)
+            if zone in initial:
+                self._add_item(zone, initial[zone])
+        side.addWidget(rows)
         side.addStretch()
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setFixedHeight(8)
         self.progress = QLabel()
         side.addWidget(self.progress)
-        confirm_all = QPushButton("Confirmer les zones détectées")
-        confirm_all.clicked.connect(self._confirm_all)
-        side.addWidget(confirm_all)
-        self.fullscreen_button = QPushButton("Mode fenêtre  ·  F11")
-        self.fullscreen_button.clicked.connect(self._toggle_fullscreen)
-        side.addWidget(self.fullscreen_button)
-        self.save_button = QPushButton("Enregistrer la calibration")
-        self.save_button.setObjectName("primary")
-        self.save_button.clicked.connect(self.accept)
-        side.addWidget(self.save_button)
+        side.addWidget(self.progress_bar)
+        self.confirm_all_button = QPushButton("Tout valider")
+        self.confirm_all_button.clicked.connect(self._confirm_all)
+        side.addWidget(self.confirm_all_button)
+        footer = QHBoxLayout()
         cancel = QPushButton("Annuler")
         cancel.clicked.connect(self.reject)
-        side.addWidget(cancel)
-        layout.addLayout(side, 1)
-        self._update_progress()
+        self.save_button = QPushButton("Enregistrer")
+        self.save_button.setObjectName("primary")
+        self.save_button.clicked.connect(self.accept)
+        footer.addWidget(cancel)
+        footer.addWidget(self.save_button, 1)
+        side.addLayout(footer)
+        root.addWidget(sidebar)
+        self.scene.selectionChanged.connect(self._scene_selection)
         self.fullscreen_shortcut = QShortcut(QKeySequence(Qt.Key.Key_F11), self)
-        self.fullscreen_shortcut.activated.connect(self._toggle_fullscreen)
-        self.setWindowState(self.windowState() | Qt.WindowState.WindowFullScreen)
+        self.fullscreen_shortcut.activated.connect(
+            lambda: self.showNormal() if self.isFullScreen() else self.showFullScreen())
+        self._refresh()
+        self.setWindowState(self.windowState() | Qt.WindowState.WindowMaximized)
 
-    def _add_item(self, zone: str, color: str, rect: QRectF) -> None:
-        item = ResizableRectItem(ZONE_LABELS[zone], color, rect,
-                                 on_edit=lambda zone=zone: self._edited(zone))
+    # ------------------------------------------------------------------ zones
+    def _add_item(self, zone: str, rect: QRectF) -> None:
+        index = ALL_ZONES.index(zone)
+        item = ResizableRectItem(SHORT_TAGS[zone], COLORS[index], rect, on_edit=lambda zone=zone: self._edited(zone),
+                                 handle=self._handle)
         self.scene.addItem(item)
         self.items[zone] = item
 
-    def _update_zone_label(self, zone: str) -> None:
-        evidence = self.evidence[zone]
-        self.zone_labels[zone].setText(
-            f"{ZONE_LABELS[zone]} : {evidence.status} ({evidence.confidence:.0%}, {evidence.method})"
-        )
-
-    def _confirm_or_add(self, zone: str) -> None:
+    def _state(self, zone: str) -> tuple[str, str, str | None]:
         if zone not in self.items:
-            index = (*ZONE_NAMES, "identity").index(zone)
-            x = min(20 + index * 28, max(0, self.frame.client.width - 180))
-            y = min(20 + index * 28, max(0, self.frame.client.height - 65))
-            self._add_item(zone, COLORS[index], QRectF(x, y, min(180, self.frame.client.width - x),
-                                                       min(55, self.frame.client.height - y)))
-            self.evidence[zone] = ZoneEvidence(0.0, "placement manuel à ajuster", "proposée")
+            return "missing", "À placer", "Placer"
+        if self.evidence[zone].status == "confirmée":
+            return "ok", "Validée", None
+        return "check", "À vérifier", "Valider"
+
+    def _refresh(self) -> None:
+        for zone, row in self.rows.items():
+            state, caption, action = self._state(zone)
+            evidence = self.evidence[zone]
+            row.set_state(state, caption, action, zone == self.selected,
+                          f"Origine : {evidence.method} (confiance {evidence.confidence:.0%})")
+        required = [zone for zone in REQUIRED_ZONES]
+        done = sum(self._state(zone)[0] == "ok" for zone in required)
+        self.progress.setText(f"{done} / {len(required)} zones essentielles validées")
+        self.progress_bar.setRange(0, len(required))
+        self.progress_bar.setValue(done)
+        pending = any(self._state(zone)[0] == "check" for zone in self.items)
+        self.confirm_all_button.setEnabled(pending)
+        self.save_button.setEnabled(bool(self.items))
+
+    def _select(self, zone: str) -> None:
+        self.selected = zone
+        item = self.items.get(zone)
+        if item is not None:
+            self.scene.blockSignals(True)
+            self.scene.clearSelection()
+            item.setSelected(True)
+            self.scene.blockSignals(False)
+        self._refresh()
+
+    def _scene_selection(self) -> None:
+        chosen = next((zone for zone, item in self.items.items() if item.isSelected()), None)
+        if chosen is not None and chosen != self.selected:
+            self.selected = chosen
+            self._refresh()
+
+    def _row_action(self, zone: str) -> None:
+        if zone not in self.items:
+            self._place(zone)
         else:
-            prior = self.evidence[zone]
-            self.evidence[zone] = ZoneEvidence(prior.confidence, prior.method + " ; vérification humaine", "confirmée")
-        self._update_zone_label(zone)
-        self._update_progress()
+            self._confirm(zone)
+        self._select(zone)
+
+    def _place(self, zone: str) -> None:
+        """Cadre posé au centre de la capture, à ajuster puis valider."""
+        width, height = self.frame.client.width, self.frame.client.height
+        box_w, box_h = max(80, width * 0.12), max(40, height * 0.07)
+        self._add_item(zone, QRectF((width - box_w) / 2, (height - box_h) / 2, box_w, box_h))
+        self.evidence[zone] = ZoneEvidence(0.0, "placement manuel", "proposée")
+
+    def _confirm(self, zone: str) -> None:
+        prior = self.evidence[zone]
+        self.evidence[zone] = ZoneEvidence(prior.confidence, with_note(prior.method, HUMAN), "confirmée")
+        self._refresh()
+
+    # Compatibilité des appels existants.
+    def _confirm_or_add(self, zone: str) -> None:
+        self._row_action(zone)
 
     def _confirm_all(self) -> None:
         for zone in self.items:
-            prior = self.evidence[zone]
-            self.evidence[zone] = ZoneEvidence(prior.confidence, prior.method + " ; vérification humaine", "confirmée")
-            self._update_zone_label(zone)
-        self._update_progress()
-
-    def _toggle_fullscreen(self) -> None:
-        if self.isFullScreen():
-            self.showNormal()
-        else:
-            self.showFullScreen()
-
-    def changeEvent(self, event: QEvent) -> None:
-        super().changeEvent(event)
-        if event.type() == QEvent.Type.WindowStateChange and hasattr(self, "fullscreen_button"):
-            self.fullscreen_button.setText(
-                "Mode fenêtre  ·  F11" if self.isFullScreen() else "Plein écran  ·  F11"
-            )
+            if self.evidence[zone].status != "confirmée":
+                self._confirm(zone)
+        self._refresh()
 
     def _edited(self, zone: str) -> None:
         prior = self.evidence[zone]
-        self.evidence[zone] = ZoneEvidence(prior.confidence, prior.method + " ; ajustée manuellement", "confirmée")
-        self._update_zone_label(zone)
-        self._update_progress()
-
-    def _update_progress(self) -> None:
-        count = sum(self.evidence[zone].status == "confirmée" for zone in self.items)
-        self.progress.setText(f"Zones confirmées : {count}/{len(self.items)} · autres zones facultatives")
-        self.save_button.setEnabled(bool(self.items))
+        self.evidence[zone] = ZoneEvidence(prior.confidence, with_note(prior.method, MANUAL), "confirmée")
+        self.selected = zone
+        self._refresh()
 
     def calibration(self) -> Calibration:
         zones: dict[str, RelativeRect] = {}
@@ -270,7 +447,8 @@ class ImageCropDialog(_ImageDialog):
         layout.addWidget(self.view, 1)
         width, height = frame.client.width, frame.client.height
         self.item = ResizableRectItem("Infobulle", "#f0bc65",
-                                      QRectF(width * 0.25, height * 0.18, width * 0.5, height * 0.5))
+                                      QRectF(width * 0.25, height * 0.18, width * 0.5, height * 0.5),
+                                      handle=max(14.0, width * 0.012))
         self.scene.addItem(self.item)
         buttons = QHBoxLayout()
         accept = QPushButton("Analyser cette zone")

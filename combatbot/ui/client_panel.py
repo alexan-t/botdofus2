@@ -8,8 +8,8 @@ from datetime import datetime
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QComboBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
-    QProgressBar, QPushButton, QSpinBox, QVBoxLayout, QWidget, QInputDialog,
+    QComboBox, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+    QProgressBar, QPushButton, QSpinBox, QToolButton, QVBoxLayout, QWidget, QInputDialog,
 )
 
 from combatbot.storage import Storage
@@ -18,10 +18,45 @@ from combatbot.vision.models import CapturedFrame, ConnectionResult, Profile, Re
 from combatbot.vision.window import list_dofus_windows
 
 
+STEP_CAPTIONS = ("Fenêtre", "Capture", "Calibration", "Prêt")
+PANEL_STYLE = """
+QLabel#step { background: #172234; border: 1px solid #273449; border-radius: 14px; padding: 6px 10px;
+              color: #8b98ab; font-weight: 600; }
+QLabel#step[state="done"] { background: #134e45; border-color: #1f7a6b; color: #7ee8cf; }
+QLabel#step[state="current"] { background: #173b43; border-color: #40c8aa; color: #f1f5f9; }
+QLabel#nextStep { background: #173b43; border: 1px solid #2f8f7e; border-radius: 10px; padding: 10px 14px;
+                  color: #d9fbf2; font-weight: 600; font-size: 14px; }
+QLabel#preview { border: 1px solid #273449; border-radius: 12px; background: #0b1220; color: #8b98ab; }
+QToolButton#section { border: none; color: #9ca3af; font-weight: 600; padding: 4px 0; background: transparent; }
+QToolButton#section:hover { color: #e5e7eb; }
+"""
+
+
+def _section(title: str, content: QWidget) -> QWidget:
+    """Bloc repliable, fermé par défaut : les détails n'encombrent pas le parcours principal."""
+    box = QWidget()
+    layout = QVBoxLayout(box)
+    layout.setContentsMargins(0, 0, 0, 0)
+    toggle = QToolButton()
+    toggle.setObjectName("section")
+    toggle.setText(f"▸  {title}")
+    toggle.setCheckable(True)
+    toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+    content.setVisible(False)
+
+    def switch(shown: bool) -> None:
+        content.setVisible(shown)
+        toggle.setText(f"{'▾' if shown else '▸'}  {title}")
+
+    toggle.toggled.connect(switch)
+    layout.addWidget(toggle)
+    layout.addWidget(content)
+    return box
+
+
 class ClientPanel(QWidget):
     profile_changed = Signal(int)
     connect_requested = Signal(int)
-    capture_requested = Signal()
     calibrate_requested = Signal()
     recognize_requested = Signal()
     disconnect_requested = Signal()
@@ -34,43 +69,94 @@ class ClientPanel(QWidget):
         self.connected_hwnd: int | None = None
         self.frame: CapturedFrame | None = None
         self.content_confirmed = False
+        self.calibration_state = "absent"   # absent | review | ok (fixé par la fenêtre principale)
         layout = QVBoxLayout(self)
-        heading = QLabel("Client DOFUS — observation seule")
-        heading.setObjectName("title")
-        layout.addWidget(heading)
-        profile_row = QHBoxLayout()
+        layout.setSpacing(12)
+        self.setStyleSheet(PANEL_STYLE)
+        subtitle = QLabel("Lecture seule : PythonBot regarde l'écran, il ne clique jamais dans DOFUS.")
+        subtitle.setObjectName("subtitle")
+        layout.addWidget(subtitle)
+        # Étapes visibles d'un coup d'œil, puis une seule consigne : la prochaine action.
+        steps = QHBoxLayout()
+        steps.setSpacing(8)
+        self.step_chips: list[QLabel] = []
+        for index, caption in enumerate(STEP_CAPTIONS, start=1):
+            chip = QLabel(f"{index}  {caption}")
+            chip.setObjectName("step")
+            chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            steps.addWidget(chip, 1)
+            self.step_chips.append(chip)
+        layout.addLayout(steps)
+        self.next_step = QLabel()
+        self.next_step.setObjectName("nextStep")
+        self.next_step.setWordWrap(True)
+        layout.addWidget(self.next_step)
+
+        connection = QFrame()
+        connection.setObjectName("card")
+        grid = QGridLayout(connection)
+        grid.setContentsMargins(14, 12, 14, 12)
+        grid.setHorizontalSpacing(10)
         self.profiles = QComboBox()
         self.profiles.currentIndexChanged.connect(self._load_profile)
-        profile_row.addWidget(QLabel("Profil"))
-        profile_row.addWidget(self.profiles, 1)
-        create = QPushButton("Nouveau profil")
+        create = QPushButton("Nouveau")
+        create.setToolTip("Créer un profil (un par personnage / disposition d'écran)")
         create.clicked.connect(self._new_profile)
-        profile_row.addWidget(create)
-        layout.addLayout(profile_row)
-
-        window_row = QHBoxLayout()
+        grid.addWidget(QLabel("Profil"), 0, 0)
+        grid.addWidget(self.profiles, 0, 1)
+        grid.addWidget(create, 0, 2)
         self.windows = QComboBox()
         self.windows.currentIndexChanged.connect(self._window_changed)
-        window_row.addWidget(QLabel("Fenêtre"))
-        window_row.addWidget(self.windows, 1)
-        refresh = QPushButton("Actualiser")
+        refresh = QPushButton("↻")
+        refresh.setToolTip("Rechercher de nouveau les fenêtres DOFUS")
+        refresh.setFixedWidth(40)
         refresh.clicked.connect(self.refresh_windows)
-        window_row.addWidget(refresh)
-        connect = QPushButton("Connecter")
-        connect.setObjectName("primary")
-        connect.clicked.connect(self._connect)
-        window_row.addWidget(connect)
-        disconnect = QPushButton("Déconnecter")
-        disconnect.clicked.connect(self.disconnect_requested)
-        window_row.addWidget(disconnect)
-        layout.addLayout(window_row)
+        self.connect_button = QPushButton("Connecter")
+        self.connect_button.setObjectName("primary")
+        self.connect_button.clicked.connect(self._connect)
+        self.disconnect_button = QPushButton("Déconnecter")
+        self.disconnect_button.clicked.connect(self.disconnect_requested)
+        grid.addWidget(QLabel("Fenêtre"), 1, 0)
+        grid.addWidget(self.windows, 1, 1)
+        grid.addWidget(refresh, 1, 2)
+        buttons = QHBoxLayout()
+        buttons.addWidget(self.connect_button)
+        buttons.addWidget(self.disconnect_button)
+        grid.addLayout(buttons, 1, 3)
+        grid.setColumnStretch(1, 1)
         self.connection_status = QLabel("Fenêtre non sélectionnée")
-        layout.addWidget(self.connection_status)
+        self.connection_status.setObjectName("subtitle")
+        grid.addWidget(self.connection_status, 2, 1, 1, 3)
+        layout.addWidget(connection)
+
+        self.preview = QLabel("Aucune capture")
+        self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview.setMinimumHeight(300)
+        self.preview.setObjectName("preview")
+        layout.addWidget(self.preview, 1)
+        actions = QHBoxLayout()
+        self.confirm_capture_button = QPushButton("Oui, l'aperçu montre DOFUS")
+        self.confirm_capture_button.setEnabled(False)
+        self.confirm_capture_button.clicked.connect(lambda: self._confirm_capture())
+        self.calibrate_button = QPushButton("Calibrer les zones")
+        self.calibrate_button.clicked.connect(self.calibrate_requested)
+        self.recognize_button = QPushButton("Lire le profil visible")
+        self.recognize_button.clicked.connect(self.recognize_requested)
+        for button in (self.confirm_capture_button, self.calibrate_button, self.recognize_button):
+            actions.addWidget(button)
+        layout.addLayout(actions)
+        self.calibration_status = QLabel("Calibration absente")
+        self.calibration_status.setObjectName("subtitle")
+        layout.addWidget(self.calibration_status)
+
+        # Progression historique conservée pour la fenêtre principale, remplacée à l'écran par les étapes.
         self.progress = QProgressBar()
         self.progress.setRange(0, 5)
-        self.progress.setFormat("Sélection → Capture → Détection → Vérification → Profil prêt : %v/5")
+        self.progress.setVisible(False)
         layout.addWidget(self.progress)
-        diagnostics = QFormLayout()
+
+        diagnostics_box = QWidget()
+        diagnostics = QFormLayout(diagnostics_box)
         self.window_title = QLabel("—")
         self.window_handle = QLabel("—")
         self.client_size = QLabel("—")
@@ -82,29 +168,11 @@ class ClientPanel(QWidget):
                                 ("Dernière erreur", self.last_error), ("Dernière vérification", self.last_success)):
             widget.setWordWrap(True)
             diagnostics.addRow(caption, widget)
-        layout.addLayout(diagnostics)
-        actions = QHBoxLayout()
-        self.capture_button = QPushButton("Tester la capture")
-        self.capture_button.clicked.connect(self.capture_requested)
-        self.confirm_capture_button = QPushButton("Confirmer la capture affichée")
-        self.confirm_capture_button.setEnabled(False)
-        self.confirm_capture_button.clicked.connect(self._confirm_capture)
-        self.calibrate_button = QPushButton("Recalibrer")
-        self.calibrate_button.clicked.connect(self.calibrate_requested)
-        self.recognize_button = QPushButton("Lire le profil visible")
-        self.recognize_button.clicked.connect(self.recognize_requested)
-        for button in (self.capture_button, self.confirm_capture_button,
-                       self.calibrate_button, self.recognize_button):
-            actions.addWidget(button)
-        layout.addLayout(actions)
-        self.calibration_status = QLabel("Calibration absente")
-        layout.addWidget(self.calibration_status)
-        self.preview = QLabel("Aucune capture")
-        self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview.setMinimumHeight(250)
-        self.preview.setStyleSheet("border: 1px solid #34445b; background: #172234;")
-        layout.addWidget(self.preview)
+        layout.addWidget(_section("Détails techniques", diagnostics_box))
 
+        identity_box = QWidget()
+        identity_layout = QVBoxLayout(identity_box)
+        identity_layout.setContentsMargins(0, 0, 0, 0)
         identity = QFormLayout()
         self.label = QLineEdit()
         self.name = QLineEdit()
@@ -121,16 +189,65 @@ class ClientPanel(QWidget):
             ("PA affichés", self.ap), ("PM affichés", self.mp), ("Notes", self.notes),
         ):
             identity.addRow(caption, widget)
-        layout.addLayout(identity)
+        identity_layout.addLayout(identity)
         self.recognition_status = QLabel("Les informations non lisibles restent inconnues.")
         self.recognition_status.setWordWrap(True)
-        layout.addWidget(self.recognition_status)
+        identity_layout.addWidget(self.recognition_status)
         save = QPushButton("Enregistrer le profil")
         save.setObjectName("primary")
         save.clicked.connect(self._save_profile)
-        layout.addWidget(save)
+        identity_layout.addWidget(save)
+        layout.addWidget(_section("Personnage (facultatif)", identity_box))
         self.refresh_profiles()
         self.refresh_windows()
+        self.update_state()
+
+    def showEvent(self, event) -> None:  # noqa: N802 - API Qt
+        super().showEvent(event)
+        if self.connected_hwnd is None:
+            self.refresh_windows()   # DOFUS lancé après PythonBot : pas besoin de cliquer Actualiser
+
+    def set_calibration_state(self, state: str, text: str) -> None:
+        self.calibration_state = state
+        self.calibration_status.setText(text)
+        self.update_state()
+
+    def update_state(self) -> None:
+        """Active seulement les boutons utiles et affiche la prochaine étape."""
+        if not hasattr(self, "next_step"):
+            return
+        connected = self.connected_hwnd is not None
+        has_window = self.windows.currentData() is not None
+        calibration = self.storage.load_calibration(self.profile_id) if self.profile_id is not None else None
+        readable = calibration is not None and {"hp", "ap", "mp"} <= set(calibration.zones)
+        self.connect_button.setEnabled(has_window)
+        self.connect_button.setText("Reconnecter" if connected else "Connecter")
+        self.disconnect_button.setEnabled(connected)
+        self.confirm_capture_button.setEnabled(connected and self.frame is not None and not self.content_confirmed)
+        self.calibrate_button.setEnabled(connected)
+        self.calibrate_button.setText("Recalibrer" if calibration is not None else "Calibrer les zones")
+        self.recognize_button.setEnabled(connected and readable)
+        if self.profile_id is None:
+            step = "Créez un profil avec « Nouveau profil »."
+        elif not has_window:
+            step = "Lancez DOFUS : la fenêtre apparaîtra ici (ou cliquez ↻)."
+        elif not connected:
+            step = "Cliquez « Connecter ». PythonBot se masque une seconde le temps de capturer DOFUS."
+        elif not self.content_confirmed:
+            step = "Regardez l'aperçu ci-dessous. Si c'est bien votre jeu, cliquez « Oui, l'aperçu montre DOFUS »."
+        elif calibration is None or self.calibration_state == "absent":
+            step = "Cliquez « Calibrer les zones » et posez chaque cadre sur le jeu."
+        elif self.calibration_state == "review":
+            step = "La fenêtre a changé : cliquez « Recalibrer » et vérifiez les zones « À vérifier »."
+        else:
+            step = "✓ Prêt. Allez dans Combat → Vision réelle pour observer."
+        self.next_step.setText(step)
+        reached = (0 if not connected else 1 if not self.content_confirmed
+                   else 2 if calibration is None or self.calibration_state != "ok" else 4)
+        for index, chip in enumerate(self.step_chips):
+            chip.setProperty("state", "done" if index < reached else "current" if index == reached else "todo")
+            chip.style().unpolish(chip)
+            chip.style().polish(chip)
 
     @staticmethod
     def _unknown_spin(maximum: int) -> QSpinBox:
@@ -186,6 +303,7 @@ class ClientPanel(QWidget):
         if self.connected_hwnd is None:
             self.connection_status.setText("Fenêtre sélectionnée — cliquez sur Connecter" if hwnd else "Fenêtre non sélectionnée")
             self.progress.setValue(1 if hwnd else 0)
+        self.update_state()
 
     def _connect(self) -> None:
         hwnd = self.windows.currentData()
@@ -228,10 +346,11 @@ class ClientPanel(QWidget):
         self.last_error.setText("—")
         self._window_changed()
         calibration = self.storage.load_calibration(profile_id)
+        self.calibration_state = "ok" if calibration else "absent"
         self.calibration_status.setText(
-            f"Calibration enregistrée : {len(calibration.zones)} zone(s), à revalider sur capture"
-            if calibration else "Calibration absente"
+            f"Calibration enregistrée : {len(calibration.zones)} zone(s)" if calibration else "Calibration absente"
         )
+        self.update_state()
         self.profile_changed.emit(profile_id)
 
     def _save_profile(self) -> None:
@@ -272,6 +391,7 @@ class ClientPanel(QWidget):
         else:
             self.frame = None
             self.last_error.setText(f"{result.code} : {result.message}")
+        self.update_state()
         self.diagnostic.emit(f"[CONNEXION] {result.step} / {result.code} : {result.message} | {result.details}")
 
     def set_disconnected(self, reason: str = "Déconnecté") -> None:
@@ -284,25 +404,30 @@ class ClientPanel(QWidget):
         self.capture_status.setText("Non testée")
         self.connection_status.setText(reason)
         self.progress.setValue(1 if self.windows.currentData() is not None else 0)
+        self.update_state()
 
     def show_error(self, message: str) -> None:
         self.last_error.setText(message)
         self.connection_status.setText(message)
         self.diagnostic.emit(f"[CONNEXION] {message}")
 
-    def _confirm_capture(self) -> None:
-        if self.connected_hwnd is None or self.frame is None:
+    def _confirm_capture(self, automatic: bool = False) -> None:
+        if self.connected_hwnd is None or self.frame is None or self.content_confirmed:
             return
         self.content_confirmed = True
-        self.capture_status.setText("Capture confirmée visuellement par l'utilisateur")
-        self.connection_status.setText("Fenêtre attachée — capture confirmée visuellement")
-        self.diagnostic.emit("Capture confirmée visuellement par l'utilisateur")
+        text = ("Capture reconnue : même fenêtre et même taille que la dernière confirmation"
+                if automatic else "Capture confirmée visuellement par l'utilisateur")
+        self.capture_status.setText(text)
+        self.connection_status.setText("Fenêtre attachée — " + text[0].lower() + text[1:])
+        self.diagnostic.emit(text)
+        self.update_state()
         self.capture_confirmed.emit()
 
     def set_frame(self, frame: CapturedFrame) -> None:
         self.frame = frame
         pixmap = bgr_to_pixmap(frame.image)
-        self.preview.setPixmap(pixmap.scaled(600, 300, Qt.AspectRatioMode.KeepAspectRatio,
+        self.preview.setPixmap(pixmap.scaled(max(600, self.preview.width() - 4), max(300, self.preview.height() - 4),
+                                             Qt.AspectRatioMode.KeepAspectRatio,
                                              Qt.TransformationMode.SmoothTransformation))
         self.preview.setToolTip(f"Capture cliente {frame.client.width} × {frame.client.height}")
         if not frame.activation_succeeded:

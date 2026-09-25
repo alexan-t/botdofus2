@@ -90,6 +90,11 @@ class GameDataPanel(QWidget):
         layout.addWidget(self.map_summary)
         self._set_busy(False)
 
+    def showEvent(self, event):  # noqa: N802 - API Qt
+        super().showEvent(event)
+        if self.provider is None and not self.busy and self.folder.text().strip():
+            self._analyze()
+
     def _folder_changed(self):
         if self.validator is not None:
             self.validator.cancelled = True
@@ -117,7 +122,7 @@ class GameDataPanel(QWidget):
         folder = QFileDialog.getExistingDirectory(self, "Dossier du client DOFUS", self.folder.text())
         if folder:
             self.folder.setText(folder)
-            self._save_folder()
+            self._analyze()
 
     def _set_busy(self, busy: bool):
         self.busy = busy

@@ -145,16 +145,20 @@ def suggest_zones(frame: CapturedFrame) -> dict[str, ZoneSuggestion]:
     height, width = image.shape[:2]
     if height < 100 or width < 100:
         return {}
-    suggestions: dict[str, ZoneSuggestion] = {
-        "combat": ZoneSuggestion(
-            (round(width * 0.08), round(height * 0.08), round(width * 0.84), round(height * 0.68)),
-            ZoneEvidence(0.2, "zone de recherche centrale à vérifier", "proposée"),
-        ),
-    }
+    suggestions: dict[str, ZoneSuggestion] = {}
     spell_bar = find_spell_bar(image)
     if spell_bar is not None:
         suggestions["spell_bar"] = spell_bar
     suggestions.update(_ocr_zone_suggestions(image))
+    # Zone de combat : pleine largeur, du haut jusqu'au-dessus du HUD s'il est repéré ; sinon la
+    # proportion mesurée sur le client réel (1151 / 1377 ≈ 0,838). Toujours à vérifier.
+    hud_tops = [suggestions[zone].rect[1] for zone in ("spell_bar", "hp", "ap", "mp")
+                if zone in suggestions and suggestions[zone].rect[1] > height * 0.5]
+    bottom = min(hud_tops) - round(height * 0.01) if hud_tops else round(height * 0.838)
+    suggestions["combat"] = ZoneSuggestion(
+        (0, 0, width, bottom),
+        ZoneEvidence(0.35, "pleine largeur au-dessus du HUD", "proposée"),
+    )
     return suggestions
 
 
