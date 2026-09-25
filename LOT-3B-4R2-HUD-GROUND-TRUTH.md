@@ -309,3 +309,24 @@ modifié. Le 2 PA repose encore sur un seul exemple TRAIN.
 Gabarits installés dans `%LOCALAPPDATA%\PythonBot\data\hud_templates`. L'ancien jeu est
 sauvegardé sous `data\backup\hud_templates-20260925-174535`. Le registre de split du corpus
 utilisateur n'est pas réécrit.
+
+
+## 17. Complément : 3 PA et 4 PM (25 septembre 2026, 17 h 55)
+
+Constat en jeu après la section 16 : 12 PA lu correctement ; 3 PA et 4 PM affichés « Inconnu ».
+5 nouvelles captures HUD confirmées : (6, 6) ×2, (3, 0), (3, 4), (15, 4).
+
+- 4 PM : aucun gabarit du 4 côté PM (même cas que le 2 PA).
+- 3 PA : le gabarit existait, mais la marge 3/8 était trop faible (section 14) ; le lecteur répondait UNKNOWN.
+
+Code inchangé. Banc sur copie isolée `data/validation/hud-ap3-mp4` (avant = `hud-ap12b`) :
+
+| | Nouveaux gabarits | TRAIN / VAL / TEST précision acceptée | Couverture VAL | Couverture TEST | 1/7 |
+|---|---|---|---|---|---|
+| avant | — | 1,000 / 1,000 / 1,000 | 0,955 (un 3 PA UNKNOWN) | 0,962 | VALIDATED |
+| après | PA 3 (2ᵉ exemple), PA 6, PM 4 | 1,000 / 1,000 / 1,000 | **1,000** (3 PA lu) | 0,962 | VALIDATED |
+
+Le 3 PA de VALIDATION, indépendant, est maintenant lu. Le 4 PM n'a encore aucun exemple hors
+TRAIN : son bon fonctionnement en jeu n'est pas mesuré. Aucun seuil modifié.
+Gabarits installés dans les données de l'application ; l'ancien jeu est sauvegardé sous
+`data\backup\hud_templates-20260925-175505`.
