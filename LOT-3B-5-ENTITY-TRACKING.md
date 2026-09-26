@@ -1358,3 +1358,49 @@ ACTIONS: NONE
 
 LOT 3B-5 non clôturé, version 0.4.3, pas de 3B-6. Prochaine étape : au moins 2 combats TEST neufs,
 annotés sans voir les prédictions, puis une seule mesure TEST.
+
+### 16.14 TEST final (mesure unique, gel `6b72202`) — ÉCHEC ENNEMIS
+
+Deux combats neufs, capturés après le gel, annotés par l'utilisateur, identités confirmées :
+`session_3902424fd852` (map 68419589, 11 frames, 20 vérités ennemies, 99 EMPTY) et
+`session_661a8bcd22dd` (map 88087301, 17 frames, 44 vérités ennemies, 151 EMPTY). Mesure lancée une
+seule fois (`--entities-3b5d --entity-splits test --freeze-sha 6b72202`, registre
+`entity_test_runs.json`, `kind: independent_test`, 26/09/2026 17:24). Code `combatbot/` = gel.
+
+| TEST | Résultat | Critère | Verdict |
+|---|---|---|---|
+| Joueur | 18 correct / **0 faux** / 10 inconnu ; couverture 0,64 | précision 1,000 ; couverture ≥ 0,90 | PARTIAL |
+| Ennemis | 51/64, **4 faux** ; précision 0,927 ; rappel 0,797 ; MAE 0,46 | précision ≥ 0,98 ; rappel ≥ 0,90 | **FAIL** |
+| Suivi | 51/64 ; 6 switches (11,8 %) ; 6 réassoc. fausses (11,8 %) ; 6 fragmentations | ≤ 5 % | PARTIAL |
+| FREE | 103 correct / **0 faux** / 0 faux sur entité ; 250 EMPTY ; précision 1,00 | 0 faux FREE, ≥ 0,98 | PASS |
+
+Performance TEST : `detector_ms` moyenne 211, P95 346 ; `tracker_ms` 0,1 ; `observer_ms` médiane
+617, P95 1729.
+
+**Cause documentée (diagnostic, aucun réglage) :** 3 des 4 faux ennemis sont des positions HELD.
+L'ennemi s'est déplacé pendant qu'il n'était pas détecté (218 → 202 → 175 ; 191 → 148) et son
+ancienne cellule passait le test « sprite présent » (écart-type du centre ≥ 8 : un sol texturé
+suffit). Le 4ᵉ est une détection observée de faible confiance (cellule 47, 0,61). Sur TEST, les
+maintiens sont justes 1 fois sur 4 ; sans maintien, la même mesure donnerait précision 0,980 et
+rappel 0,781 (contrefactuel de diagnostic, non utilisé pour choisir un réglage). La règle HELD,
+réglée sur TRAIN/VALIDATION où les ennemis masqués restaient surtout immobiles, ne généralise pas.
+
+Conformément au §32 : ces deux combats deviennent **diagnostic historique** et ne seront plus un
+TEST indépendant. Toute correction se fera sur TRAIN/VALIDATION seulement, suivie d'un nouveau gel et
+de **nouveaux** combats TEST.
+
+```text
+IMPLEMENTATION: PASS
+RUNTIME PROFILES: PASS
+TRACKING UI: PASS
+PLAYER DETECTION: PARTIAL (TEST : 0 erreur acceptée, couverture 0,64)
+ENEMY DETECTION: FAIL (TEST : précision 0,927 — maintien HELD)
+GLOBAL TRACKING: PARTIAL (TEST : 11,8 % switches / réassociations fausses)
+CELL OCCUPANCY: PASS (TEST : 250 vérités EMPTY, 0 faux FREE)
+OCCLUSION HANDLING: NOT OBSERVED
+GRID REGRESSION: NONE
+HUD REGRESSION: NONE
+ACTIONS: NONE
+```
+
+LOT 3B-5 non clôturé, version 0.4.3, pas de 3B-6.
