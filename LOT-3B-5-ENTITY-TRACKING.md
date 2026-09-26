@@ -4,6 +4,8 @@ Date : 24 septembre 2026. Version conservée : **0.4.3**.
 
 ## Conclusion
 
+**Clôture 3B-5D (26/09/2026) : voir sections 16.14 à 16.17.** Validation indépendante sur un second PC (layout `b2b36fdf07e78000`, 2 combats TRAIN, 2 VALIDATION, 2 + 2 TEST). Au second TEST gelé (`f94f5d4`) : joueur 24/31 sans erreur, ennemis précision 0,973 / rappel 0,855, suivi 11,4 % de switches, 0 faux FREE sur 263 vérités EMPTY. LOT 3B-5 **clôturé en PARTIAL documenté par décision de l'utilisateur** ; critères non tous atteints ; version 0.4.3 conservée ; 3B-6 non commencé.
+
 **Réparation 3B-5B : voir section 15.** La couverture TRAIN tient compte du layout (TEST
 inchangé). Le profil joueur utilise plusieurs exemples et l'anneau partiel est appris sur TRAIN.
 TEST du nouveau layout, exécuté une seule fois : joueur 13/16 sans erreur, ennemis 35/45 sans
@@ -1466,6 +1468,51 @@ PLAYER DETECTION: PARTIAL (TEST 2 : 0 erreur acceptée, couverture 0,77)
 ENEMY DETECTION: FAIL au critère (TEST 2 : précision 0,973, rappel 0,855 ; erreurs toutes à une case)
 GLOBAL TRACKING: PARTIAL (TEST 2 : 11,4 % switches, 8,6 % réassociations fausses)
 CELL OCCUPANCY: PASS (TEST 2 : 263 vérités EMPTY, 0 faux FREE)
+OCCLUSION HANDLING: NOT OBSERVED
+GRID REGRESSION: NONE
+HUD REGRESSION: NONE
+ACTIONS: NONE
+```
+
+### 16.17 Décision de clôture : PARTIAL documenté (décision utilisateur)
+
+Le 26/09/2026, après le second TEST (§16.16), l'utilisateur a choisi de **clôturer LOT 3B-5 en
+PARTIAL documenté** plutôt que de refaire un cycle TRAIN/VALIDATION → gel → TEST. Les critères
+pré-déclarés **ne sont pas tous atteints** et ne sont pas réinterprétés :
+
+| Critère (§25–28) | Mesure TEST 2 | Atteint |
+|---|---|---|
+| Joueur : précision acceptée 1,000 | 1,000 (24 correct, 0 faux) | oui |
+| Joueur : couverture ≥ 0,90 | 0,774 | non |
+| Ennemis : précision ≥ 0,98 | 0,973 (2 faux, tous à une case d'un ennemi réel) | non |
+| Ennemis : rappel ≥ 0,90 | 0,855 | non |
+| Suivi : switches ≤ 5 %, réassociations fausses ≤ 5 % | 11,4 % ; 8,6 % | non |
+| Occupation : 0 faux FREE sur entité, précision FREE ≥ 0,98 | 0 ; 1,000 (263 vérités EMPTY) | oui |
+| Occultation | aucune annotée comme telle | NOT OBSERVED (limite documentée) |
+
+Limites connues à porter dans la suite : entités non vues pendant animations de sort, zone de
+portée bleue et bulles (le système s'abstient) ; confusion d'identité entre monstres identiques ;
+erreurs de localisation d'une case pendant un déplacement ; PA/PM non lus sur ce PC faute de
+gabarits HUD locaux ; corpus réduit (8 combats locaux, dont 4 consommés en TEST).
+
+Garanties mesurées : aucune cellule joueur fausse acceptée, aucun FREE sur une entité, aucune action
+DOFUS. Le maintien HELD reste désactivé (§16.15).
+
+**Version :** 0.5.0 **non** appliquée. Les critères de clôture du §33 n'étant pas atteints, le
+passage à 0.5.0 ne se justifie pas sur ces mesures ; il reste proposable si l'utilisateur veut
+marquer la fin du lot malgré le statut PARTIAL. La roadmap (issue #1) ne doit pas cocher 3B-5 comme
+terminé au sens des critères ; aucune mise à jour GitHub n'a été faite sans accord. LOT 3B-6 non
+commencé.
+
+```text
+LOT 3B-5 : CLÔTURÉ — PARTIAL DOCUMENTÉ (décision utilisateur, critères non tous atteints)
+IMPLEMENTATION: PASS
+RUNTIME PROFILES: PASS
+TRACKING UI: PASS
+PLAYER DETECTION: PARTIAL (0 erreur acceptée ; couverture 0,77)
+ENEMY DETECTION: PARTIAL — critère de précision manqué (0,973 < 0,98)
+GLOBAL TRACKING: PARTIAL
+CELL OCCUPANCY: PASS
 OCCLUSION HANDLING: NOT OBSERVED
 GRID REGRESSION: NONE
 HUD REGRESSION: NONE
