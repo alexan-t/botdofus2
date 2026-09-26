@@ -76,7 +76,8 @@ def _carry_hud_provenance(previous: Annotation | None, annotation: Annotation) -
     if same:
         return replace(annotation, truth_source=previous.truth_source, confirmed_at=previous.confirmed_at,
                        confirmed_by=previous.confirmed_by, session_id=previous.session_id,
-                       hud_review=previous.hud_review, truth_history=previous.truth_history)
+                       hud_review=previous.hud_review, truth_history=previous.truth_history,
+                       hud_suggestion=previous.hud_suggestion)
     history = previous.truth_history + ({
         "ap_truth": previous.ap_truth, "mp_truth": previous.mp_truth,
         "truth_source": previous.truth_source or "unverified_import",

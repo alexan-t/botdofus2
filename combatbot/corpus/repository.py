@@ -351,10 +351,12 @@ class CorpusRepository:
     def confirm_hud_truth(self, observation_id: str, *, ap: int | None, mp: int | None,
                           ap_unreadable: bool = False, mp_unreadable: bool = False,
                           ap_crop_quality: str | None = None, mp_crop_quality: str | None = None,
-                          confirmed_by: str = "user", confirmed_at: str | None = None) -> Annotation:
+                          confirmed_by: str = "user", confirmed_at: str | None = None,
+                          suggestion: dict | None = None) -> Annotation:
         """Enregistre une décision humaine PA/PM traçable.
 
         L'ancienne vérité active reste dans ``truth_history`` ; le split n'est jamais recalculé ici.
+        ``suggestion`` (3B-6A) : proposition du lecteur montrée à l'humain, conservée telle quelle.
         """
         entry = self.get_entry(observation_id)
         previous = self.read_annotation(entry) or Annotation(observation_id)
@@ -386,6 +388,7 @@ class CorpusRepository:
             mp_crop_quality=mp_crop_quality if mp_crop_quality is not None else previous.mp_crop_quality,
             truth_source="human_confirmed", confirmed_at=stamp, confirmed_by=confirmed_by,
             session_id=entry.session_id, hud_review=review, truth_history=history,
+            hud_suggestion=suggestion if suggestion is not None else previous.hud_suggestion,
         )
         self.save_annotation(annotation)
         return annotation

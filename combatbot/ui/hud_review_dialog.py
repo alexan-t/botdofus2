@@ -1,7 +1,10 @@
 """Revue humaine des vérités PA/PM et collecte HUD réelle en lecture seule (LOT 3B-4R2).
 
-La revue n'affiche jamais la prédiction du lecteur : seulement la frame d'origine, les crops
-PA/PM (taille réelle + zoom nearest-neighbor) et la valeur actuellement inscrite.
+LOT 3B-6A — revue assistée : sur les frames TRAIN/VALIDATION, la valeur proposée par le lecteur
+(gabarits locaux, sinon RapidOCR même sous son seuil de sécurité) préremplit PA/PM ; « ✓ Tout est
+correct » (Entrée) l'enregistre comme vérité HUMAINE, avec la suggestion d'origine. Sur TEST (ou
+split non déclaré), la revue reste aveugle : aucune prédiction n'est calculée ni affichée.
+« Construire les gabarits (TRAIN) » apprend les chiffres depuis les seules vérités humaines TRAIN.
 """
 
 from __future__ import annotations
@@ -19,6 +22,9 @@ from PySide6.QtWidgets import (
 )
 
 from combatbot.corpus.hud_collection import CONTEXTS, HUDCollectionSession
+from combatbot.corpus.hud_suggestions import (
+    HUDSuggestionProvider, build_local_templates, frame_split, hud_assistance_allowed,
+)
 from combatbot.corpus.models import Annotation, CorpusEntry, HUD_CROP_QUALITIES
 from combatbot.corpus.repository import CorpusRepository
 from combatbot.ui.images import bgr_to_pixmap
@@ -87,11 +93,21 @@ class _CounterPanel(QGroupBox):
 class HUDReviewDialog(QDialog):
     """Confirmer / Corriger / Illisible / Précédent / Suivant, une observation à la fois."""
 
-    def __init__(self, repository: CorpusRepository, parent=None, *, only_untreated: bool = True) -> None:
+    def __init__(self, repository: CorpusRepository, parent=None, *, only_untreated: bool = True,
+                 suggestion_provider=None) -> None:
         super().__init__(parent)
         self.repository = repository
         self.entries = hud_entries(repository)
         self.index = 0
+        self._provider = suggestion_provider
+        self._suggestions: dict[str, dict] = {}
+        self._shown_suggestion: dict | None = None
+        self._splits = {}
+        for entry in self.entries:
+            try:
+                self._splits[entry.observation_id] = frame_split(self.repository.read_observation(entry))
+            except (OSError, ValueError):
+                self._splits[entry.observation_id] = None
         self.setWindowTitle("Revue HUD PA/PM — vérité humaine")
         self.resize(1320, 900)
         root = QVBoxLayout(self)
@@ -99,8 +115,18 @@ class HUDReviewDialog(QDialog):
         self.progress = QLabel()
         self.only_untreated = QCheckBox("Seulement les observations non confirmées")
         self.only_untreated.setChecked(only_untreated)
+        self.split_filter = QComboBox()
+        for caption, value in (("TRAIN (sert aux gabarits)", "train"), ("VALIDATION", "validation"),
+                               ("TEST (aveugle)", "test"), ("Tous les splits", None)):
+            self.split_filter.addItem(caption, value)
+        self.build_button = QPushButton("Construire les gabarits (TRAIN)")
+        self.build_button.setToolTip("Apprend les chiffres depuis les vérités humaines TRAIN seulement, puis les "
+                                     "installe pour la Vision réelle (ancien jeu sauvegardé).")
         top.addWidget(self.progress, 1)
+        top.addWidget(QLabel("Split :"))
+        top.addWidget(self.split_filter)
         top.addWidget(self.only_untreated)
+        top.addWidget(self.build_button)
         root.addLayout(top)
         self.header = QLabel()
         self.header.setWordWrap(True)
@@ -116,14 +142,18 @@ class HUDReviewDialog(QDialog):
         panels.addWidget(self.ap)
         panels.addWidget(self.mp)
         root.addLayout(panels)
-        self.status = QLabel("La prédiction du lecteur n'est jamais affichée ici.")
+        self.review_stats = QLabel()
+        self.review_stats.setWordWrap(True)
+        root.addWidget(self.review_stats)
+        self.status = QLabel("TRAIN/VALIDATION : la suggestion est préremplie, corrigez seulement ce qui est faux. "
+                             "TEST : aveugle.")
         self.status.setWordWrap(True)
         root.addWidget(self.status)
         buttons = QHBoxLayout()
         self.previous_button = QPushButton("◀ Précédent")
         self.next_button = QPushButton("Suivant ▶")
         self.correct_button = QPushButton("Corriger")
-        self.confirm_button = QPushButton("Confirmer (Entrée)")
+        self.confirm_button = QPushButton("✓ Tout est correct (Entrée)")
         self.confirm_button.setObjectName("primary")
         self.confirm_button.setDefault(True)
         close = QPushButton("Fermer")
@@ -138,7 +168,12 @@ class HUDReviewDialog(QDialog):
         self.correct_button.clicked.connect(self._start_correction)
         self.confirm_button.clicked.connect(self._confirm)
         close.clicked.connect(self.accept)
-        self.only_untreated.toggled.connect(lambda _checked: self._show())
+        self.only_untreated.toggled.connect(lambda _checked: self._refilter())
+        self.split_filter.currentIndexChanged.connect(lambda _index: self._refilter())
+        self.build_button.clicked.connect(self._build_templates)
+        # TRAIN d'abord (gabarits) s'il reste du travail, sinon tous les splits.
+        if not any(self._splits.get(e.observation_id) == "train" and self._matches(e) for e in self.entries):
+            self.split_filter.setCurrentIndex(self.split_filter.findData(None))
         QShortcut(QKeySequence("Ctrl+Right"), self, activated=lambda: self._move(1))
         QShortcut(QKeySequence("Ctrl+Left"), self, activated=lambda: self._move(-1))
         if self.only_untreated.isChecked():
@@ -152,6 +187,9 @@ class HUDReviewDialog(QDialog):
             return None
 
     def _matches(self, entry: CorpusEntry) -> bool:
+        wanted = self.split_filter.currentData() if hasattr(self, "split_filter") else None
+        if wanted is not None and self._splits.get(entry.observation_id) != wanted:
+            return False
         if not self.only_untreated.isChecked():
             return True
         annotation = self._annotation(entry)
@@ -164,6 +202,59 @@ class HUDReviewDialog(QDialog):
                 return index
             index += step
         return None
+
+    def _refilter(self) -> None:
+        target = self._first_matching(0, 1)
+        self.index = target if target is not None else 0
+        self._show()
+
+    # ------------------------------------------------------------------ assistance 3B-6A
+    def _provider_or_default(self):
+        if self._provider is None:
+            self._provider = HUDSuggestionProvider()
+        return self._provider
+
+    def _suggestion_for(self, entry: CorpusEntry) -> dict | None:
+        if entry.observation_id not in self._suggestions:
+            provider = self._provider_or_default()
+            self._suggestions[entry.observation_id] = {
+                "ap": provider.suggest(self._read(entry, "ap_crop"), "AP"),
+                "mp": provider.suggest(self._read(entry, "mp_crop"), "MP"),
+                "templates": getattr(provider, "template_count", None)}
+        return self._suggestions[entry.observation_id]
+
+    def _build_templates(self) -> None:
+        provider = self._provider_or_default()
+        try:
+            summary = build_local_templates(self.repository, provider.data_root)
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Gabarits HUD", f"Construction impossible : {exc}")
+            return
+        if not summary.get("installed"):
+            QMessageBox.information(self, "Gabarits HUD", str(summary.get("reason")))
+            return
+        provider.reload()
+        self._suggestions.clear()
+        digits = "  ".join(f"{kind} : " + ", ".join(f"{digit}×{count}" for digit, count in values.items())
+                           for kind, values in summary["digits"].items())
+        QMessageBox.information(
+            self, "Gabarits HUD installés",
+            f"{summary['train_samples']} lectures TRAIN confirmées → gabarits installés.\n{digits}\n\n"
+            "Redémarrez l'observation en Vision réelle pour les utiliser.")
+        self._show()
+
+    def _update_review_stats(self) -> None:
+        counts = {"ap": {"accepted": 0, "corrected": 0}, "mp": {"accepted": 0, "corrected": 0}}
+        for entry in self.entries:
+            annotation = self._annotation(entry)
+            outcome = (annotation.hud_suggestion or {}).get("outcome") if annotation else None
+            for kind in ("ap", "mp"):
+                if outcome and outcome.get(kind) in counts[kind]:
+                    counts[kind][outcome[kind]] += 1
+        self.review_stats.setText(
+            f"Revue assistée (aide, pas un benchmark) — PA : suggestion juste {counts['ap']['accepted']}, "
+            f"corrigée {counts['ap']['corrected']} · PM : juste {counts['mp']['accepted']}, "
+            f"corrigée {counts['mp']['corrected']}")
 
     def _move(self, step: int) -> None:
         target = self._first_matching(self.index + step, step)
@@ -217,6 +308,13 @@ class HUDReviewDialog(QDialog):
             self.frame.setText("Frame d'origine absente")
         source = "vérité humaine confirmée" if annotation is not None and annotation.human_confirmed \
             else "import non vérifié"
+        split = self._splits.get(entry.observation_id)
+        confirmed = annotation is not None and annotation.human_confirmed
+        assisted = split in ("train", "validation") and not confirmed
+        suggestion = self._suggestion_for(entry) if assisted else None
+        self._shown_suggestion = suggestion
+        self.header.setText(self.header.text() + f" · split <b>{(split or 'non déclaré').upper()}</b>"
+                            + ("" if split in ("train", "validation") else " · <b>aveugle</b>"))
         for panel, key, truth, quality, kind in (
             (self.ap, "ap_crop", annotation.ap_truth if annotation else None,
              annotation.ap_crop_quality if annotation else None, "ap"),
@@ -233,6 +331,21 @@ class HUDReviewDialog(QDialog):
             panel.quality.setCurrentIndex(max(0, panel.quality.findData(quality)))
             # Une valeur existante n'est modifiable qu'après « Corriger » ; une capture neuve se saisit.
             panel.set_editable(truth is None and not unreadable)
+            proposal = (suggestion or {}).get(kind)
+            if proposal is not None:
+                if truth is None and proposal.get("value") is not None:
+                    panel.value.setValue(int(proposal["value"]))     # préremplissage, pas une vérité
+                state = ("acceptée par le lecteur" if proposal.get("accepted")
+                         else "non validée par le lecteur : vérifiez")
+                panel.recorded.setText(
+                    panel.recorded.text() + f"<br><span style='color:#c9a2ff'>Suggestion : "
+                    f"<b>{proposal.get('value') if proposal.get('value') is not None else '—'}</b> · "
+                    f"{proposal.get('source')} {float(proposal.get('confidence') or 0):.0%} · {state}</span>")
+            elif confirmed and annotation.hud_suggestion and annotation.hud_suggestion.get(kind):
+                before = annotation.hud_suggestion[kind]
+                panel.recorded.setText(panel.recorded.text() + f"<br>Suggestion d'origine : {before.get('value')} "
+                                       f"({(annotation.hud_suggestion.get('outcome') or {}).get(kind, '—')})")
+        self._update_review_stats()
         self.previous_button.setEnabled(self._first_matching(self.index - 1, -1) is not None)
         self.next_button.setEnabled(self._first_matching(self.index + 1, 1) is not None)
         self.confirm_button.setFocus()
@@ -258,11 +371,18 @@ class HUDReviewDialog(QDialog):
                 return
             else:
                 values[kind] = panel.value.value()
+        snapshot = None
+        if self._shown_suggestion is not None:
+            outcome = {kind: ("accepted" if values[kind] is not None
+                              and values[kind] == (self._shown_suggestion.get(kind) or {}).get("value") else "corrected")
+                       for kind in ("ap", "mp")}
+            snapshot = {**self._shown_suggestion, "outcome": outcome}
         try:
             annotation = self.repository.confirm_hud_truth(
                 entry.observation_id, ap=values["ap"], mp=values["mp"],
                 ap_unreadable=self.ap.unreadable.isChecked(), mp_unreadable=self.mp.unreadable.isChecked(),
                 ap_crop_quality=self.ap.quality.currentData(), mp_crop_quality=self.mp.quality.currentData(),
+                suggestion=snapshot,
             )
         except ValueError as exc:
             QMessageBox.warning(self, "Confirmation impossible", str(exc))

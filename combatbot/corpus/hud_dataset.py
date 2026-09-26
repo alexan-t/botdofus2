@@ -78,6 +78,29 @@ def _explicit_usages(entries, group_by_observation: dict[str, str]) -> dict[str,
     return result
 
 
+def _declared_usages(repository: CorpusRepository, entries, group_by_observation: dict[str, str],
+                     fixed: dict[str, HUDSplit]) -> dict[str, HUDSplit]:
+    """LOT 3B-6 : le split TRAIN/VALIDATION/TEST déclaré à la capture (combat entier) s'impose au HUD.
+
+    Sans cela, un combat déclaré TEST pouvait fournir des gabarits HUD (split HUD tiré par hash).
+    Un désaccord avec un usage explicite ou entre frames d'un même groupe est une erreur.
+    """
+    result = dict(fixed)
+    for entry in entries:
+        try:
+            capture = repository.read_observation(entry).get("capture") or {}
+        except (OSError, ValueError):
+            continue
+        declared = capture.get("entity_split_declared") if isinstance(capture, dict) else None
+        if declared not in ("train", "validation", "test"):
+            continue
+        group = group_by_observation[entry.observation_id]
+        if result.get(group, declared) != declared:
+            raise ValueError(f"Split HUD incohérent pour le groupe {group} : {result[group]} ≠ {declared}")
+        result[group] = declared  # type: ignore[assignment]
+    return result
+
+
 def _assign_splits(group_digits: dict[str, set[str]],
                    fixed: dict[str, HUDSplit] | None = None) -> dict[str, HUDSplit]:
     """Répartit des groupes indépendants en 70/15/15, sans jamais déplacer un groupe fixé.
@@ -318,7 +341,8 @@ def build_split_registry(repository: CorpusRepository, *, require_human: bool = 
     # Un groupe placé une fois en TEST y reste, même fusionné : TEST n'est jamais recyclé.
     _projected, frozen_now, missing_frozen = _project_registry(registry, known)
     frozen = set(registry["frozen_test"]) | frozen_now
-    fixed = _explicit_usages(entries, group_by_observation)
+    fixed = _declared_usages(repository, entries, group_by_observation,
+                             _explicit_usages(entries, group_by_observation))
     for group_id in frozen_now:
         if fixed.get(group_id, "test") != "test":
             raise ValueError(f"Le groupe TEST gelé {group_id} porte un usage explicite contraire")
@@ -358,7 +382,8 @@ def inventory(repository: CorpusRepository, *, require_human: bool = True) -> tu
     annotations = {entry.observation_id: repository.read_annotation(entry) for entry in entries}
     group_by_observation = _groups(repository, entries, annotations)
     registry = load_split_registry(repository)
-    fixed = _explicit_usages(entries, group_by_observation)
+    fixed = _declared_usages(repository, entries, group_by_observation,
+                             _explicit_usages(entries, group_by_observation))
     known = set(group_by_observation.values())
     projected, _frozen_now, _missing = _project_registry(registry, known)
     for group_id, split in projected.items():

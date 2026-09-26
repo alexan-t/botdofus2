@@ -122,6 +122,8 @@ class Annotation:
     session_id: str | None = None
     hud_review: dict[str, str] | None = None
     truth_history: tuple[dict[str, object], ...] = ()
+    # LOT 3B-6A : suggestion du lecteur figée AVANT la décision humaine (jamais une vérité).
+    hud_suggestion: dict[str, object] | None = None
     # LOT 3B-5 : vérité entités par DofusCellId (jamais une ancienne prédiction).
     entity_annotation_source: str | None = None
     entity_confirmed_at: str | None = None
@@ -277,6 +279,7 @@ class Annotation:
             "confirmed_by": self.confirmed_by,
             "session_id": self.session_id,
             "hud_review": dict(self.hud_review) if self.hud_review else None,
+            "hud_suggestion": self.hud_suggestion,
             "entity_annotation_source": self.entity_annotation_source,
             "entity_confirmed_at": self.entity_confirmed_at,
             "player_cell_id_truth": self.player_cell_id_truth,
@@ -356,6 +359,7 @@ class Annotation:
                         if isinstance(raw.get("hud_review"), dict) else None),
             truth_history=tuple(dict(item) for item in raw.get("truth_history", ())
                                 if isinstance(item, dict)),
+            hud_suggestion=raw.get("hud_suggestion") if isinstance(raw.get("hud_suggestion"), dict) else None,
             entity_annotation_source=(str(raw["entity_annotation_source"])
                                       if raw.get("entity_annotation_source") is not None else None),
             entity_confirmed_at=(str(raw["entity_confirmed_at"])
