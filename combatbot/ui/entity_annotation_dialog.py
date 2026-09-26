@@ -216,7 +216,9 @@ class EntityAnnotationDialog(QDialog):
             self.header.setText("Aucune observation avec grille GameData projetée. Enregistrez des observations "
                                 "en « Vision réelle » avec une map déclarée et une projection calibrée.")
             return
-        entry = self.entries[self.index]
+        # Relire l'entrée dans le manifeste : une frame enregistrée depuis l'ouverture de la fenêtre
+        # porte maintenant son chemin d'annotation (sinon « Précédente » l'afficherait vide).
+        entry = self.entries[self.index] = self.repository.get_entry(self.entries[self.index].observation_id)
         document = self.repository.read_observation(entry)
         self.cells = projected_cells(document)
         self.image = cv2.imread(str(self.repository.resolve(entry.paths["frame"])), cv2.IMREAD_COLOR)

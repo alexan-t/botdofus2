@@ -203,3 +203,23 @@ def test_freeze_check_refuses_code_changed_after_freeze(tmp_path) -> None:
         v.check_freeze(sha, tmp_path)
     with pytest.raises(ValueError, match="inconnu"):
         v.check_freeze("0" * 40, tmp_path)
+
+
+def test_previous_frame_shows_what_was_just_saved(tmp_path) -> None:
+    from combatbot.ui.entity_annotation_dialog import EntityAnnotationDialog
+    QApplication.instance() or QApplication([])
+    repository = build_corpus(tmp_path, ("combat-a",))
+    dialog = EntityAnnotationDialog(repository)
+    # Comme sur le PC de l'utilisateur : la fenêtre a été ouverte avant toute annotation.
+    dialog.entries = [replace(e, paths={k: v for k, v in e.paths.items() if k != "annotation"},
+                              annotation_available=False) for e in dialog.entries]
+    dialog._clear()
+    dialog._assign(at(-1), "PLAYER")
+    dialog._assign(at(3), "E1")
+    decide_samples(dialog)
+    dialog._save()                      # enregistre puis passe à la frame suivante
+    assert dialog.index == 1
+    dialog._move(-1)                    # « Précédente »
+    assert dialog.labels.get(at(-1)) == "PLAYER" and dialog.labels.get(at(3)) == "E1"
+    assert all(dialog._sample_decision(cell) for cell in dialog.sample)
+    dialog.close()
