@@ -67,6 +67,10 @@ class EntityDetectorConfig:
     # Seuils à ~×2 de marge : un décor parsemé de la couleur d'équipe est une contradiction.
     partial_sector_ratio: float = 3.0
     partial_outside_max: float = 0.05
+    # 3B-5E : consensus temporel joueur. Un candidat « couleur joueur » posé sur la dernière cellule
+    # confirmée du joueur est accepté jusqu'à ce multiple de la tolérance du profil ; un saut ailleurs
+    # est refusé (UNKNOWN) tant qu'un tel candidat subsiste sur l'ancienne cellule.
+    player_prior_relax: float = 1.5
 
 
 @dataclass
@@ -79,6 +83,8 @@ class DetectionContext:
     layout_signature: str | None = None
     timestamp: float = 0.0
     extras: dict[str, Any] = field(default_factory=dict)
+    # 3B-5E : dernière cellule confirmée du joueur (suivi). Jamais une preuve à elle seule.
+    player_prior_cell: int | None = None
 
     @property
     def grid_trusted(self) -> bool:
@@ -343,11 +349,23 @@ class CellEntityDetector:
             scored.sort(key=lambda item: item[0])
             best = scored[0][0]
             second = scored[1][0] if len(scored) > 1 else float("inf")
+            decision = None
             if best <= player_profile.distance_tolerance and second - best >= player_profile.margin:
                 player_choice = (player_profile.similarity(scored[0][3]), scored[0][1])
+            prior = context.player_prior_cell
+            relaxed = player_profile.distance_tolerance * config.player_prior_relax
+            at_prior = next((item for item in scored if int(item[1]["cell_id"]) == prior), None) if prior is not None else None
+            if at_prior is not None and at_prior[0] <= relaxed:
+                if player_choice is not None and player_choice[1] is not at_prior[1]:
+                    # Saut vers une autre cellule alors que l'ancienne montre encore le joueur : on s'abstient.
+                    player_choice, decision = None, "conflict_with_prior"
+                elif player_choice is None and all(item is at_prior or item[0] > at_prior[0] + player_profile.margin
+                                                   for item in scored):
+                    player_choice, decision = (player_profile.similarity(at_prior[3]), at_prior[1]), "temporal_prior"
             diagnostics["player_candidates"] = [(int(c["cell_id"]), round(d, 2)) for d, c, _, _ in scored]
-            diagnostics["player_decision"] = ("selected" if player_choice else
-                                              "too_far" if best > player_profile.distance_tolerance else "ambiguous")
+            diagnostics["player_decision"] = decision or ("selected" if player_choice else
+                                                          "too_far" if best > player_profile.distance_tolerance
+                                                          else "ambiguous")
         for candidate, color in player_candidates:
             stats = candidate["stats"]
             reasons = ([f"anneau partiel {int(stats['partial_sectors'])} secteurs"]

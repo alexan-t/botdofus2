@@ -275,6 +275,29 @@ class GridCalibration:
                    reference, str(raw.get("coordinate_space", "combat")))  # type: ignore[arg-type]
 
 
+def sequence_change(previous, current, combat_zone=None) -> float:
+    """LOT 3B-5E : part des pixels de la zone de combat (réduite 1/8) qui ont changé de plus de 12.
+
+    Remplace la moyenne globale : un seul monstre qui se déplace change peu la moyenne de l'écran
+    entier, et ces frames de mouvement étaient justement écartées du corpus.
+    """
+    import cv2
+    import numpy as np
+
+    def prepare(image):
+        image = np.asarray(image)
+        if combat_zone is not None:
+            height, width = image.shape[:2]
+            x, y, w, h = combat_zone
+            image = image[int(y * height):int((y + h) * height), int(x * width):int((x + w) * width)]
+        return cv2.resize(image, None, fx=0.125, fy=0.125, interpolation=cv2.INTER_AREA).astype(np.int16)
+
+    a, b = prepare(previous), prepare(current)
+    if a.shape != b.shape:
+        return 1.0
+    return float(np.mean(np.abs(a - b).max(axis=2) > 12))
+
+
 @dataclass(frozen=True)
 class ObservationPacket:
     observation: CombatObservation

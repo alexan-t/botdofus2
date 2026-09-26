@@ -22,6 +22,9 @@ class TrackState(str, Enum):
     # LOT 3B-5D : marqueur invisible mais un sprite occupe toujours la dernière cellule observée
     # (animation de sort, portée bleue, bulle) : la position est maintenue, non observée.
     HELD = "HELD"
+    # LOT 3B-5E : position observée, identité non tranchée (deux pistes presque aussi plausibles).
+    # La cellule est affirmée ; aucun E1/E2 n'est attribué tant qu'une frame ne lève pas le doute.
+    AMBIGUOUS = "AMBIGUOUS"
     OCCLUDED = "OCCLUDED"
     LOST = "LOST"
 
@@ -121,7 +124,7 @@ class TrackedEntity:
     @property
     def claimed_cell(self) -> int | None:
         """Cellule affirmée cette frame : observée, ou maintenue (HELD)."""
-        return self.cell_id if self.state in (TrackState.OBSERVED, TrackState.HELD) else None
+        return self.cell_id if self.state in (TrackState.OBSERVED, TrackState.HELD, TrackState.AMBIGUOUS) else None
 
     def to_dict(self) -> dict[str, object]:
         return {

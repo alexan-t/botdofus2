@@ -335,7 +335,8 @@ class RealCombatObserver:
         context = DetectionContext(
             grid_visible=grid.grid_visibility_state == "VISIBLE" if grid.grid_visibility_state else None,
             grid_aligned=(grid.alignment or {}).get("status") == "ALIGNED" if grid.alignment else None,
-            map_id=grid.map_id_declared, layout_signature=self.calibration.layout_signature, timestamp=now)
+            map_id=grid.map_id_declared, layout_signature=self.calibration.layout_signature, timestamp=now,
+            player_prior_cell=self.entity_tracker.player_prior())
         detection = self.entity_detector.detect(combat_image, grid, self.entity_profiles, context,
                                                 self.background_model)
         started = time.perf_counter()

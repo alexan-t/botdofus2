@@ -240,3 +240,47 @@ def test_team_hue_ignores_outlier_ring_samples() -> None:
     keep = robust_hue_inliers(hues)
     assert keep == [True] * 6 + [False] * 3
     assert robust_hue_inliers([10.0, 170.0]) == [True, True]       # trop peu d'exemples : rien écarté
+
+
+def _context_with_prior(prior):
+    from dataclasses import replace
+    return replace(TRUSTED, player_prior_cell=prior)
+
+
+def test_player_remains_unknown_when_ambiguous(scene) -> None:
+    """Le profil préfère une autre cellule alors qu'un candidat « couleur joueur » plausible occupe
+    encore la dernière cellule confirmée (cas Gelée rouge) : UNKNOWN plutôt qu'un saut."""
+    grid, image = scene
+    other = neighbors(CENTER)[0]
+    other = next(n for n in neighbors(other) if n != CENTER)
+    draw_entity(image, grid, CENTER, RED)
+    profile = player_profile_from_cell(image, grid, CENTER, layout_signature="layout-a")
+    draw_entity(image, grid, other, RED)
+    without_prior = detect(image, grid, VisualProfiles(profile, TEAMS))
+    assert without_prior.player is not None and without_prior.player.cell_id == CENTER
+    result = detect(image, grid, VisualProfiles(profile, TEAMS), context=_context_with_prior(other))
+    assert result.player is None and result.diagnostics["player_decision"] == "conflict_with_prior"
+    assert all(item.kind is not EntityKind.PLAYER for item in result.entities)
+
+
+def test_player_prior_never_invents_a_position(scene) -> None:
+    """Joueur parti de sa dernière cellule : l'ancienne position seule n'est jamais affirmée."""
+    grid, image = scene
+    draw_entity(image, grid, CENTER, RED)
+    profile = player_profile_from_cell(image, grid, CENTER, layout_signature="layout-a")
+    moved = next(n for n in neighbors(neighbors(CENTER)[1]) if n != CENTER)
+    image2 = ground(image.shape[:2])
+    draw_entity(image2, grid, moved, RED)
+    result = detect(image2, grid, VisualProfiles(profile, TEAMS), context=_context_with_prior(CENTER))
+    assert result.player is not None and result.player.cell_id == moved
+    empty = detect(ground(image.shape[:2]), grid, VisualProfiles(profile, TEAMS), context=_context_with_prior(CENTER))
+    assert empty.player is None
+
+
+def test_flat_blue_overlay_does_not_create_enemy(scene) -> None:
+    """Zone de portée / case de placement : aplat bleu uniforme, sans sprite, jamais un ennemi."""
+    grid, image = scene
+    cell = next(c for c in grid.cells if c.cell_id == CENTER)
+    cv2.fillPoly(image, [np.asarray(cell.polygon, np.int32)], BLUE)
+    result = detect(image, grid)
+    assert all(item.kind is not EntityKind.ENEMY for item in result.entities)

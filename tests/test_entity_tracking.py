@@ -266,3 +266,42 @@ def test_held_track_keeps_its_identity_when_seen_again() -> None:
     back = by_id(tracker.update(_frame([enemy(line(0)), enemy(line(4))]), 1.0))
     assert back["enemy_1"].cell_id == line(0) and back["enemy_1"].state is TrackState.OBSERVED
     assert set(back) == {"enemy_1", "enemy_2"}
+
+
+# ---------------------------------------------------------------------------- LOT 3B-5E : joueur, ambiguïté
+def test_player_move_not_blocked_by_low_composite_confidence() -> None:
+    tracker = EntityTracker()
+    tracker.update([player(line(0), 0.9)], 0.0)
+    moved = by_id(tracker.update([player(line(2), 0.5)], 1.0))["player"]
+    assert moved.cell_id == line(2) and moved.state is TrackState.OBSERVED
+    assert tracker.player_prior() == line(2)
+
+
+def test_enemy_moves_one_cell_between_frames() -> None:
+    tracker = EntityTracker(TrackerConfig(ambiguity_margin=0.2))
+    tracker.update([enemy(line(0)), enemy(line(8))], 0.0)
+    after = by_id(tracker.update([enemy(line(1)), enemy(line(8))], 1.0))
+    assert after["enemy_1"].cell_id == line(1) and after["enemy_1"].state is TrackState.OBSERVED
+
+
+def test_identical_enemies_cross_without_forced_identity() -> None:
+    """Deux ennemis identiques équidistants d'une détection : position affirmée, identité non forcée."""
+    tracker = EntityTracker(TrackerConfig(ambiguity_margin=0.2))
+    tracker.update([enemy(line(0)), enemy(line(4))], 0.0)
+    after = tracker.update([enemy(line(2))], 1.0)
+    states = {item.track_id: item.state for item in after}
+    assert TrackState.AMBIGUOUS in states.values()
+    ambiguous = next(item for item in after if item.state is TrackState.AMBIGUOUS)
+    assert ambiguous.claimed_cell == line(2) and ambiguous.track_id.startswith("ambiguous")
+    assert all(item.claimed_cell != line(2) for item in after if item.state is TrackState.OBSERVED)
+    # Pistes nommées non déplacées : aucune identité attribuée par défaut.
+    assert {t.cell_id for t in tracker.tracks().values()} == {line(0), line(4)}
+
+
+def test_ambiguity_enabled_by_default_and_can_be_disabled() -> None:
+    tracker = EntityTracker()
+    tracker.update([enemy(line(0)), enemy(line(4))], 0.0)
+    assert any(item.state is TrackState.AMBIGUOUS for item in tracker.update([enemy(line(2))], 1.0))
+    off = EntityTracker(TrackerConfig(ambiguity_margin=None))
+    off.update([enemy(line(0)), enemy(line(4))], 0.0)
+    assert all(item.state is not TrackState.AMBIGUOUS for item in off.update([enemy(line(2))], 1.0))

@@ -528,7 +528,7 @@ class CombatPage(QWidget):
             self.real_values["player"].setText(player_text)
             lines = []
             for enemy in observation.enemies:
-                label = "E" + enemy.id.rsplit("_", 1)[-1]
+                label = "E?" if enemy.track_state == "AMBIGUOUS" else "E" + enemy.id.rsplit("_", 1)[-1]
                 lines.append(f"{label} : Cell {enemy.cell_id} — observé — {enemy.confidence:.2f}"
                              if enemy.observed_this_frame else
                              f"{label} : Cell {enemy.cell_id} — maintenu (masqué) — {enemy.confidence:.2f}"

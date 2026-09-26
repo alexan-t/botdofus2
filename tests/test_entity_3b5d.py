@@ -223,3 +223,18 @@ def test_previous_frame_shows_what_was_just_saved(tmp_path) -> None:
     assert dialog.labels.get(at(-1)) == "PLAYER" and dialog.labels.get(at(3)) == "E1"
     assert all(dialog._sample_decision(cell) for cell in dialog.sample)
     dialog.close()
+
+
+def test_sequence_capture_keeps_a_single_monster_move() -> None:
+    """3B-5E : un seul monstre qui bouge doit déclencher l'enregistrement ; une frame identique non."""
+    import numpy as np
+    from combatbot.vision.combat_models import sequence_change
+    frame = np.full((800, 1600, 3), 90, np.uint8)
+    moved = frame.copy()
+    moved[300:380, 700:760] = (40, 40, 200)            # petit sprite déplacé (0,4 % de l'écran)
+    assert sequence_change(frame, frame.copy()) == 0.0
+    assert sequence_change(frame, moved) >= 0.002
+    assert float(np.abs(moved.astype(int) - frame.astype(int)).mean()) < 1.0   # l'ancienne règle l'ignorait
+    hud_only = frame.copy()
+    hud_only[750:800, :] = 255                          # HUD sous la zone de combat
+    assert sequence_change(frame, hud_only, (0.0, 0.0, 1.0, 0.9)) == 0.0

@@ -924,20 +924,22 @@ class MainWindow(QMainWindow):
                          lambda message: QMessageBox.warning(self, "Enregistrement", message))
 
     def _capture_sequence(self, packet: ObservationPacket) -> None:
-        """Séquence d'entités en lecture seule : frames quasi identiques ignorées (≥ 1 s d'écart)."""
+        """Séquence d'entités en lecture seule. 3B-5E : toute frame où la zone de combat a changé
+        localement est gardée (≥ 0,4 s d'écart) ; seules les frames identiques sont ignorées."""
         if packet.observation.grid.grid_source != "GAMEDATA_PROJECTED":
             self.combat.observation_help.setText(
                 "Séquence non enregistrée : déclarez la map et calibrez la projection (grille GameData).")
             self.combat.recording_status = ("todo", "Enregistrement bloqué : grille GameData absente sur cette image.")
             return
+        from combatbot.vision.combat_models import sequence_change
         image = np.asarray(packet.original)
-        small = cv2.resize(image, None, fx=0.125, fy=0.125, interpolation=cv2.INTER_AREA).astype(np.int16)
+        zone = ((packet.metadata.get("calibration") or {}).get("zones") or {}).get("combat")
+        rect = (zone["x"], zone["y"], zone["width"], zone["height"]) if isinstance(zone, dict) else None
         now = time.monotonic()
         last = getattr(self, "_sequence_last", None)
-        if last is not None and (now - last[0] < 1.0 or (
-                last[1].shape == small.shape and float(np.abs(small - last[1]).mean()) < 1.0)):
+        if last is not None and (now - last[0] < 0.4 or sequence_change(last[1], image, rect) < 0.002):
             return
-        self._sequence_last = (now, small)
+        self._sequence_last = (now, image)
         try:
             entry = self.corpus.repository.import_packet(packet)
         except (OSError, ValueError) as exc:

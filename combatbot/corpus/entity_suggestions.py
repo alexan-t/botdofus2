@@ -18,7 +18,7 @@ from typing import Callable
 from combatbot import __version__
 from combatbot.corpus.entity_benchmark import declared_split, grid_from_document
 from combatbot.corpus.repository import CorpusRepository
-from combatbot.vision.entity_models import EntityKind, VisualProfiles
+from combatbot.vision.entity_models import EntityKind, TrackState, VisualProfiles
 
 ASSISTED_SPLITS = ("train", "validation")
 ENEMY_TRACK_LABELS = tuple(f"E{index}" for index in range(1, 9))
@@ -120,7 +120,8 @@ class DetectorSuggestionProvider:
             context = DetectionContext(grid_visible=capture.get("grid_visibility_state") == "VISIBLE",
                                        grid_aligned=capture.get("alignment_status") == "ALIGNED",
                                        map_id=(document.get("grid_snapshot") or {}).get("map_id_declared"),
-                                       layout_signature=layout, timestamp=timestamp)
+                                       layout_signature=layout, timestamp=timestamp,
+                                       player_prior_cell=tracker.player_prior())
             detection = detector.detect(image, grid, self._profiles_for(layout), context, background)
             tracked = tracker.update(detection, timestamp)
             player = next((t.claimed_cell for t in tracked if t.kind is EntityKind.PLAYER
@@ -128,6 +129,9 @@ class DetectorSuggestionProvider:
             enemies = []
             for track in tracked:
                 if track.kind is EntityKind.ENEMY and track.claimed_cell is not None:
+                    if track.state is TrackState.AMBIGUOUS:
+                        enemies.append((track.claimed_cell, None))   # identité non tranchée : pas de E1/E2
+                        continue
                     number = int(track.track_id.rsplit("_", 1)[-1])
                     enemies.append((track.claimed_cell, f"E{number}" if number <= len(ENEMY_TRACK_LABELS) else None))
             confidences = {t.claimed_cell: float(t.confidence) for t in tracked if t.claimed_cell is not None}

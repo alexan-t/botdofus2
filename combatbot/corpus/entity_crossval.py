@@ -39,7 +39,8 @@ def replay_group(samples: list[EntitySample], profiles, detector: CellEntityDete
         context = DetectionContext(grid_visible=grid.grid_visibility_state == "VISIBLE",
                                    grid_aligned=(grid.alignment or {}).get("status") == "ALIGNED",
                                    map_id=sample.map_id, layout_signature=sample.layout_signature,
-                                   timestamp=times[sample.observation_id][0])
+                                   timestamp=times[sample.observation_id][0],
+                                   player_prior_cell=tracker.player_prior())
         result = detector.detect(image, grid, profiles, context, background)
         tracked = tracker.update(result, context.timestamp)
         player = next((t.claimed_cell for t in tracked if t.kind is EntityKind.PLAYER and t.claimed_cell is not None), None)

@@ -120,6 +120,16 @@ class TrackerConfig:
     # 6b72202, 3 maintiens sur 4 étaient faux (ennemi déplacé, ancienne case texturée).
     hold_with_sprite: bool = False
     hold_confidence_factor: float = 0.5
+    # 3B-5E : identité ambiguë si une autre piste (ou une autre détection) coûte moins de cette marge
+    # de plus que l'association retenue, pour une piste qui se déplace. None = désactivé.
+    # 0,2 : validation croisée TRAIN (6 combats, règle globale) — erreurs d'identité 26 → 13,
+    # réassociations fausses 12 → 3 ; marges 0,1 et 0,3 moins bonnes.
+    ambiguity_margin: float | None = 0.2
+    # 3B-5E : une détection non associée (preuve trop faible pour « déplacer » une piste) rejoint la
+    # SEULE piste ennemie non observée atteignable ; plusieurs candidates → identité ambiguë ; aucune →
+    # nouvelle piste. Évite de créer une nouvelle identité pour un ennemi qui a simplement bougé.
+    reattach_single_candidate: bool = False
+    identity_memory_seconds: float = 60.0   # pistes perdues encore candidates à la réattache (unicité exigée)
 
 
 @dataclass
@@ -155,8 +165,11 @@ class EntityTracker:
         gate = self._gate(track, timestamp)
         if distance > gate:
             return INFINITE  # déplacement impossible dans le temps écoulé : rejeté
-        if distance > 0 and detection.confidence < config.min_move_confidence:
-            return INFINITE  # preuve trop faible pour déplacer une piste
+        if (distance > 0 and detection.kind is not EntityKind.PLAYER
+                and detection.confidence < config.min_move_confidence):
+            # Preuve trop faible pour déplacer une piste ennemie. Le joueur est déjà choisi par profil +
+            # marge (+ consensus temporel) dans le détecteur : sa confiance composite ne bloque pas (3B-5E).
+            return INFINITE
         visual = 0.0
         if track.hue is not None and detection.marker_hue is not None:
             delta = abs(track.hue - detection.marker_hue) % 180.0
@@ -171,6 +184,7 @@ class EntityTracker:
     def update(self, detections, timestamp: float) -> tuple[TrackedEntity, ...]:
         """``detections`` : EntityDetectionResult ou itérable d'EntityEvidence."""
         entities = tuple(getattr(detections, "entities", detections))
+        self._ambiguous_output: list[EntityEvidence] = []
         # Sans ce diagnostic (appel historique avec une simple liste), aucun maintien.
         sprite_cells = set((getattr(detections, "diagnostics", None) or {}).get("sprite_cells", ()))
         observed: set[str] = set()
@@ -194,6 +208,10 @@ class EntityTracker:
                 output.append(self._public(track, TrackState.HELD, False, self.config.hold_confidence_factor))
             else:
                 output.append(self._public(track, TrackState.OCCLUDED, False))
+        for index, detection in enumerate(self._ambiguous_output, start=1):
+            output.append(TrackedEntity(f"ambiguous_{index}", EntityKind.ENEMY, detection.cell_id,
+                                        detection.confidence, TrackState.AMBIGUOUS, 0, 0, timestamp,
+                                        detection.cell_id, True, detection))
         self.last_diagnostics = diagnostics
         order = {EntityKind.PLAYER: 0, EntityKind.ENEMY: 1, EntityKind.UNKNOWN: 2}
         return tuple(sorted(output, key=lambda item: (order[item.kind], _numeric(item.track_id))))
@@ -231,8 +249,16 @@ class EntityTracker:
         pool = candidates + recent_lost
         matrix = [[self.cost(track, detection, timestamp) for detection in detections] for track in pool]
         assigned: set[int] = set()
-        for row, column in hungarian(matrix) if pool and detections else ():
+        pairs = hungarian(matrix) if pool and detections else []
+        ambiguous = self._ambiguous_pairs(pairs, matrix, pool, detections)
+        for row, column in pairs:
             track, detection = pool[row], detections[column]
+            if (row, column) in ambiguous:
+                # Position vraie, identité incertaine : aucune piste n'est déplacée cette frame.
+                assigned.add(column)
+                self._ambiguous_output.append(detection)
+                diagnostics.setdefault("ambiguous", []).append((track.track_id, detection.cell_id))
+                continue
             if track.track_id in self._lost:
                 self._tracks[track.track_id] = self._lost.pop(track.track_id)
             self._apply(track, detection, timestamp)
@@ -242,6 +268,24 @@ class EntityTracker:
         for column, detection in enumerate(detections):
             if column in assigned:
                 continue
+            if self.config.reattach_single_candidate:
+                memory = [track for track in self._lost.values() if track.kind is EntityKind.ENEMY
+                          and timestamp - track.last_seen <= self.config.identity_memory_seconds]
+                candidates = {track.track_id: track for track in [*pool, *memory] if track.track_id not in observed}
+                reachable = [track for track in candidates.values()
+                             if grid_distance(track.cell_id, detection.cell_id) <= self._gate(track, timestamp)]
+                if len(reachable) == 1:
+                    track = reachable[0]
+                    if track.track_id in self._lost:
+                        self._tracks[track.track_id] = self._lost.pop(track.track_id)
+                    self._apply(track, detection, timestamp)
+                    observed.add(track.track_id)
+                    diagnostics.setdefault("reattached", []).append((track.track_id, detection.cell_id))
+                    continue
+                if len(reachable) > 1:
+                    self._ambiguous_output.append(detection)
+                    diagnostics.setdefault("ambiguous", []).append(("several", detection.cell_id))
+                    continue
             if detection.confidence < self.config.new_track_confidence:
                 diagnostics["rejected"].append(("enemy", detection.cell_id))
                 continue
@@ -250,6 +294,31 @@ class EntityTracker:
             self._tracks[track_id] = self._new_track(track_id, EntityKind.ENEMY, detection, timestamp)
             observed.add(track_id)
             diagnostics["new"].append(track_id)
+
+    def _ambiguous_pairs(self, pairs, matrix, pool, detections) -> set[tuple[int, int]]:
+        """Association ambiguë : un AUTRE appariement global, qui n'utilise pas cette paire et associe
+        autant de détections, coûte moins de ``ambiguity_margin`` de plus que l'optimum. Une piste restée
+        sur sa cellule n'est jamais ambiguë."""
+        margin = self.config.ambiguity_margin
+        if margin is None or not pairs:
+            return set()
+
+        def total(assignment) -> float:
+            return sum(work[r][c] for r, c in assignment)
+
+        work = matrix
+        optimum = total(pairs)
+        result = set()
+        for row, column in pairs:
+            if pool[row].cell_id == detections[column].cell_id:
+                continue
+            work = [list(values) for values in matrix]
+            work[row][column] = INFINITE
+            alternative = [pair for pair in hungarian(work) if work[pair[0]][pair[1]] != INFINITE]
+            if len(alternative) == len(pairs) and total(alternative) - optimum < margin:
+                result.add((row, column))
+            work = matrix
+        return result
 
     # --------------------------------------------------------------- outils
     @staticmethod
@@ -274,6 +343,11 @@ class EntityTracker:
                              track.confidence if observed else track.confidence * held_factor if held else 0.0,
                              state, track.age, track.missed, track.last_seen, track.cell_id, observed,
                              track.evidence if observed else None)
+
+    def player_prior(self) -> int | None:
+        """Dernière cellule observée du joueur tant que sa piste est active (contexte du détecteur)."""
+        track = self._tracks.get("player")
+        return track.cell_id if track is not None else None
 
     def tracks(self) -> dict[str, _Track]:
         return dict(self._tracks)

@@ -654,7 +654,9 @@ def run_entity_benchmark(repository: CorpusRepository, *, save_profiles: bool = 
         context = DetectionContext(grid_visible=grid.grid_visibility_state == "VISIBLE",
                                    grid_aligned=(grid.alignment or {}).get("status") == "ALIGNED",
                                    map_id=sample.map_id, layout_signature=sample.layout_signature,
-                                   timestamp=replay_times[sample.observation_id][0])
+                                   timestamp=replay_times[sample.observation_id][0],
+                                   player_prior_cell=trackers[sample.group_id].player_prior()
+                                   if sample.group_id in trackers else None)
         background = backgrounds.setdefault(sample.group_id, CellBackgroundModel())
         result = detector.detect(image, grid, profiles_by_layout[sample.layout_signature], context, background)
         timings["detector_ms"].append(result.timings_ms.get("total", 0.0))
@@ -692,7 +694,8 @@ def run_entity_benchmark(repository: CorpusRepository, *, save_profiles: bool = 
                 frames_after.append(detail)
         sequences[sample.group_id].append((sample, {item.track_id: item.claimed_cell for item in tracked
                                                     if item.kind is EntityKind.ENEMY
-                                                    and item.claimed_cell is not None}))
+                                                    and item.claimed_cell is not None
+                                                    and item.state is not TrackState.AMBIGUOUS}))
         # Référence gloutonne sur les MÊMES détections, pour mesurer le gain de l'affectation globale.
         state = greedy_state.setdefault(sample.group_id, {})
         detections = [item.cell_id for item in result.entities if item.kind is EntityKind.ENEMY]
