@@ -1427,3 +1427,47 @@ Elle est exclue des chiffres VALIDATION ci-dessus ; son retrait du corpus est so
 Avant ce gel : 418 tests réussis, `compileall` et `git diff --check` OK. **Nouveau gel = ce commit.**
 Le prochain TEST exige deux combats **neufs** (jamais les sessions `3902424fd852`/`661a8bcd22dd`,
 refusées par le registre) et une mesure unique avec `--freeze-sha` de ce commit.
+
+### 16.16 Second TEST final (mesure unique, gel `f94f5d4`)
+
+Deux combats **neufs**, capturés après le gel (17:32 et 17:33), split TEST déclaré avant capture,
+annotés par l'utilisateur, identités confirmées : `session_8713f410bfb6` (map 156499972, 15 frames,
+30 vérités ennemies, 119 EMPTY) et `session_d91579865834` (map 173280256, 16 frames, 53 vérités,
+144 EMPTY). Les deux TEST historiques (§16.14) sont exclus par une **copie** du corpus
+(`data/validation/lot3b5d/test2/corpus`, registre TEST conservé), sans modifier le code gelé.
+Mesure lancée une seule fois (`--freeze-sha f94f5d4 --corpus-root …`, 26/09/2026 17:48,
+`independent_test`), recopiée dans le registre du corpus runtime.
+
+| TEST 2 | Résultat | Critère | Verdict |
+|---|---|---|---|
+| Joueur | 24 correct / **0 faux** / 7 inconnu ; couverture 0,774 | précision 1,000 ; couverture ≥ 0,90 | PARTIAL (précision atteinte) |
+| Ennemis | 70 exacts + 1 à une case / 83 ; **2 faux** ; précision 0,973 ; rappel 0,855 ; MAE 0,45 | précision ≥ 0,98 ; rappel ≥ 0,90 | **FAIL** (0,973 < 0,98) |
+| Suivi | 70/83 ; 8 switches (11,4 %) ; 6 réassoc. fausses (8,6 %) ; 8 fragmentations | ≤ 5 % | PARTIAL |
+| FREE | 137 correct / **0 faux** / 0 faux sur entité ; 263 EMPTY ; précision 1,00 ; couverture 0,52 | 0 faux FREE, ≥ 0,98 | **PASS** |
+
+Performance : `detector_ms` moyenne 152, P95 201 ; `tracker_ms` 0,1 ; `observer_ms` médiane 551,
+P95 2003.
+
+**Nature des erreurs (diagnostic, aucun réglage) :** les trois prédictions ennemies hors vérité sont
+toutes **à une case** d'un ennemi réel (combat `d91579865834`, frames 15 et 24) : deux comptées
+fausses (cellules 61 et 117, confiance 0,53 et 0,68, même frame), une comptée comme erreur de
+cellule (132, anneau partiel). Aucun ennemi fantôme loin d'un ennemi réel, aucune cellule joueur
+fausse, aucun FREE sur une entité. Petit corpus : 2 erreurs sur 73 prédictions suffisent à passer
+sous 0,98.
+
+Décision de clôture : critère pré-déclaré non atteint pour ENEMY (précision) ni pour la couverture
+joueur et le suivi. **LOT 3B-5 non clôturé** selon ses critères ; pas de 0.5.0.
+
+```text
+IMPLEMENTATION: PASS
+RUNTIME PROFILES: PASS (layout b2b36fdf07e78000)
+TRACKING UI: PASS
+PLAYER DETECTION: PARTIAL (TEST 2 : 0 erreur acceptée, couverture 0,77)
+ENEMY DETECTION: FAIL au critère (TEST 2 : précision 0,973, rappel 0,855 ; erreurs toutes à une case)
+GLOBAL TRACKING: PARTIAL (TEST 2 : 11,4 % switches, 8,6 % réassociations fausses)
+CELL OCCUPANCY: PASS (TEST 2 : 263 vérités EMPTY, 0 faux FREE)
+OCCLUSION HANDLING: NOT OBSERVED
+GRID REGRESSION: NONE
+HUD REGRESSION: NONE
+ACTIONS: NONE
+```
