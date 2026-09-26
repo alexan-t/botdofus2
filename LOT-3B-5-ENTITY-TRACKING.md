@@ -1251,40 +1251,110 @@ suivi présents, `action_executor_invoked=false`, `action_executed=false`.
   l'échantillon avant d'enregistrer ; suite complète **403 réussis** ; `compileall` et
   `git diff --check` OK. Rebuild + smoke : `success=true`, mêmes contrôles qu'en 16.4.
 
-### 16.6 Corpus, splits et mesures
+### 16.6 Ergonomie corrigée pendant la collecte (sans effet sur la mesure)
 
-| Élément | État |
-|---|---|
-| Combats TRAIN / VALIDATION / TEST | 0 / 0 / 0 — collecte à faire par l'utilisateur |
-| Frames, vérités PLAYER / ENEMY / identités / EMPTY | 0 |
-| SHA de gel | à créer après TRAIN/VALIDATION |
-| TEST final | non commencé |
-| Performance locale (detector/tracker/observer) | non mesurable sans corpus local |
+Retours de l'utilisateur pendant la calibration et la collecte, corrigés et testés :
+`bb78ffb` calibration refaite (grande capture, liste de zones à badges ; la provenance était
+concaténée à chaque mouvement de souris), onglet de connexion guidé, fenêtres de navigateur titrées
+« Dofus » exclues (processus ≠ `Dofus.exe`) ; `e228575` PV empilés dans le cœur du HUD
+(`3516` au-dessus de `3585`) lus, poignée de redimensionnement réduite ; `aafe3d1` liste
+« pourquoi Inconnu ? » en Vision réelle et refus clair de démarrer l'enregistrement sans grille
+calibrée ou sans split ; `ac92cbb` « Précédente » affichait vide une frame juste enregistrée
+(entrée de manifeste périmée ; données intactes). Aucun seuil de lecture changé : PA/PM restent
+UNKNOWN sur ce PC (aucun gabarit HUD local ; RapidOCR lit 15/6 à 0,74/0,79 < 0,94).
 
-### 16.7 Non-régressions sur ce PC
+### 16.7 Corpus local et splits
 
-- GRID : tests unitaires et smoke (projection 560 cellules, visibilité/alignement synthétiques)
-  OK. Le corpus GRID de référence (14/12/26/12) n'est pas sur ce PC : pas de nouvelle mesure réelle.
-- HUD : tests et fixture 7 OK ; corpus HUD de référence absent : 1/7 reste validé sur l'autre PC,
-  non remesuré ici. Les nouvelles mesures locales seront rapportées séparément.
+Layout local **`b2b36fdf07e78000`** : nouveau, différent de `e561118fd8115c8f` et
+`9a0751d48681994e` (cas B). Split déclaré à la capture pour chaque combat entier. Frames hors
+combat (écran de victoire, exploration) et deux sessions ratées (grille non calibrée, grille
+jamais alignée) retirées à la demande de l'utilisateur, par **déplacement** vers
+`data\backup\corpus-removed-*` (réversible, manifeste d'origine conservé).
 
-### 16.8 Statuts à ce point d'arrêt
+| Combat | Split | Map | Frames | Ennemis (vérités) | EMPTY | Identités confirmées |
+|---|---|---|---|---|---|---|
+| `session_e5de113999f5` | TRAIN | 191102978 | 10 | 42 | 90 | oui |
+| `session_86d00d5290df` | TRAIN | 189532166 | 16 | 75 | 141 (+3 OCCUPIED) | non (facultatif) |
+| `session_8dcccb97356e` | VALIDATION | 189532166 | 13 | 25 | 117 | oui |
+| `session_f9f34755e50b` | VALIDATION 2 | 120062465 | 14 | 38 | 126 | oui |
+
+Toutes les frames : grille GameData projetée, VISIBLE/ALIGNED. Occultation par sprite cochée sur
+3 frames mais aucun ennemi déclaré « occulté » : OCCLUSION reste NOT OBSERVED au sens métrique.
+
+### 16.8 VALIDATION 1 : diagnostic et seule modification retenue
+
+Baseline (code inchangé, profils TRAIN en mémoire) sur VALIDATION 1 : joueur 8/13 (0 faux),
+ennemis 15/25 (0 faux), 0 faux FREE, suivi 2 switches / 3 réassociations fausses sur 15.
+Diagnostic cellule par cellule (TRAIN + VALIDATION) : **34 des 36 vérités manquées n'ont aucun
+anneau visible** (pic de chroma < 5, souvent négatif) : animation de sort, zone de portée bleue
+(anneau bleu sur sol bleu), bulle d'information. Aucun seuil de pixel ne les récupère sans inventer.
+
+Modification `1e0c839` : état de piste **HELD**. Une piste non détectée garde sa dernière cellule
+(confiance × 0,5, `observed_this_frame` faux) seulement si le détecteur voit encore un sprite sur
+cette cellule (`sprite_cells` : écart-type Lab du centre ≥ `center_std_min`, seuil existant, aucun
+nouveau seuil). Un ennemi tué laisse une case vide : pas de maintien. Une cellule HELD est OCCUPIED,
+jamais FREE. Une position maintenue est comptée comme affirmation du système dans les métriques.
+
+Rejeté après mesure : signature Lab du sprite pour distinguer les ennemis (dispersion intra-identité
+22–31 > écart inter-identités 16–18) ; refus des associations ambiguës (rappel et précision en baisse,
+switches non résolus). Maintien naïf sans condition de sprite : précision 0,95 (ennemis tués ou déplacés).
+
+### 16.9 VALIDATION 2 (combat neuf, code `1e0c839` inchangé)
+
+| | VALIDATION 1 | **VALIDATION 2 (neuf)** | Cumul VALIDATION | Critère |
+|---|---|---|---|---|
+| Joueur correct / faux / inconnu | 11 / 0 / 2 | **12 / 0 / 2** | 23 / 0 / 4 (couverture 0,85) | précision 1,000 ✓ ; couverture ≥ 0,90 ✗ |
+| Ennemis trouvés / vérités, faux | 20/25, 0 | **35/38, 0** | 55/63, 0 (rappel 0,87) | précision ≥ 0,98 ✓ ; rappel ≥ 0,90 ✗ (cumul) |
+| Suivi : associations, switches, réassoc. fausses | 20/25, 2, 3 | **35/38, 0, 0** | 55/63 ; 3,6 % ; 5,5 % | ≤ 5 % ; ≤ 5 % |
+| FREE : correct / faux / faux sur entité | 50 / 0 / 0 | 43 / 0 / 0 | 93 / 0 / 0 sur 243 EMPTY | 0 faux FREE ✓ ; précision 1,00 ✓ |
+
+TRAIN (en échantillon, optimiste) : joueur 19/26 sans erreur, ennemis 112/117 précision 0,991.
+Petit corpus : quelques erreurs suffisent à franchir un seuil ; ce n'est pas une preuve universelle.
+
+### 16.10 Profils runtime et performance
+
+Profils installés depuis TRAIN seulement (`--install-runtime-profiles`, dry-run d'abord) :
+génération `20260926-165052-1aecc8fb`, `player_train_b2b36fdf07e78000.json` (V2, 20 exemples),
+`team_markers_b2b36fdf07e78000.json`, registre v2 aux splits déclarés, sauvegarde automatique ;
+corpus inchangé (235 fichiers). Empreintes runtime avant écriture :
+`data/validation/lot3b5d-local-resume/runtime-before-profiles.json` (244 fichiers).
+
+Performance sur ce PC (53 frames) : `detector_ms` moyenne 186, médiane 194, P95 264, max 467 ;
+`tracker_ms` < 0,5 ; `observer_ms` moyenne 839, médiane 484, P95 1864, max 2596 (frames avec
+zone de portée ou écran chargé). Machine différente de l'autre PC : pas de comparaison directe.
+
+### 16.11 Non-régressions sur ce PC
+
+- GRID : tests et smoke OK ; sur le corpus local, grille VISIBLE/ALIGNED sur les 53 frames de
+  combat. Corpus GRID de référence absent de ce PC : pas de nouvelle mesure de référence.
+- HUD : tests et fixture 7 OK ; aucune lecture acceptée fausse (tout reste UNKNOWN faute de
+  gabarits locaux) ; 1/7 validé sur l'autre PC, non remesuré ici.
+- Actions : aucune ; `action_executor_invoked=false` à chaque smoke.
+
+### 16.12 Gel du code
+
+Avant gel : working tree propre, **417 tests réussis**, `compileall` et `git diff --check` OK,
+exe reconstruit, smoke `success=true`. Le commit qui ajoute cette section est le **commit de gel** :
+son code `combatbot/` est identique à `1e0c839`. Après lui, aucun réglage fondé sur TEST.
+Mesure TEST unique : `python -m combatbot.benchmark --entities-3b5d --entity-splits test
+--freeze-sha <SHA>` (refusée si `combatbot/` diffère du gel ou si ces combats ont déjà été mesurés).
+
+### 16.13 Statuts au gel (avant TEST)
 
 ```text
-IMPLEMENTATION: PASS (outillage 3B-5D)
-RUNTIME PROFILES: PASS (hérité 3B-5C-FIX ; aucun profil local — nouveau layout à apprendre)
+IMPLEMENTATION: PASS
+RUNTIME PROFILES: PASS (layout b2b36fdf07e78000, TRAIN seulement)
 TRACKING UI: PASS
-REAL ENTITY CORPUS (PC local): EMPTY — collecte requise
-PLAYER DETECTION: PARTIAL (inchangé, aucune donnée indépendante)
-ENEMY DETECTION: PARTIAL (inchangé)
-GLOBAL TRACKING: PARTIAL (inchangé)
-CELL OCCUPANCY: PARTIAL (mécanisme EMPTY prêt, 0 vérité)
-OCCLUSION HANDLING: NOT OBSERVED
-GRID REGRESSION: NONE (tests/smoke ; corpus de référence absent de ce PC)
-HUD REGRESSION: NONE (tests/smoke ; corpus de référence absent de ce PC)
+REAL ENTITY CORPUS (PC local): TRAIN 2 combats / VALIDATION 2 combats / TEST 0
+PLAYER DETECTION: PARTIAL en VALIDATION (0 erreur acceptée, couverture 0,85)
+ENEMY DETECTION: PARTIAL en VALIDATION cumulée (précision 1,00, rappel 0,87 ; 0,92 sur le combat neuf)
+GLOBAL TRACKING: PARTIAL (3,6 % switches, 5,5 % réassociations fausses en cumul ; 0/0 sur le combat neuf)
+CELL OCCUPANCY: PASS en VALIDATION (243 vérités EMPTY, 0 faux FREE)
+OCCLUSION HANDLING: NOT OBSERVED (au sens métrique)
+GRID REGRESSION: NONE
+HUD REGRESSION: NONE
 ACTIONS: NONE
 ```
 
-LOT 3B-5 non clôturé, pas de 0.5.0, pas de 3B-6. Prochaine étape : calibration locale puis
-collecte TRAIN (≥ 2 combats) et VALIDATION (≥ 1 combat) par l'utilisateur, annotation, puis
-profils TRAIN, diagnostic VALIDATION et gel.
+LOT 3B-5 non clôturé, version 0.4.3, pas de 3B-6. Prochaine étape : au moins 2 combats TEST neufs,
+annotés sans voir les prédictions, puis une seule mesure TEST.
