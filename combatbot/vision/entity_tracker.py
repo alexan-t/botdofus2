@@ -10,7 +10,7 @@ scipy n'est pas installé et quelques entités seulement sont suivies).
 - OCCLUDED : absente brièvement ; ``cell_id`` vaut None, ``last_known_cell_id`` est conservé et
   la cellule n'est jamais déclarée occupée pour autant. LOST au-delà de la tolérance
   (temps ET frames, configurables).
-- HELD (LOT 3B-5D) : absente de la détection mais un sprite occupe toujours sa dernière cellule
+- HELD (LOT 3B-5D, désactivé par défaut) : absente de la détection mais un sprite occupe toujours sa dernière cellule
   (``sprite_cells`` du détecteur) : la position est maintenue avec une confiance réduite. Un
   ennemi tué laisse une case vide : il n'est pas maintenu. Réglé sur TRAIN/VALIDATION seulement.
 - Distance = distance topologique GameData (Manhattan en coordonnées logiques, équivalence au
@@ -116,7 +116,9 @@ class TrackerConfig:
     occlusion_frames: int = 6
     occlusion_seconds: float = 4.0
     player_confirm_frames: int = 2     # saut du joueur hors gabarit : confirmé à la même cellule
-    hold_with_sprite: bool = True      # 3B-5D : maintien si un sprite reste sur la dernière cellule
+    # 3B-5D : maintien si un sprite reste sur la dernière cellule. DÉSACTIVÉ : sur le TEST gelé
+    # 6b72202, 3 maintiens sur 4 étaient faux (ennemi déplacé, ancienne case texturée).
+    hold_with_sprite: bool = False
     hold_confidence_factor: float = 0.5
 
 

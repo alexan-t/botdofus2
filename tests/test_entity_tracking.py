@@ -218,13 +218,22 @@ def test_observer_map_change_resets_tracks_and_background_but_keeps_profile() ->
 
 
 # ---------------------------------------------------------------------------- LOT 3B-5D : maintien
+HOLD = TrackerConfig(hold_with_sprite=True)   # désactivé par défaut depuis l'échec TEST 3B-5D
+
+
+def test_hold_is_disabled_by_default() -> None:
+    tracker = EntityTracker()
+    tracker.update(_frame([enemy(line(0))]), 0.0)
+    assert by_id(tracker.update(_frame([], sprites=[line(0)]), 0.5))["enemy_1"].state is TrackState.OCCLUDED
+
+
 def _frame(entities=(), sprites=()):
     from combatbot.vision.entity_models import EntityDetectionResult
     return EntityDetectionResult(tuple(entities), diagnostics={"sprite_cells": list(sprites)})
 
 
 def test_hidden_enemy_is_held_while_a_sprite_stays_on_its_cell() -> None:
-    tracker = EntityTracker()
+    tracker = EntityTracker(HOLD)
     tracker.update(_frame([enemy(line(0))]), 0.0)
     held = by_id(tracker.update(_frame([], sprites=[line(0)]), 0.5))["enemy_1"]
     assert held.state is TrackState.HELD and held.cell_id == line(0) and held.claimed_cell == line(0)
@@ -233,14 +242,14 @@ def test_hidden_enemy_is_held_while_a_sprite_stays_on_its_cell() -> None:
 
 
 def test_enemy_leaving_an_empty_cell_is_not_held() -> None:
-    tracker = EntityTracker()
+    tracker = EntityTracker(HOLD)
     tracker.update(_frame([enemy(line(0))]), 0.0)
     gone = by_id(tracker.update(_frame([], sprites=[]), 0.5))["enemy_1"]   # ennemi tué : case vide
     assert gone.state is TrackState.OCCLUDED and gone.cell_id is None and gone.claimed_cell is None
 
 
 def test_hold_needs_detector_sprite_evidence_and_expires() -> None:
-    tracker = EntityTracker(TrackerConfig(occlusion_frames=2))
+    tracker = EntityTracker(TrackerConfig(occlusion_frames=2, hold_with_sprite=True))
     tracker.update([enemy(line(0))], 0.0)
     assert by_id(tracker.update([], 0.1))["enemy_1"].state is TrackState.OCCLUDED   # liste simple : pas de maintien
     states = [by_id(tracker.update(_frame([], sprites=[line(0)]), 0.2 + 0.1 * i))["enemy_1"].state for i in range(2)]
@@ -251,7 +260,7 @@ def test_hold_needs_detector_sprite_evidence_and_expires() -> None:
 
 
 def test_held_track_keeps_its_identity_when_seen_again() -> None:
-    tracker = EntityTracker()
+    tracker = EntityTracker(HOLD)
     tracker.update(_frame([enemy(line(0)), enemy(line(4))]), 0.0)
     tracker.update(_frame([enemy(line(4))], sprites=[line(0)]), 0.5)
     back = by_id(tracker.update(_frame([enemy(line(0)), enemy(line(4))]), 1.0))

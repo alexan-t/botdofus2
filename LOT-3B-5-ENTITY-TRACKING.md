@@ -1404,3 +1404,26 @@ ACTIONS: NONE
 ```
 
 LOT 3B-5 non clôturé, version 0.4.3, pas de 3B-6.
+
+### 16.15 Correction après échec TEST et nouveau gel
+
+Décision de l'utilisateur : désactiver le maintien HELD (option la plus prudente). `hold_with_sprite`
+passe à **False** par défaut ; le code reste, désactivé, couvert par des tests explicites. Retour au
+comportement mesuré sur TRAIN/VALIDATION avant `1e0c839` : aucune position affirmée sans preuve de
+la frame. Aucun autre seuil, coût, profil ni règle modifié.
+
+Remesure TRAIN/VALIDATION seulement (les deux combats TEST de §16.14 sont exclus : diagnostic
+historique) :
+
+| | Joueur correct / faux / inconnu | Ennemis trouvés, faux, précision, rappel | Suivi : associations, switch, réassoc. fausses | Faux FREE |
+|---|---|---|---|---|
+| TRAIN | 19 / 0 / 7 | 101/117, 0, 1,000, 0,863 | 39/42 ; 15,4 % ; 12,8 % | 0 (231 EMPTY) |
+| VALIDATION (2 combats, 27 frames) | 19 / 0 / 8 (couverture 0,70) | 47/63, 0, 1,000, 0,746 | 47/63 ; 4,3 % ; 6,4 % | 0 (243 EMPTY) |
+
+Anomalie de corpus : une session VALIDATION d'**une frame** (`session_8160937c06d2`, map 68419589,
+17:07) appartient au 1ᵉʳ combat TEST (même map, même minute ; observation redémarrée en TEST).
+Elle est exclue des chiffres VALIDATION ci-dessus ; son retrait du corpus est soumis à l'utilisateur.
+
+Avant ce gel : 418 tests réussis, `compileall` et `git diff --check` OK. **Nouveau gel = ce commit.**
+Le prochain TEST exige deux combats **neufs** (jamais les sessions `3902424fd852`/`661a8bcd22dd`,
+refusées par le registre) et une mesure unique avec `--freeze-sha` de ce commit.
