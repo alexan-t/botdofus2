@@ -297,7 +297,10 @@ class CellEntityDetector:
                                    # Secteurs cohérents rapportés aux 4 secteurs bas qu'un anneau non masqué montre.
                                    "score": float(min(1.0, count / len(LOWER_SECTORS))),
                                    "hue": team.hue, "stats": stats, "partial_team": name})  # type: ignore[union-attr]
-            elif cell_peak < config.peak_weak and not partial_teams and background is not None:
+            elif (cell_peak < config.peak_weak and not partial_teams and background is not None
+                  # 3B-5E : un sprite (centre hétérogène) sans anneau visible reste UNKNOWN, jamais FREE
+                  # (TRAIN : 98–100 % des vérités joueur/ennemi ont center_std ≥ 8, les cases vides ~0).
+                  and features["center_std"][index] < config.center_std_min):
                 if background.is_free(cell_id, features["ground_lab"][index], cells_by_id.get(cell_id), context):
                     state = "FREE"
             occupancy[cell_id] = state
@@ -371,6 +374,7 @@ class CellEntityDetector:
             for index, cell_id in enumerate(maps.cell_ids.tolist()):
                 background.learn(key, cell_id, features["ground_lab"][index], cells_by_id.get(cell_id), context,
                                  entity_evidence=bool(peak[index] >= config.peak_weak
+                                                      or features["center_std"][index] >= config.center_std_min
                                                       or occupancy.get(cell_id) == "OCCUPIED"
                                                       or any(v["count"][index] > 0 for v in partial.values())))
         finished = time.perf_counter()

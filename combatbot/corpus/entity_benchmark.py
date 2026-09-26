@@ -42,7 +42,8 @@ from combatbot.vision.entity_models import (
 )
 from combatbot.vision.entity_profiles import (
     MIN_FULL_RING_SAMPLES, ProfileError, _hue_class, cell_pixels, circular_hue_mean, enrichment_hue,
-    frame_pixels, gate_partial, hue_deviation, player_profile_v2, save_team_profile, save_train_player_profile,
+    frame_pixels, gate_partial, hue_deviation, player_profile_v2, robust_hue_inliers, save_team_profile,
+    save_train_player_profile,
     stroke_hues, team_class_from_train,
 )
 from combatbot.vision.entity_tracker import EntityTracker, greedy_assign, grid_distance, hungarian, INFINITE
@@ -274,6 +275,11 @@ def build_profiles(samples: list[EntitySample], detector: CellEntityDetector) ->
             enrichment = enrichment_hue(np.concatenate(data["ring"]), data["ring_total"],
                                         [(np.concatenate(data[band]), data[f"{band}_total"])
                                          for band in ("outer", "inner")])
+        # 3B-5E : anneaux aberrants (corps coloré sur l'anneau) écartés avant d'estimer la teinte.
+        keep = robust_hue_inliers(full[team])
+        rejected_hues = len(keep) - sum(keep)
+        full[team] = [hue for hue, kept in zip(full[team], keep) if kept]
+        strokes[team] = [pixels for pixels, kept in zip(strokes[team], keep) if kept]
         pixels = np.concatenate(strokes[team]) if strokes[team] else np.zeros(0)
         classes[team] = team_class_from_train(full[team], pixels, enrichment, data["cells"])
         spread = None
@@ -281,6 +287,7 @@ def build_profiles(samples: list[EntitySample], detector: CellEntityDetector) ->
             mean_hue = circular_hue_mean(full[team])
             spread = float(np.sqrt(np.mean(hue_deviation(full[team], mean_hue) ** 2)))
         team_diagnostics[team] = {"annotated_cells": data["cells"], "full_ring_samples": len(full[team]),
+                                  "outlier_ring_hues_rejected": rejected_hues,
                                   "full_ring_hue_spread": spread, "stroke_pixels": int(len(pixels)),
                                   "enrichment": enrichment}
     if classes["player"] and classes["enemy"] and classes["player"].hue_distance(classes["enemy"].hue) <= max(

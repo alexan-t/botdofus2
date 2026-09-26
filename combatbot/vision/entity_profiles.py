@@ -64,6 +64,24 @@ def player_profile_from_cell(image, grid, cell_id: int, *, layout_signature: str
                                1, "human_confirmed", int(cell_id))
 
 
+def robust_hue_inliers(hues: list[float]) -> list[bool]:
+    """3B-5E : un anneau masqué par un corps coloré (Gelée rouge, jaune…) donne une « teinte d'anneau »
+    aberrante qui élargissait la tolérance d'équipe à ±50°. Écart à la teinte médiane circulaire
+    > max(tolérance minimale, 3 × 1,4826 × MAD) : exemple écarté (mesuré sur TRAIN seulement)."""
+    if len(hues) < 3:
+        return [True] * len(hues)
+    values = np.asarray(hues, dtype=np.float64)
+    radians = np.radians(values * 2.0)
+    center = (np.degrees(np.arctan2(np.sin(radians).sum(), np.cos(radians).sum())) % 360.0) / 2.0
+    for _ in range(3):   # médiane circulaire approchée par itérations sur les écarts
+        signed = (values - center + 90.0) % 180.0 - 90.0
+        center = (center + float(np.median(signed))) % 180.0
+    deviation = np.abs((values - center + 90.0) % 180.0 - 90.0)
+    mad = float(np.median(deviation))
+    limit = max(MIN_HUE_TOLERANCE, 3.0 * 1.4826 * mad)
+    return [bool(d <= limit) for d in deviation]
+
+
 def _hue_class(hues: list[float]) -> MarkerColorClass | None:
     if not hues:
         return None

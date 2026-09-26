@@ -209,3 +209,34 @@ def test_team_and_player_profiles_require_matching_layout(scene, layout) -> None
 def test_team_profile_rejects_unconfirmed_provenance() -> None:
     with pytest.raises(ValueError, match="confirmé"):
         TeamMarkerProfile.from_dict({**TEAMS.to_dict(), "provenance": "prediction"})
+
+
+# ---------------------------------------------------------------------------- LOT 3B-5E
+def test_free_never_overrides_entity_evidence(scene) -> None:
+    """Un monstre immobile dont l'anneau est caché (Gelée) n'est jamais appris comme sol ni FREE."""
+    from entity_fixtures import draw_sprite
+    grid, image = scene
+    cell = next(c for c in grid.cells if c.cell_id == CENTER)
+    draw_sprite(image, cell, (60, 60, 200))               # corps sans anneau visible
+    _detector, model, results = _trained_background(grid, image, 8)
+    assert not model.ready(CENTER)
+    assert results[-1].occupancy[CENTER] != "FREE"
+    assert any(state == "FREE" for c, state in results[-1].occupancy.items() if c != CENTER)
+
+
+def test_sprite_on_textured_floor_not_enemy(scene) -> None:
+    from entity_fixtures import draw_sprite
+    grid, image = scene
+    cell = next(c for c in grid.cells if c.cell_id == CENTER)
+    draw_sprite(image, cell, (40, 160, 60))
+    result = detect(image, grid)
+    assert all(item.kind is not EntityKind.ENEMY for item in result.entities)
+
+
+def test_team_hue_ignores_outlier_ring_samples() -> None:
+    from combatbot.vision.entity_profiles import robust_hue_inliers
+    # Anneaux bleus (~120) + trois corps de Gelée rouges/jaunes pris à tort pour des anneaux.
+    hues = [119.0, 121.0, 120.5, 118.0, 122.0, 119.5, 0.5, 33.0, 176.0]
+    keep = robust_hue_inliers(hues)
+    assert keep == [True] * 6 + [False] * 3
+    assert robust_hue_inliers([10.0, 170.0]) == [True, True]       # trop peu d'exemples : rien écarté
