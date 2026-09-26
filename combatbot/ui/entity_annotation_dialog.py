@@ -137,10 +137,15 @@ class EntityAnnotationDialog(QDialog):
         self.header.setWordWrap(True)
         root.addWidget(self.header)
         self.sequence = QComboBox()
+        self.sequence.setToolTip("⏳ = frames encore à annoter ; les combats à terminer sont en tête, "
+                                 "du plus récent au plus ancien.")
         self._sequence_ids = {e.observation_id: repository.tracking_sequence_id(e) for e in self.entries}
-        for sequence_id in dict.fromkeys(self._sequence_ids.values()):
-            count = sum(value == sequence_id for value in self._sequence_ids.values())
-            self.sequence.addItem(f"{sequence_id} — {count} frames", sequence_id)
+        self._fill_sequences()
+        # Ouvrir directement sur le travail à faire : 1ʳᵉ frame non annotée du combat à terminer le
+        # plus récent ; si tout est annoté, comportement historique (première frame).
+        pending = self._pending_frame()
+        if pending is not None:
+            self.index = pending
         root.addWidget(self.sequence)
         assist_row = QHBoxLayout()
         self.assist = QCheckBox("Assistance activée (suggestions du logiciel)")
@@ -249,6 +254,66 @@ class EntityAnnotationDialog(QDialog):
         self.occluded_tracks.textEdited.connect(lambda _text: self._invalidate_tracking())
         self.sequence.currentIndexChanged.connect(self._select_sequence)
         self._show()
+
+    # ------------------------------------------------------------------ liste des combats
+    def _sequence_info(self) -> dict[str, dict]:
+        """Par séquence : date, split, map, frames, frames annotées (lecture des fichiers du corpus)."""
+        info: dict[str, dict] = {}
+        for entry in self.entries:
+            sequence_id = self._sequence_ids[entry.observation_id]
+            row = info.setdefault(sequence_id, {"created": "", "split": None, "map": None, "frames": 0, "annotated": 0})
+            try:
+                document = self.repository.read_observation(entry)
+                annotation = self.repository.read_annotation(entry.observation_id)
+            except (OSError, ValueError):
+                continue
+            row["frames"] += 1
+            row["annotated"] += int(bool(annotation and annotation.entities_confirmed))
+            created = str(document.get("created_at") or "")
+            if created and (not row["created"] or created < row["created"]):
+                row["created"] = created
+            row["split"] = frame_split(document) or row["split"]
+            row["map"] = (document.get("grid_snapshot") or {}).get("map_id_declared")
+        return info
+
+    def _fill_sequences(self) -> None:
+        info = self._sequence_info()
+        order = sorted(info, key=lambda sid: (info[sid]["annotated"] >= info[sid]["frames"], info[sid]["created"]),
+                       reverse=False)
+        todo = sorted((sid for sid in order if info[sid]["annotated"] < info[sid]["frames"]),
+                      key=lambda sid: info[sid]["created"], reverse=True)
+        done = sorted((sid for sid in order if info[sid]["annotated"] >= info[sid]["frames"]),
+                      key=lambda sid: info[sid]["created"], reverse=True)
+        current = self.sequence.currentData()
+        self.sequence.blockSignals(True)
+        self.sequence.clear()
+        for sequence_id in [*todo, *done]:
+            row = info[sequence_id]
+            when = row["created"][8:10] + "/" + row["created"][5:7] + " " + row["created"][11:16] if row["created"] else "?"
+            state = (f"⏳ {row['annotated']}/{row['frames']} annotées" if row["annotated"] < row["frames"]
+                     else f"✓ {row['frames']} frames annotées")
+            split = (row["split"] or "non déclaré").upper()
+            self.sequence.addItem(f"{state} · {when} · {split} · map {row['map']} · {sequence_id.split('|')[0]}",
+                                  sequence_id)
+        if current is not None:
+            self.sequence.setCurrentIndex(max(0, self.sequence.findData(current)))
+        self.sequence.blockSignals(False)
+        self._sequence_rows = info
+
+    def _pending_frame(self) -> int | None:
+        """Index de la 1ʳᵉ frame non annotée du combat à terminer le plus récent."""
+        info = getattr(self, "_sequence_rows", {})
+        todo = [sid for sid, row in info.items() if row["annotated"] < row["frames"]]
+        if not todo:
+            return None
+        newest = max(todo, key=lambda sid: info[sid]["created"])
+        candidates = [(entry.frame_index, index) for index, entry in enumerate(self.entries)
+                      if self._sequence_ids[entry.observation_id] == newest]
+        for _frame, index in sorted(candidates):
+            annotation = self.repository.read_annotation(self.entries[index].observation_id)
+            if not (annotation and annotation.entities_confirmed):
+                return index
+        return None
 
     # ------------------------------------------------------------------ données
     def _frame_point(self, point) -> tuple[float, float] | None:
@@ -875,6 +940,7 @@ class EntityAnnotationDialog(QDialog):
             return
         self._drafts.pop(entry.observation_id, None)
         self._dirty = False
+        self._fill_sequences()
         verdict = {"assisted_confirmed": "suggestions acceptées telles quelles ✓",
                    "assisted_corrected": "suggestions corrigées ✎"}.get(mode, "saisie manuelle")
         self.status.setText(f"{entry.observation_id} : vérité entités confirmée ({verdict}).")

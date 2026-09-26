@@ -246,3 +246,31 @@ def test_assisted_annotation_requires_snapshot() -> None:
         base.validate()
     with pytest.raises(ValueError, match="annotation_mode"):
         Annotation("obs", annotation_mode="auto").validate()
+
+
+def test_dialog_opens_on_newest_unfinished_combat(tmp_path) -> None:
+    """Liste lisible : combats à terminer en tête (plus récent d'abord), ouverture sur le travail à faire."""
+    from dataclasses import replace
+    from combatbot.corpus.models import CorpusManifest
+    repository = build_corpus(tmp_path, ("combat-old", "combat-new", "combat-done"))
+    dates = {"combat-old": "2026-09-20T10:00:00", "combat-new": "2026-09-27T10:00:00", "combat-done": "2026-09-28T10:00:00"}
+    stripped = {("combat-old", 4), ("combat-new", 2), ("combat-new", 3)}
+    for entry in repository.list_entries():
+        path = repository.resolve(entry.paths["observation"])
+        document = json.loads(path.read_text(encoding="utf-8"))
+        document["created_at"] = dates[entry.session_id]
+        document["capture"]["entity_split_declared"] = "train"
+        path.write_text(json.dumps(document), encoding="utf-8")
+        if (entry.session_id, entry.frame_index) in stripped:
+            (path.parent / "annotation.json").unlink()
+    repository.save_manifest(CorpusManifest(tuple(
+        replace(e, paths={k: v for k, v in e.paths.items() if k != "annotation"}, annotation_available=False)
+        if (e.session_id, e.frame_index) in stripped else e for e in repository.load_manifest().entries)))
+    dialog = _dialog(repository, FakeProvider(repository))
+    entry = dialog.entries[dialog.index]
+    assert (entry.session_id, entry.frame_index) == ("combat-new", 2)
+    labels = [dialog.sequence.itemText(i) for i in range(dialog.sequence.count())]
+    assert labels[0].startswith("⏳ 3/5") and "combat-new" in labels[0] and "TRAIN" in labels[0]
+    assert labels[1].startswith("⏳ 4/5") and "combat-old" in labels[1]
+    assert labels[2].startswith("✓") and "combat-done" in labels[2]
+    dialog.close()
