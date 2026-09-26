@@ -7,6 +7,12 @@ n'est cliqué dans DOFUS. La frame précédente n'est jamais recopiée dans la v
 
 LOT 3B-5D : quelques cellules (contour jaune « ? ») sont tirées par ``empty_sampling`` sans
 regarder aucune prédiction ; chacune reçoit VIDE, OCCUPÉE ou INCONNU avant la confirmation.
+
+LOT 3B-5E — annotation assistée : sur TRAIN/VALIDATION, les suggestions du logiciel préremplissent
+la frame (contour violet, « ? »). Elles ne deviennent une vérité qu'au clic humain (« Tout est
+correct » ou « Confirmer ») ; la suggestion d'origine est enregistrée avec la vérité. Sur TEST (et
+split non déclaré), l'annotation reste aveugle : aucune prédiction n'est calculée ni montrée avant
+que la vérité de la frame soit enregistrée ; ensuite seulement « Comparer avec la prédiction ».
 """
 
 from __future__ import annotations
@@ -15,8 +21,12 @@ import cv2
 import numpy as np
 from PySide6.QtCore import QPoint, Qt, Signal
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QMenu, QMessageBox, QPushButton,
-    QVBoxLayout,
+    QApplication, QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QMenu, QMessageBox,
+    QPushButton, QVBoxLayout,
+)
+
+from combatbot.corpus.entity_suggestions import (
+    DetectorSuggestionProvider, assistance_allowed, frame_split, review, review_statistics,
 )
 
 from combatbot.corpus.empty_sampling import SAMPLE_VERSION, sample_cells
@@ -28,6 +38,9 @@ ENEMY_LABELS = tuple(f"E{index}" for index in range(1, 9))
 SAMPLE_CAPTIONS = {"EMPTY": "vide", "OCCUPIED": "occupée", "UNKNOWN": "inconnu"}
 UNSAVED_TRACKING = "Vous avez une modification de confirmation non enregistrée."
 TRACKING_INVALIDATED = "Confirmation de suivi invalidée après modification des identités."
+SUGGESTED_COLOR = (255, 110, 200)        # BGR : violet, jamais confondu avec une vérité
+STATUS_TEXT = {"confirmed": "✓ confirmé", "corrected": "✎ corrigé", "rejected": "✗ rejeté",
+               "added": "＋ ajouté (manqué par le logiciel)"}
 PHASE_LABELS = {"placement": "Placement", "debut_combat": "Début de combat", "mon_tour": "Mon tour",
                 "tour_ennemi": "Tour ennemi", "animation_sort": "Animation de sort",
                 "changement_tour": "Changement de tour", "exploration": "Exploration", "autre": "Autre"}
@@ -86,15 +99,28 @@ class _CellCanvas(QLabel):
         self.hovered.emit(self._image_point(event.position()))
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 - API Qt
+        self.setFocus()
         point = self._image_point(event.position())
         if point is not None:
             self.clicked.emit(point, event.globalPosition().toPoint())
 
 
 class EntityAnnotationDialog(QDialog):
-    def __init__(self, repository: CorpusRepository, parent=None) -> None:
+    def __init__(self, repository: CorpusRepository, parent=None, suggestion_provider=None) -> None:
         super().__init__(parent)
         self.repository = repository
+        # 3B-5E : suggestions calculées à la demande (jamais pour TEST avant vérité).
+        self._provider = suggestion_provider
+        self._assist_preference = True
+        self.suggestion = None            # EntitySuggestion affichée pour la frame courante
+        self._snapshot: dict | None = None  # suggestion d'origine figée, enregistrée avec la vérité
+        self.origin: dict[int, str] = {}  # cell_id -> "suggested" | "human"
+        self.selected_cell: int | None = None
+        self._drafts: dict[str, dict] = {}
+        self._dirty = False
+        self._compare_revealed: set[str] = set()
+        self._annotation = None
+        self._document: dict = {}
         self.entries = entity_entries(repository)
         self.index = 0
         self.labels: dict[int, str] = {}   # cell_id -> PLAYER | E1… | ENEMY | EMPTY
@@ -116,6 +142,15 @@ class EntityAnnotationDialog(QDialog):
             count = sum(value == sequence_id for value in self._sequence_ids.values())
             self.sequence.addItem(f"{sequence_id} — {count} frames", sequence_id)
         root.addWidget(self.sequence)
+        assist_row = QHBoxLayout()
+        self.assist = QCheckBox("Assistance activée (suggestions du logiciel)")
+        self.assist.setChecked(True)
+        self.assist.toggled.connect(self._assist_toggled)
+        self.assist_state = QLabel()
+        self.assist_state.setWordWrap(True)
+        assist_row.addWidget(self.assist)
+        assist_row.addWidget(self.assist_state, 1)
+        root.addLayout(assist_row)
         body = QHBoxLayout()
         self.canvas = _CellCanvas()
         body.addWidget(self.canvas, 4)
@@ -164,30 +199,50 @@ class EntityAnnotationDialog(QDialog):
         self.summary = QLabel()
         self.summary.setWordWrap(True)
         side.addWidget(self.summary)
+        self.compare = QLabel()
+        self.compare.setWordWrap(True)
+        self.compare.setTextFormat(Qt.TextFormat.RichText)
+        self.compare.setStyleSheet("background:#172234; border:1px solid #2e3d52; border-radius:8px; padding:6px;")
+        side.addWidget(self.compare)
+        self.compare_button = QPushButton("Comparer avec la prédiction")
+        self.compare_button.clicked.connect(self._reveal_prediction)
+        side.addWidget(self.compare_button)
+        self.review_stats = QLabel()
+        self.review_stats.setWordWrap(True)
+        side.addWidget(self.review_stats)
         side.addStretch()
         body.addLayout(side, 1)
         root.addLayout(body, 1)
         self.status = QLabel("Clic sur une cellule : JOUEUR, ENNEMI, VIDE confirmé ou INCONNU. "
-                             "Aucune prédiction n'est affichée.")
+                             "Raccourcis : Entrée = tout est correct · ←/→ = frame · Suppr = effacer la "
+                             "cellule choisie · 1…8 = E1…E8 · P = joueur · V = cases jaunes restantes vides.")
         self.status.setWordWrap(True)
         root.addWidget(self.status)
         buttons = QHBoxLayout()
         previous, following = QPushButton("◀ Précédente"), QPushButton("Suivante ▶")
         clear = QPushButton("Tout effacer")
         save = QPushButton("Confirmer cette frame")
-        save.setObjectName("primary")
+        self.accept_all_button = QPushButton("✓ Tout est correct")
+        self.accept_all_button.setObjectName("primary")
+        self.accept_all_button.setToolTip("Accepte les suggestions affichées comme vérité humaine (Entrée)")
         close = QPushButton("Fermer")
+        for button in (previous, following, clear, save, self.accept_all_button, close):
+            button.setAutoDefault(False)
+            button.setDefault(False)
         for button in (previous, following, clear):
             buttons.addWidget(button)
         buttons.addStretch()
         buttons.addWidget(save)
+        buttons.addWidget(self.accept_all_button)
         buttons.addWidget(close)
         root.addLayout(buttons)
         previous.clicked.connect(lambda: self._move(-1))
         following.clicked.connect(lambda: self._move(1))
         clear.clicked.connect(self._clear)
         save.clicked.connect(self._save)
+        self.accept_all_button.clicked.connect(self._accept_all)
         close.clicked.connect(self.accept)
+        self.canvas.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.canvas.hovered.connect(self._hover)
         self.canvas.clicked.connect(self._menu)
         self.player_hidden.toggled.connect(self._player_visibility_changed)
@@ -230,6 +285,12 @@ class EntityAnnotationDialog(QDialog):
             self.sample_labels = {int(item["cell_id"]): str(item["label"]) for item in annotation.sampled_cells_truth
                                   if int(item["cell_id"]) in self.sample}
         self.labels = {}
+        self.origin = {}
+        self.suggestion = None
+        self._snapshot = None
+        self.selected_cell = None
+        self._dirty = False
+        self._document = document
         if annotation is not None and annotation.entities_confirmed:
             if annotation.player_cell_id_truth is not None:
                 self.labels[annotation.player_cell_id_truth] = "PLAYER"
@@ -237,8 +298,28 @@ class EntityAnnotationDialog(QDialog):
                 self.labels[int(item["cell_id"])] = str(item.get("track_id") or "ENEMY")
             for cell_id in annotation.empty_confirmed_cells:
                 self.labels[cell_id] = "EMPTY"
+            self.origin = {cell: "human" for cell in self.labels}
         confirmed = annotation is not None and annotation.entities_confirmed
+        self._annotation = annotation
+        self.player_hidden.blockSignals(True)
         self.player_hidden.setChecked(bool(annotation and annotation.player_visibility == "NOT_VISIBLE"))
+        self.player_hidden.blockSignals(False)
+        allowed = assistance_allowed(document)
+        self.assist.blockSignals(True)
+        self.assist.setEnabled(allowed)
+        self.assist.setChecked(allowed and self._assist_preference)
+        self.assist.blockSignals(False)
+        draft = self._drafts.get(entry.observation_id)
+        if draft is not None:
+            self.labels, self.origin = dict(draft["labels"]), dict(draft["origin"])
+            self.sample_labels, self._snapshot = dict(draft["sample_labels"]), draft["snapshot"]
+            self.suggestion = draft["suggestion"]
+            self.player_hidden.blockSignals(True)
+            self.player_hidden.setChecked(draft["player_hidden"])
+            self.player_hidden.blockSignals(False)
+            self._dirty = True
+        elif not confirmed and allowed and self.assist.isChecked():
+            self._prefill(entry)
         self.phase.setCurrentIndex(max(0, self.phase.findData(annotation.frame_phase if annotation else None)))
         self.occlusion.setChecked(bool(annotation and annotation.occlusion))
         tactical = annotation.tactical_mode if annotation else None
@@ -263,9 +344,148 @@ class EntityAnnotationDialog(QDialog):
         grid = document.get("grid_snapshot") or {}
         self.header.setText(
             f"Frame {self.index + 1}/{len(self.entries)} · <b>{entry.session_id}</b> · frame {entry.frame_index} · "
-            f"map {grid.get('map_id_declared')} · "
-            + ("<b>vérité entités confirmée</b>" if confirmed else "non annotée"))
+            f"map {grid.get('map_id_declared')} · split <b>{(frame_split(document) or 'non déclaré').upper()}</b> · "
+            + ("<b>vérité entités confirmée</b>" if confirmed else
+               "suggestions à vérifier" if self.suggestion is not None else "non annotée"))
+        if allowed:
+            self.assist_state.setText("Suggestions affichées en violet « ? » : elles ne comptent qu'après votre "
+                                      "confirmation." if self.assist.isChecked() else "Assistance coupée : saisie manuelle.")
+        else:
+            self.assist_state.setText("<b>Split TEST ou non déclaré : annotation aveugle.</b> Aucune prédiction "
+                                      "n'est montrée avant d'avoir confirmé la vérité de la frame.")
         self._render()
+        self._update_compare()
+        self._update_stats()
+
+    # ------------------------------------------------------------------ assistance 3B-5E
+    def _suggestions(self):
+        if self._provider is None:
+            self._provider = DetectorSuggestionProvider()
+        return self._provider
+
+    def _suggestion_for(self, entry):
+        try:
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            try:
+                return self._suggestions().for_sequence(self.repository, self._sequence_ids[entry.observation_id]).get(
+                    entry.observation_id)
+            finally:
+                QApplication.restoreOverrideCursor()
+        except (OSError, ValueError) as exc:
+            self.status.setText(f"Suggestions indisponibles : {exc}")
+            return None
+
+    def _prefill(self, entry) -> None:
+        """Préremplit depuis la suggestion (TRAIN/VALIDATION seulement) ; rien n'est encore une vérité."""
+        if not assistance_allowed(self._document):  # garde-fou : jamais sur TEST
+            return
+        suggestion = self._suggestion_for(entry)
+        if suggestion is None:
+            return
+        self.suggestion = suggestion
+        self._snapshot = suggestion.snapshot(sampled=list(self.sample))
+        if suggestion.player_cell is not None:
+            self.labels[suggestion.player_cell] = "PLAYER"
+        for cell, track in suggestion.enemies:
+            self.labels.setdefault(cell, track or "ENEMY")
+        for cell in self.sample:
+            if cell in suggestion.free_cells and cell not in self.labels:
+                self.labels[cell] = "EMPTY"
+        self.origin = {cell: "suggested" for cell in self.labels}
+
+    def _assist_toggled(self, checked: bool) -> None:
+        self._assist_preference = checked
+        if not self.entries:
+            return
+        entry = self.entries[self.index]
+        if self._annotation is not None and self._annotation.entities_confirmed:
+            self._update_compare()
+            return
+        if checked and not self._dirty:
+            self.labels, self.origin = {}, {}
+            self._prefill(entry)
+        elif not checked:
+            self.labels = {cell: label for cell, label in self.labels.items() if self.origin.get(cell) == "human"}
+            self.origin = {cell: "human" for cell in self.labels}
+            self.suggestion, self._snapshot = None, None
+        self._render()
+        self._update_compare()
+
+    def _current_truth(self) -> tuple[int | None, list[tuple[int, str | None]]]:
+        players = [cell for cell, label in self.labels.items() if label == "PLAYER"]
+        enemies = [(cell, None if label == "ENEMY" else label) for cell, label in self.labels.items()
+                   if label not in ("PLAYER", "EMPTY")]
+        return (players[0] if players else None), sorted(enemies)
+
+    def _reveal_prediction(self) -> None:
+        """TEST : prédiction montrée seulement après la vérité enregistrée."""
+        if not self.entries or self._annotation is None or not self._annotation.entities_confirmed:
+            return
+        entry = self.entries[self.index]
+        suggestion = self._suggestion_for(entry)
+        if suggestion is not None:
+            self.suggestion = suggestion
+            self._compare_revealed.add(entry.observation_id)
+        self._update_compare()
+
+    @staticmethod
+    def _describe(player, enemies) -> str:
+        items = [f"Joueur {player if player is not None else '—'}"]
+        items += [f"{track or 'ennemi'} {cell}" for cell, track in sorted(enemies, key=lambda item: (item[1] or "~", item[0]))]
+        return " · ".join(items)
+
+    def _update_compare(self) -> None:
+        if not self.entries:
+            return
+        entry = self.entries[self.index]
+        confirmed = self._annotation is not None and self._annotation.entities_confirmed
+        allowed = assistance_allowed(self._document)
+        blind_locked = not allowed and not confirmed
+        self.compare_button.setVisible(not allowed and confirmed and entry.observation_id not in self._compare_revealed)
+        self.accept_all_button.setEnabled(self.suggestion is not None and not confirmed)
+        if blind_locked:
+            self.compare.setText("<b>Prédiction masquée</b> (annotation aveugle). Confirmez la vérité de la "
+                                 "frame pour pouvoir la comparer au logiciel.")
+            return
+        snapshot = (self._annotation.suggestion_snapshot if confirmed and self._annotation.suggestion_snapshot
+                    else self.suggestion.snapshot() if self.suggestion is not None else None)
+        if snapshot is None:
+            self.compare.setText("Aucune suggestion pour cette frame." if allowed else
+                                 "Vérité enregistrée. « Comparer avec la prédiction » pour voir le logiciel.")
+            return
+        software = self._describe(snapshot.get("player_cell"),
+                                  [(item["cell_id"], item.get("track_id")) for item in snapshot.get("enemies", ())])
+        player, enemies = self._current_truth()
+        outcome = review(snapshot, player, enemies)
+        lines = []
+        if outcome["player"] and outcome["player"] != "confirmed":
+            lines.append(f"Joueur : {snapshot.get('player_cell')} → {player} ({STATUS_TEXT[outcome['player']]})")
+        for row in outcome["enemies"]:
+            if row["status"] == "confirmed":
+                continue
+            before = f"{row['suggested'][1] or 'ennemi'} {row['suggested'][0]}" if row["suggested"] else "—"
+            after = f"{row['final'][1] or 'ennemi'} {row['final'][0]}" if row["final"] else "—"
+            lines.append(f"{before} → {after} ({STATUS_TEXT[row['status']]})")
+        state = ("vérité humaine enregistrée" if confirmed else "non confirmée : rien n'est encore une vérité")
+        self.compare.setText(f"<b>LOGICIEL</b> : {software}<br><b>HUMAIN</b> ({state}) : "
+                             f"{self._describe(player, enemies)}<br><b>DIFF</b> : "
+                             + ("<br>".join(lines) if lines else "aucune — tout concorde ✓"))
+
+    def _update_stats(self) -> None:
+        annotations = []
+        for item in self.entries:
+            try:
+                annotations.append(self.repository.read_annotation(item))
+            except (OSError, ValueError):
+                continue
+        stats = review_statistics(annotations)
+        assisted = sum(1 for item in self.entries if assistance_allowed(self.repository.read_observation(item)))
+        p, e = stats["player"], stats["enemy"]
+        self.review_stats.setText(
+            f"<b>Revue assistée</b> (aide, pas un benchmark) — frames revues {stats['frames_reviewed']} / {assisted}"
+            f" · entièrement correctes {stats['frames_all_correct']} · corrigées {stats['frames_corrected']}<br>"
+            f"Joueur : correct direct {p['confirmed']} · corrigé {p['corrected'] + p['rejected'] + p['added']}<br>"
+            f"Ennemis : correct direct {e['confirmed']} · corrigé {e['corrected']} · manqué {e['added']} · faux {e['rejected']}")
 
     def _render(self) -> None:
         if self.image is None:
@@ -285,15 +505,22 @@ class EntityAnnotationDialog(QDialog):
                       cv2.LINE_AA)
         colors = {"PLAYER": (80, 235, 120), "EMPTY": (160, 160, 160)}
         for cell in self.cells:
-            label = self.labels.get(int(cell["cell_id"]))
+            cell_id = int(cell["cell_id"])
+            label = self.labels.get(cell_id)
             if label is None:
                 continue
-            color = colors.get(label, (60, 70, 245))
-            cv2.polylines(output, [np.asarray(cell["polygon"], np.int32)], True, color, 3, cv2.LINE_AA)
+            suggested = self.origin.get(cell_id) == "suggested"
+            color = SUGGESTED_COLOR if suggested else colors.get(label, (60, 70, 245))
+            cv2.polylines(output, [np.asarray(cell["polygon"], np.int32)], True, color, 2 if suggested else 3,
+                          cv2.LINE_AA)
             text = "P" if label == "PLAYER" else ("vide" if label == "EMPTY" else label)
             center = tuple(int(v) for v in cell["center"])
-            cv2.putText(output, f"{text} {cell['cell_id']}", (center[0] - 22, center[1] + 5),
+            cv2.putText(output, f"{'?' if suggested else ''}{text} {cell_id}", (center[0] - 22, center[1] + 5),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2, cv2.LINE_AA)
+        if self.selected_cell is not None:
+            chosen = next((c for c in self.cells if int(c["cell_id"]) == self.selected_cell), None)
+            if chosen is not None:
+                cv2.polylines(output, [np.asarray(chosen["polygon"], np.int32)], True, (255, 255, 255), 1, cv2.LINE_AA)
         by_id = {int(cell["cell_id"]): cell for cell in self.cells}
         for cell_id in self.sample:
             decision = self._sample_decision(cell_id)
@@ -309,8 +536,10 @@ class EntityAnnotationDialog(QDialog):
             self.canvas.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
         players = [cell for cell, label in self.labels.items() if label == "PLAYER"]
         enemies = sorted((label, cell) for cell, label in self.labels.items() if label not in ("PLAYER", "EMPTY"))
+        pending = sum(origin == "suggested" for origin in self.origin.values())
         self.summary.setText(
-            f"Joueur : {players[0] if players else ('non visible' if self.player_hidden.isChecked() else '—')}\n"
+            (f"{pending} suggestion(s) non confirmée(s) (violet « ? »)\n" if pending else "")
+            + f"Joueur : {players[0] if players else ('non visible' if self.player_hidden.isChecked() else '—')}\n"
             f"Ennemis : {', '.join(f'{label}@{cell}' for label, cell in enemies) or '—'}\n"
             f"Vides confirmées : {sum(label == 'EMPTY' for label in self.labels.values())}\n"
             f"Échantillon (jaune) : {sum(bool(self._sample_decision(c)) for c in self.sample)}/{len(self.sample)} décidées")
@@ -341,6 +570,7 @@ class EntityAnnotationDialog(QDialog):
         if cell is None:
             return
         cell_id = int(cell["cell_id"])
+        self.selected_cell = cell_id
         menu = QMenu(self)
         actions = {}
         if cell_id in self.sample:
@@ -362,6 +592,8 @@ class EntityAnnotationDialog(QDialog):
         self._assign(cell_id, actions[chosen])
 
     def _assign(self, cell_id: int, label: str | None) -> None:
+        self._dirty = True
+        self.origin[cell_id] = "human"
         if label is not None and label.startswith("SAMPLE_"):
             decision = label.removeprefix("SAMPLE_")
             if decision == "EMPTY":
@@ -379,6 +611,7 @@ class EntityAnnotationDialog(QDialog):
             self._invalidate_tracking()
         if label is None:
             self.labels.pop(cell_id, None)
+            self.origin.pop(cell_id, None)
         else:
             if label == "PLAYER":
                 # Exactement 0 ou 1 joueur : l'ancienne cellule joueur est libérée.
@@ -388,8 +621,11 @@ class EntityAnnotationDialog(QDialog):
                 self.labels = {cell: value for cell, value in self.labels.items() if value != label}
             self.labels[cell_id] = label
         self._render()
+        if hasattr(self, "compare"):
+            self._update_compare()
 
     def _player_visibility_changed(self, hidden: bool) -> None:
+        self._dirty = True
         if hidden:
             self.labels = {cell: value for cell, value in self.labels.items() if value != "PLAYER"}
         self._render()
@@ -403,14 +639,27 @@ class EntityAnnotationDialog(QDialog):
         if any(label in ENEMY_LABELS for label in self.labels.values()):
             self._invalidate_tracking()
         self.labels = {}
+        self.origin = {}
         self.sample_labels = {}
+        self._dirty = True
         self._render()
+        self._update_compare()
+
+    def _keep_draft(self) -> None:
+        """Modifications non confirmées conservées pendant la navigation (jamais une vérité)."""
+        if not self.entries or not self._dirty:
+            return
+        self._drafts[self.entries[self.index].observation_id] = {
+            "labels": dict(self.labels), "origin": dict(self.origin), "sample_labels": dict(self.sample_labels),
+            "snapshot": self._snapshot, "suggestion": self.suggestion,
+            "player_hidden": self.player_hidden.isChecked()}
 
     def _move(self, step: int) -> None:
         if 0 <= self.index + step < len(self.entries):
             target = self._sequence_ids[self.entries[self.index + step].observation_id]
             if target != self._current_sequence and not self._leave_sequence_ok():
                 return
+            self._keep_draft()
             self.index += step
             self._show()
 
@@ -421,6 +670,7 @@ class EntityAnnotationDialog(QDialog):
             self.sequence.setCurrentIndex(self.sequence.findData(self._current_sequence))
             self.sequence.blockSignals(False)
             return
+        self._keep_draft()
         self.index = next((i for i, e in enumerate(self.entries)
                            if self._sequence_ids[e.observation_id] == selected), self.index)
         self._show()
@@ -600,6 +850,15 @@ class EntityAnnotationDialog(QDialog):
                    if label not in ("PLAYER", "EMPTY")]
         occluded = [value.strip().upper() for value in self.occluded_tracks.text().split(",") if value.strip()]
         entry = self.entries[self.index]
+        # Provenance : suggestion d'origine figée (celle affichée, ou celle d'une revue antérieure).
+        previous = self._annotation.suggestion_snapshot if self._annotation is not None else None
+        snapshot = self._snapshot or previous
+        if snapshot is not None:
+            outcome = review(snapshot, players[0] if players else None, sorted(enemies))
+            mode = outcome["mode"]
+        else:
+            outcome = None
+            mode = "manual" if assistance_allowed(self._document) else "manual_blind"
         try:
             self.repository.confirm_entities(
                 entry.observation_id, player_cell_id=players[0] if players else None,
@@ -609,9 +868,65 @@ class EntityAnnotationDialog(QDialog):
                 tactical_mode=(None if self.tactical.checkState() == Qt.CheckState.PartiallyChecked
                                else self.tactical.checkState() == Qt.CheckState.Checked),
                 sampled_cells=[(cell, self._sample_decision(cell)) for cell in self.sample],
-                sampled_cells_version=SAMPLE_VERSION)
+                sampled_cells_version=SAMPLE_VERSION, annotation_mode=mode, suggestion_snapshot=snapshot,
+                suggestion_review=outcome, confirmed_by="user")
         except ValueError as exc:
             QMessageBox.warning(self, "Annotation invalide", str(exc))
             return
-        self.status.setText(f"{entry.observation_id} : vérité entités confirmée.")
-        self._move(1)
+        self._drafts.pop(entry.observation_id, None)
+        self._dirty = False
+        verdict = {"assisted_confirmed": "suggestions acceptées telles quelles ✓",
+                   "assisted_corrected": "suggestions corrigées ✎"}.get(mode, "saisie manuelle")
+        self.status.setText(f"{entry.observation_id} : vérité entités confirmée ({verdict}).")
+        if self.index + 1 < len(self.entries):
+            self._move(1)
+        else:
+            self._show()
+
+    def _ask_remaining_empty(self, count: int) -> bool:
+        """Isolé pour les tests : confirmation humaine que les cases jaunes restantes sont vides."""
+        answer = QMessageBox.question(
+            self, "Cases jaunes", f"Les {count} case(s) jaunes non décidées sont-elles toutes VIDES ?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes)
+        return answer == QMessageBox.StandardButton.Yes
+
+    def _mark_remaining_empty(self) -> None:
+        for cell in self.sample:
+            if not self._sample_decision(cell):
+                self._assign(cell, "EMPTY")
+
+    def _accept_all(self) -> None:
+        """« Tout est correct » : les suggestions affichées deviennent la vérité humaine de la frame."""
+        if not self.entries or self.suggestion is None or (self._annotation is not None
+                                                           and self._annotation.entities_confirmed):
+            return
+        undecided = [cell for cell in self.sample if not self._sample_decision(cell)]
+        if undecided:
+            if not self._ask_remaining_empty(len(undecided)):
+                self.status.setText("Décidez les cases jaunes restantes, puis validez.")
+                return
+            self._mark_remaining_empty()
+        self._save()
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802 - API Qt
+        key = event.key()
+        if isinstance(self.focusWidget(), QLineEdit) and key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            return super().keyPressEvent(event)
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            (self._accept_all if self.accept_all_button.isEnabled() else self._save)()
+        elif key == Qt.Key.Key_Left:
+            self._move(-1)
+        elif key == Qt.Key.Key_Right:
+            self._move(1)
+        elif key == Qt.Key.Key_Delete and self.selected_cell is not None:
+            self._assign(self.selected_cell, None)
+        elif Qt.Key.Key_1 <= key <= Qt.Key.Key_8 and self.selected_cell is not None:
+            self._assign(self.selected_cell, f"E{key - Qt.Key.Key_0}")
+        elif key == Qt.Key.Key_P and self.selected_cell is not None:
+            self._assign(self.selected_cell, "PLAYER")
+        elif key == Qt.Key.Key_V:
+            self._mark_remaining_empty()
+        else:
+            super().keyPressEvent(event)
+            return
+        self._update_compare()

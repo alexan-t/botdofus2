@@ -24,7 +24,10 @@ ENTITY_FRAME_PHASES = {"placement", "debut_combat", "mon_tour", "tour_ennemi", "
 ENTITY_FIELDS = ("entity_annotation_source", "entity_confirmed_at", "player_cell_id_truth", "player_visibility",
                  "enemy_cells_truth", "enemy_occluded_tracks", "empty_confirmed_cells", "frame_phase",
                  "occlusion", "tactical_mode", "tracking_identity_confirmed", "tracking_identity_source", "tracking_confirmed_at", "tracking_sequence_id",
-                 "sampled_cells_truth", "sampled_cells_version")
+                 "sampled_cells_truth", "sampled_cells_version", "annotation_mode", "suggestion_snapshot",
+                 "suggestion_review", "entity_confirmed_by")
+# LOT 3B-5E : provenance de la vérité entités. Une suggestion n'est jamais une vérité.
+ANNOTATION_MODES = {"manual_blind", "manual", "assisted_confirmed", "assisted_corrected"}
 # LOT 3B-5D : décision humaine sur une cellule tirée indépendamment des prédictions.
 SAMPLED_CELL_LABELS = {"EMPTY", "OCCUPIED", "UNKNOWN"}
 
@@ -137,6 +140,11 @@ class Annotation:
     # LOT 3B-5D : {"cell_id": int, "label": EMPTY | OCCUPIED | UNKNOWN}, échantillon versionné.
     sampled_cells_truth: tuple[dict[str, object], ...] = ()
     sampled_cells_version: str | None = None
+    # LOT 3B-5E : mode d'annotation, suggestion logicielle figée AVANT correction, bilan de revue.
+    annotation_mode: str | None = None
+    suggestion_snapshot: dict[str, object] | None = None
+    suggestion_review: dict[str, object] | None = None
+    entity_confirmed_by: str | None = None
     schema_version: int = SCHEMA_VERSION
 
     @property
@@ -187,6 +195,10 @@ class Annotation:
             raise ValueError("Joueur VISIBLE : exactement une cellule joueur est requise")
         if self.entities_confirmed and self.player_visibility is None:
             raise ValueError("Une vérité entités exige player_visibility")
+        if self.annotation_mode is not None and self.annotation_mode not in ANNOTATION_MODES:
+            raise ValueError(f"annotation_mode non reconnu : {self.annotation_mode}")
+        if self.annotation_mode in ("assisted_confirmed", "assisted_corrected") and not self.suggestion_snapshot:
+            raise ValueError("Une annotation assistée exige l'instantané de la suggestion d'origine")
         sampled = [item.get("cell_id") for item in self.sampled_cells_truth]
         if self.sampled_cells_truth and not self.sampled_cells_version:
             raise ValueError("Un échantillon de cellules exige sa version")
@@ -277,6 +289,10 @@ class Annotation:
             "tracking_confirmed_at": self.tracking_confirmed_at,
             "tracking_sequence_id": self.tracking_sequence_id,
             "sampled_cells_version": self.sampled_cells_version,
+            "annotation_mode": self.annotation_mode,
+            "suggestion_snapshot": self.suggestion_snapshot,
+            "suggestion_review": self.suggestion_review,
+            "entity_confirmed_by": self.entity_confirmed_by,
         }
         result.update({key: value for key, value in scalar_values.items() if value is not None})
         if self.truth_history:
@@ -362,6 +378,10 @@ class Annotation:
             sampled_cells_truth=tuple({"cell_id": int(item["cell_id"]), "label": str(item.get("label"))}
                                       for item in raw.get("sampled_cells_truth", ()) if isinstance(item, dict)),
             sampled_cells_version=raw.get("sampled_cells_version"),
+            annotation_mode=raw.get("annotation_mode"),
+            suggestion_snapshot=raw.get("suggestion_snapshot") if isinstance(raw.get("suggestion_snapshot"), dict) else None,
+            suggestion_review=raw.get("suggestion_review") if isinstance(raw.get("suggestion_review"), dict) else None,
+            entity_confirmed_by=raw.get("entity_confirmed_by"),
             schema_version=int(raw.get("schema_version", SCHEMA_VERSION)),
         )
         item.validate()

@@ -396,7 +396,9 @@ class CorpusRepository:
                          occlusion: bool | None = None, tactical_mode: bool | None = None,
                          confirmed_at: str | None = None, tracking_identity_source: str | None = None,
                          sampled_cells: list[tuple[int, str]] | None = None,
-                         sampled_cells_version: str | None = None) -> Annotation:
+                         sampled_cells_version: str | None = None, annotation_mode: str | None = None,
+                         suggestion_snapshot: dict | None = None, suggestion_review: dict | None = None,
+                         confirmed_by: str = "user") -> Annotation:
         """Enregistre une vérité entités humaine ; les champs HUD et grille restent intacts.
 
         ``sampled_cells`` (LOT 3B-5D) : décisions EMPTY/OCCUPIED/UNKNOWN sur l'échantillon
@@ -415,6 +417,8 @@ class CorpusRepository:
             tracking_identity_confirmed=bool(tracking_identity_source) or previous.tracking_identity_confirmed,
             tracking_identity_source=tracking_identity_source or previous.tracking_identity_source,
             session_id=previous.session_id or entry.session_id,
+            annotation_mode=annotation_mode, suggestion_snapshot=suggestion_snapshot,
+            suggestion_review=suggestion_review, entity_confirmed_by=confirmed_by,
         )
         if sampled_cells is not None:
             annotation = replace(
