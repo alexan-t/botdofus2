@@ -283,6 +283,14 @@ class CellEntityDetector:
                        and features["lower_sectors"][index] >= config.min_lower_sectors
                        and structured and visibility[index] > 0.5)
             partial_teams = [name for name, values in partial.items() if values["fires"][index]]
+            if len(partial_teams) == 2 and hue is not None and teams is not None:
+                # 3B-5E : les deux anneaux partiels se déclenchent (corps brun/rouge sur un anneau bleu).
+                # Arbitrage par la teinte propre du trait de l'anneau, preuve indépendante : l'équipe
+                # dont la classe correspond seule l'emporte ; sinon contradiction (aucune entité).
+                matching = [name for name in partial_teams
+                            if (enemy_team if name == "enemy" else teams.player_team).matches(hue)]
+                if len(matching) == 1:
+                    partial_teams = matching
             if present:
                 candidates.append({"index": index, "cell_id": cell_id, "score": float(marker[index]),
                                    "hue": hue, "stats": stats, "state": "FULL_RING"})

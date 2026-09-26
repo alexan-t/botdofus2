@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 import pytest
 
-from entity_fixtures import BLUE, RED, draw_entity, draw_ring, draw_sprite, ground, region, synthetic_grid
+from entity_fixtures import BLUE, RED, draw_entity, draw_ring, draw_ring_arc, draw_sprite, ground, region, synthetic_grid
 from combatbot.gamedata.topology import neighbors
 from combatbot.vision.background_model import BackgroundConfig, CellBackgroundModel
 from combatbot.vision.entity_detector import CellEntityDetector, DetectionContext
@@ -284,3 +284,28 @@ def test_flat_blue_overlay_does_not_create_enemy(scene) -> None:
     cv2.fillPoly(image, [np.asarray(cell.polygon, np.int32)], BLUE)
     result = detect(image, grid)
     assert all(item.kind is not EntityKind.ENEMY for item in result.entities)
+
+
+def test_double_partial_ring_is_arbitrated_by_ring_hue(scene, monkeypatch) -> None:
+    """Corps brun/rouge sur un anneau bleu : les deux anneaux partiels se déclenchent ; la teinte propre
+    du trait (bleue) tranche pour ENNEMI. Sans arbitrage possible, aucune entité (contradiction)."""
+    from combatbot.vision import entity_detector as module
+    grid, image = scene
+    cell = next(c for c in grid.cells if c.cell_id == CENTER)
+    draw_sprite(image, cell, (40, 60, 150))
+    draw_ring_arc(image, cell, BLUE, 0.3, 1.3, thickness=1)
+    both = lambda hsv, maps, team, config: {"fires": np.ones(maps.size, bool), "count": np.full(maps.size, 3),
+                                            "contrast": np.full(maps.size, 0.1), "fill": np.zeros(maps.size),
+                                            "outside": np.zeros(maps.size)}
+    monkeypatch.setattr(module, "partial_ring_features", both)
+    partial = lambda team: MarkerColorClass(team.hue, team.hue_tolerance, 0, 0, 3, 5.0, True)
+    teams = TeamMarkerProfile(partial(TEAMS.player_team), partial(TEAMS.enemy_team), layout_signature="layout-a")
+    result = detect(image, grid, VisualProfiles(None, teams))
+    kinds = {item.cell_id: item.kind for item in result.entities}
+    assert kinds.get(CENTER) is EntityKind.ENEMY
+    # Teinte d'anneau étrangère aux deux équipes : contradiction, rien n'est affirmé.
+    grey = ground(image.shape[:2])
+    draw_sprite(grey, cell, (40, 60, 150))
+    draw_ring_arc(grey, cell, (0, 200, 200), 0.3, 1.3, thickness=1)
+    result = detect(grey, grid, VisualProfiles(None, teams))
+    assert all(item.kind is not EntityKind.ENEMY for item in result.entities if item.cell_id == CENTER)
