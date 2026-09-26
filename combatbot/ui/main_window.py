@@ -837,6 +837,23 @@ class MainWindow(QMainWindow):
         if evidence is not None and evidence.status != "confirmée":
             QMessageBox.warning(self, "Vision réelle", "La zone de combat doit être confirmée dans la calibration.")
             return
+        if self.combat.sequence_capture.isChecked():
+            # Collecte 3B-5D : prévenir tout de suite plutôt que n'enregistrer aucune frame en silence.
+            if self._load_grid_profile(profile_id) is None:
+                QMessageBox.warning(
+                    self, "Enregistrement de la séquence",
+                    "La grille n'est pas encore calibrée pour cet écran : aucune frame ne pourrait être "
+                    "enregistrée.\n\n1. Déclarez la map (/mapid dans DOFUS, puis « Charger »).\n"
+                    "2. Cliquez « Calibrer projection de grille » et validez.\n3. Redémarrez l'observation.")
+                return
+            if self.combat.sequence_split.currentData() is None:
+                QMessageBox.warning(self, "Enregistrement de la séquence",
+                                    "Choisissez le split de ce combat (TRAIN, VALIDATION ou TEST) avant de démarrer.")
+                return
+        self._sequence_count = 0
+        self.combat.recording_status = (
+            ("warn", "Enregistrement : en attente de la première frame utile") if self.combat.sequence_capture.isChecked()
+            else None)
         legacy_grid = self._load_grid_calibration(profile_id)
         resolver = GameDataGridResolver(
             profile=self._load_grid_profile(profile_id), topology_source=self._topology_source,
@@ -911,6 +928,7 @@ class MainWindow(QMainWindow):
         if packet.observation.grid.grid_source != "GAMEDATA_PROJECTED":
             self.combat.observation_help.setText(
                 "Séquence non enregistrée : déclarez la map et calibrez la projection (grille GameData).")
+            self.combat.recording_status = ("todo", "Enregistrement bloqué : grille GameData absente sur cette image.")
             return
         image = np.asarray(packet.original)
         small = cv2.resize(image, None, fx=0.125, fy=0.125, interpolation=cv2.INTER_AREA).astype(np.int16)
@@ -925,6 +943,10 @@ class MainWindow(QMainWindow):
         except (OSError, ValueError) as exc:
             self.combat.observation_help.setText(f"Séquence : enregistrement impossible ({exc})")
             return
+        self._sequence_count = getattr(self, "_sequence_count", 0) + 1
+        self.combat.recording_status = (
+            "ok", f"Enregistrement {self.combat.sequence_split.currentText().split(': ')[-1]} : "
+                  f"{self._sequence_count} frame(s) dans ce combat")
         self.combat.observation_help.setText(
             f"Séquence : {entry.session_id} frame {entry.frame_index} ajoutée au corpus (à annoter).")
 

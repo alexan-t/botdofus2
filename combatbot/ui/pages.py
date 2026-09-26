@@ -45,6 +45,55 @@ def card() -> tuple[QFrame, QVBoxLayout]:
     return frame, layout
 
 
+GRID_REASONS = {
+    "NO_GAMEDATA_PROFILE": "Grille non calibrée : cliquez « Calibrer projection de grille » (une fois par écran).",
+    "NO_MAP_ID_DECLARED": "Map non déclarée : tapez /mapid dans DOFUS, saisissez l'ID puis « Charger ».",
+    "NO_TOPOLOGY_SOURCE": "Données du client non chargées : Paramètres → Données du client.",
+}
+
+
+def _hud_reading(evidence: dict | None) -> tuple[int | None, float | None, str]:
+    evidence = evidence or {}
+    raw = evidence.get("raw_candidates") or {}
+    return raw.get("rapidocr_value"), raw.get("rapidocr_confidence"), str(evidence.get("reason", ""))
+
+
+def collection_checklist(metadata: dict, observation, recording: tuple[str, str] | None = None) -> list[tuple[str, str]]:
+    """Liste lisible (état, texte) : ok | warn | todo. Aucune valeur n'est inventée ni validée ici."""
+    items: list[tuple[str, str]] = []
+    if metadata.get("grid_source") == "GAMEDATA_PROJECTED":
+        items.append(("ok", f"Grille GameData projetée — map {metadata.get('map_id_declared')}"))
+    else:
+        reason = str(metadata.get("grid_source_reason") or "")
+        items.append(("todo", GRID_REASONS.get(reason, f"Grille GameData indisponible ({reason or 'inconnu'}).")))
+    hud = []
+    for label, value, evidence in (("PA", observation.ap, observation.ap_read), ("PM", observation.mp, observation.mp_read)):
+        if value is not None:
+            continue
+        ocr, confidence, reason = _hud_reading(evidence)
+        if reason == "NO_TEMPLATE":
+            hint = f"l'OCR propose {ocr} ({confidence:.0%}), non validé" if ocr is not None else "illisible"
+            hud.append(f"{label} : {hint}")
+        else:
+            hud.append(f"{label} : {reason or 'illisible'}")
+    if hud:
+        items.append(("warn", "PA/PM pas encore appris sur ce PC (" + " · ".join(hud) + "). "
+                              "Normal : ils s'apprennent avec la revue HUD."))
+    else:
+        items.append(("ok", f"PA {observation.ap} · PM {observation.mp}"))
+    pipeline = (metadata.get("entities") or {}).get("pipeline")
+    if pipeline != "CELL_ENTITY_DETECTOR":
+        items.append(("todo", "Joueur/ennemis : il faut d'abord la grille GameData."))
+    elif observation.player_cell_id is None:
+        items.append(("warn", "Joueur/ennemis pas encore appris pour cet écran : normal pendant la collecte TRAIN "
+                              "(vous les annoterez ensuite)."))
+    else:
+        items.append(("ok", f"Joueur en cellule {observation.player_cell_id}"))
+    if recording is not None:
+        items.append(recording)
+    return items
+
+
 class DashboardPage(QWidget):
     start_clicked = Signal()
     pause_clicked = Signal()
@@ -305,6 +354,14 @@ class CombatPage(QWidget):
         )
         self.observation_help.setWordWrap(True)
         real_layout.addWidget(self.observation_help)
+        # Pourquoi « Inconnu » ? Une ligne par condition, avec l'action à faire.
+        self.recording_status: tuple[str, str] | None = None
+        self.checklist = QLabel()
+        self.checklist.setWordWrap(True)
+        self.checklist.setTextFormat(Qt.TextFormat.RichText)
+        self.checklist.setStyleSheet("background:#172234; border:1px solid #2e3d52; border-radius:10px; padding:8px 12px;")
+        self.checklist.setVisible(False)
+        real_layout.addWidget(self.checklist)
         real_content = QHBoxLayout()
         preview_frame, preview_box = card()
         self.observation_preview = ObservationPreview()
@@ -447,6 +504,9 @@ class CombatPage(QWidget):
                           str(evidence.get("source")), str(evidence.get("source", "Inconnu")))
             reason = str(evidence.get("reason", ""))
             margin = float(evidence.get("margin", 0.0))
+            ocr, ocr_confidence, _reason = _hud_reading(evidence)
+            if value is None and reason == "NO_TEMPLATE" and ocr is not None:
+                return f"Inconnu — l'OCR propose {ocr} ({ocr_confidence:.0%}), non validé"
             return f"{unknown(value)} ({confidence:.0%}) · {source} · marge {margin:.3f} · {reason}"
 
         self.real_values["ap"].setText(hud_text(observation.ap, observation.confidence_ap,
@@ -514,6 +574,14 @@ class CombatPage(QWidget):
         self.observation_help.setText(
             "Observation active en lecture seule. Les données insuffisantes restent inconnues."
         )
+        self.show_checklist(collection_checklist(packet.metadata, observation, self.recording_status))
+
+    def show_checklist(self, items: list[tuple[str, str]]) -> None:
+        icons = {"ok": ("✓", "#7ee8cf"), "warn": ("!", "#f5cf7a"), "todo": ("✗", "#f59aa5")}
+        rows = [f"<span style='color:{icons[state][1]}; font-weight:700'>{icons[state][0]}</span>&nbsp; {text}"
+                for state, text in items]
+        self.checklist.setText("<br>".join(rows))
+        self.checklist.setVisible(bool(rows))
 
     def set_snapshot(self, snap: CombatSnapshot) -> None:
         self.grid.set_snapshot(snap)

@@ -131,3 +131,24 @@ def test_resize_handle_stays_small_on_small_zones() -> None:
     item = ResizableRectItem("PA", "#8eaaf0", QRectF(0, 0, 60, 45))
     handle = item._handle_rect()
     assert handle.width() <= 15 and handle.center() == item.rect().bottomRight()
+
+
+def test_observation_checklist_explains_unknown_values() -> None:
+    from types import SimpleNamespace
+    from combatbot.ui.pages import collection_checklist
+    # Cas réel du 26/09 : pas de grille GameData, lecteur PA/PM sans gabarit, OCR 15/6 sous le seuil.
+    read = lambda value, confidence: {"reason": "NO_TEMPLATE", "source": "UNKNOWN",
+                                      "raw_candidates": {"rapidocr_value": value, "rapidocr_confidence": confidence}}
+    observation = SimpleNamespace(ap=None, mp=None, ap_read=read(15, 0.737), mp_read=read(6, 0.788),
+                                  player_cell_id=None)
+    metadata = {"grid_source": "VISION_DETECTED", "grid_source_reason": "NO_GAMEDATA_PROFILE",
+                "entities": {"pipeline": "LEGACY_CLASSIFY"}}
+    items = collection_checklist(metadata, observation)
+    assert items[0][0] == "todo" and "Calibrer projection de grille" in items[0][1]
+    assert items[1][0] == "warn" and "propose 15 (74%)" in items[1][1] and "propose 6 (79%)" in items[1][1]
+    assert items[2][0] == "todo"
+    ready = collection_checklist({"grid_source": "GAMEDATA_PROJECTED", "map_id_declared": 191102978,
+                                  "entities": {"pipeline": "CELL_ENTITY_DETECTOR"}}, observation,
+                                 ("ok", "Enregistrement TRAIN : 3 frame(s)"))
+    assert ready[0] == ("ok", "Grille GameData projetée — map 191102978")
+    assert ready[2][0] == "warn" and "TRAIN" in ready[2][1] and ready[3][0] == "ok"
