@@ -1518,3 +1518,103 @@ GRID REGRESSION: NONE
 HUD REGRESSION: NONE
 ACTIONS: NONE
 ```
+
+## 17. 3B-5E — annotation assistée et fiabilisation des entités
+
+Branche `lot-3b-5e-entity-perception-hardening`, depuis `d15a033`, 26–27/09/2026. Version
+**0.4.3**. Aucune action DOFUS. Mode d'affichage à partir de VALIDATION : **mode créature**.
+
+### 17.1 Annotation assistée (`dee0b0f`, `eb6559e`)
+
+- TRAIN/VALIDATION : chaque frame est préremplie par le logiciel (détecteur + suivi + fond rejoués
+  sur la séquence avec les profils runtime), tracé violet « ? ». Rien n'est une vérité avant
+  « ✓ Tout est correct » (Entrée) ou « Confirmer cette frame ». La suggestion d'origine est figée
+  avec la vérité (`suggestion_snapshot`), avec `annotation_mode` (manual_blind / manual /
+  assisted_confirmed / assisted_corrected), un bilan élément par élément (`suggestion_review` :
+  confirmé / corrigé / rejeté / ajouté) et `entity_confirmed_by`.
+- TEST et split non déclaré : **aveugle**. Aucune prédiction calculée ni affichée avant la vérité ;
+  la case d'assistance est grisée ; « Comparer avec la prédiction » seulement après confirmation.
+- Panneau LOGICIEL / HUMAIN / DIFF, statistiques de revue, brouillons conservés pendant la
+  navigation, raccourcis (Entrée, ←/→, Suppr, 1…8, P, V), cases jaunes « VIDE » proposées quand le
+  fond est prouvé libre. Liste des combats : à terminer en tête (plus récent d'abord), ouverture sur
+  la première frame non annotée. Ergonomie validée par l'utilisateur (« UI OK »).
+- Revue assistée (aide, pas un benchmark) : 65 frames revues (48 TRAIN, 17 VALIDATION), 10
+  acceptées telles quelles ; joueur 38 suggestions justes, 0 corrigée, 0 rejetée, 27 manquées ;
+  ennemis 76 justes, 52 corrigées (surtout numéros E1/E2), **0 rejetée (aucune fausse)**, 67
+  manquées (dont 53 sur les Gelées).
+- Tests : `tests/test_assisted_annotation.py` (dont les dix tests exigés §39).
+
+### 17.2 Corpus
+
+TRAIN : 6 combats, 74 frames, 248 vérités ennemies (dont un combat de Gelées, anneaux entièrement
+masqués). VALIDATION : 3 combats, 44 frames, 127 vérités ennemies, 373 vérités EMPTY (dont les deux
+combats VALIDATION de 3B-5D, non utilisés pour les réglages 3B-5E ; un seul en mode créature).
+**Inférieur aux 100 frames VALIDATION demandées.** Aucun TEST 3B-5E collecté.
+
+### 17.3 Fiabilisation (réglée sur TRAIN, validation croisée « un combat laissé de côté »)
+
+Outil `combatbot/corpus/entity_crossval.py` : chaque combat TRAIN mesuré avec des profils appris
+sur les autres. Changements :
+
+- `7c595e7` — FREE : une cellule dont le centre montre un sprite (écart-type ≥ 8 ; 98–100 % des
+  vérités joueur/ennemi, ~0 sur les cases vides) n'est jamais FREE ni apprise comme sol (un ennemi
+  immobile à anneau caché était devenu FREE). Couleur d'équipe robuste : teintes d'anneau
+  aberrantes (corps coloré) écartées (± 50° → ± 8°).
+- `d5d74a5` — joueur : le suivi ne bloque plus un déplacement choisi par profil ; consensus avec la
+  dernière cellule confirmée (tolérance ×1,5 sur place, UNKNOWN en cas de saut contradictoire).
+  Suivi : état **AMBIGUOUS** (position affirmée, pas de E1/E2) si un autre appariement global coûte
+  < 0,2 de plus. Capture : toute modification locale de la zone de combat est gardée (≥ 0,2 % des
+  pixels, ≥ 0,4 s) au lieu d'une moyenne d'écran qui écartait les déplacements (écarts de 2 s en
+  médiane, jusqu'à 12 s).
+- `23ede9f` — double anneau partiel (corps brun/rouge sur anneau bleu, trouvé en VALIDATION) :
+  arbitré par la teinte propre du trait ; sinon abstention.
+- Mesuré puis non retenu : mémoire d'identité longue (ennemis morts → réassociations fausses),
+  refus pur des associations ambiguës, HELD (reste désactivé depuis §16.15).
+
+| Validation croisée TRAIN (74 frames) | Début 3B-5E | Fin 3B-5E |
+|---|---|---|
+| Joueur | 50/74, 1 faux | 64/74, **0 faux** |
+| Ennemis | 114/248, 0 faux | 172/248, **0 faux** (0,88 hors Gelées) |
+| Erreurs d'identité / réassociations fausses | 26 / 12 | 13 / 3 |
+| Faux FREE sur entité | 1 | **0** |
+
+### 17.4 VALIDATION (profils TRAIN, code `23ede9f`)
+
+| VALIDATION (3 combats, 44 frames) | Mesure | Cible 3B-5E |
+|---|---|---|
+| Joueur | 39 correct / **0 faux** / 5 inconnu ; couverture 0,886 | précision 1 ✓ ; couverture ≥ 0,95 ✗ |
+| Ennemis | 106/127 exacts, **0 faux** ; précision 1,000 ; rappel 0,835 ; MAE 0,48 | ≥ 0,995 ✓ ; ≥ 0,95 ✗ |
+| Suivi | 71/127 ; switches 12,7 % ; réassociations fausses 5,6 % ; fragmentations 13 | ≤ 2 % ✗ ; ≤ 1 % ✗ |
+| FREE | 140 correct / **0 faux** / 0 sur entité ; 373 EMPTY ; précision 1,000 ; couverture 0,375 | ✓ |
+
+Performance VALIDATION : `detector_ms` médiane 132, P95 295 (cible indicative 250) ; `tracker_ms`
+< 1 ; `observer_ms` médiane 471, P95 2127. Le benchmark rejoue seulement les frames enregistrées :
+le suivi y est plus pessimiste qu'en observation continue (constat de l'utilisateur en Vision
+réelle : les ennemis sont suivis, sauf pendant les déplacements).
+
+### 17.5 Décision et limites
+
+Décision de l'utilisateur (27/09/2026) : **ne pas poursuivre la fiabilisation maintenant** ;
+avancer vers le combat et réajuster la perception en situation. Critère de suivi proposé pour une
+future validation : réassociations fausses ≤ 1 % (bloquant), changements de numéro / « E? »
+mesurés mais non bloquants.
+
+Pas de gel, pas de TEST 3B-5E : aucune métrique de ce lot n'est une mesure indépendante finale.
+Limites : ennemis à anneau entièrement masqué (Gelées) non reconnus (cellule UNKNOWN, jamais FREE) ;
+rappel ennemis 0,84 ; couverture joueur 0,89 ; confusions d'identité entre créatures identiques ;
+résultats valables pour le mode créature et le layout `b2b36fdf07e78000` ; PA/PM non lus sur ce PC
+(pas de gabarits HUD locaux).
+
+```text
+IMPLEMENTATION: PASS
+ASSISTED ANNOTATION: PASS
+BLIND TEST PROTECTION: PASS
+PLAYER DETECTION: PARTIAL (VALIDATION : 0 erreur acceptée, couverture 0,886)
+ENEMY DETECTION: PARTIAL (VALIDATION : précision 1,000, rappel 0,835)
+GLOBAL TRACKING: PARTIAL (réassociations fausses 5,6 %)
+CELL OCCUPANCY: PASS (VALIDATION : 373 EMPTY, 0 faux FREE)
+OCCLUSION: NOT OBSERVED
+GRID REGRESSION: NONE (tests et smoke ; grille alignée sur tout le corpus local)
+HUD REGRESSION: NONE (tests et smoke)
+ACTIONS: NONE
+```
