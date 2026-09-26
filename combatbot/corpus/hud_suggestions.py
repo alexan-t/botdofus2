@@ -76,7 +76,10 @@ class HUDSuggestionProvider:
 
 def build_local_templates(repository: CorpusRepository, data_root: Path) -> dict[str, object]:
     """Gabarits depuis les vérités HUMAINES du split TRAIN uniquement ; ancien jeu sauvegardé."""
-    from combatbot.corpus.hud_dataset import build_templates, inventory
+    from combatbot.corpus.hud_dataset import build_templates, inventory, register_splits
+    # Les splits provisoires (collecte HUD sans split déclaré) sont figés avant d'apprendre :
+    # un groupe appris en TRAIN ne pourra plus devenir TEST plus tard.
+    registered = register_splits(repository, inventory(repository, require_human=True))
     samples = inventory(repository, require_human=True)
     train = [s for s in samples if s.split == "train" and s.truth is not None]
     library, issues = build_templates(repository, tuple(train))
@@ -86,7 +89,12 @@ def build_local_templates(repository: CorpusRepository, data_root: Path) -> dict
         return {"installed": False, "reason": "Aucune vérité PA/PM humaine TRAIN exploitable", "issues": issues,
                 "train_samples": len(train)}
     if target.exists():
-        backup = data_root / "backup" / f"hud-templates-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+        backup = data_root / "backup" / f"hud-templates-{stamp}"
+        suffix = 1
+        while backup.exists():                         # deux constructions dans la même seconde
+            suffix += 1
+            backup = data_root / "backup" / f"hud-templates-{stamp}-{suffix}"
         backup.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(target, backup)
         shutil.rmtree(target)
@@ -95,7 +103,8 @@ def build_local_templates(repository: CorpusRepository, data_root: Path) -> dict
               for kind in ("AP", "MP")}
     provenance = {"schema_version": 1, "built_at": datetime.now().astimezone().isoformat(timespec="seconds"),
                   "training_split": "train", "truth_source": "human_confirmed",
-                  "train_samples": len(train),
+                  "train_samples": len(train), "train_groups": sorted({s.group_id for s in train}),
+                  "splits_registered_now": registered,
                   "layouts": dict(Counter(s.layout_signature[:24] if s.layout_signature else "?" for s in train)),
                   "digits": counts, "issues": issues[:50], "backup": str(backup) if backup else None}
     (target / "provenance.json").write_text(json.dumps(provenance, ensure_ascii=False, indent=2), encoding="utf-8")

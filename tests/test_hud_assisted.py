@@ -144,3 +144,22 @@ def test_hud_test_split_is_blind(repository: CorpusRepository, tmp_path: Path) -
     assert dialog.ap.value.value() == -1 and "Suggestion" not in dialog.ap.recorded.text()
     assert "aveugle" in dialog.header.text()
     dialog.close()
+
+
+def test_hud_trained_groups_never_drift_to_test(repository: CorpusRepository, tmp_path: Path) -> None:
+    """Collecte HUD sans split déclaré : un groupe appris en TRAIN reste TRAIN après de nouvelles vérités."""
+    def confirm(entries):
+        for entry, (ap, mp) in entries:
+            repository.confirm_hud_truth(entry.observation_id, ap=ap, mp=mp)
+
+    first = [("15", "5"), ("2", "0"), ("14", "6"), ("11", "5")]
+    confirm(zip(_capture(repository, "collect-a", first, None), [(int(a), int(m)) for a, m in first]))
+    summary = build_local_templates(repository, tmp_path / "data")
+    trained = set(summary["train_groups"])
+    assert trained
+    for round_index in range(3):                      # nouvelles annotations qui rebattent la stratification
+        more = [("10", "6"), ("14", "1"), ("0", "2")]
+        confirm(zip(_capture(repository, f"collect-{round_index}", more, None), [(int(a), int(m)) for a, m in more]))
+        splits = {s.group_id: s.split for s in inventory(repository)}
+        assert all(splits[group] == "train" for group in trained)
+        build_local_templates(repository, tmp_path / "data")

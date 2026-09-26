@@ -371,6 +371,29 @@ def build_split_registry(repository: CorpusRepository, *, require_human: bool = 
     return result
 
 
+def register_splits(repository: CorpusRepository, samples) -> dict[str, HUDSplit]:
+    """LOT 3B-6A : fige dans le registre le split des groupes étiquetés encore provisoires.
+
+    Appelé avant d'apprendre des gabarits : un groupe (capture de collecte sans split déclaré)
+    qui a servi en TRAIN ne peut plus glisser vers TEST quand de nouvelles annotations
+    rebattent la stratification. Un groupe déjà enregistré n'est jamais déplacé.
+    """
+    registry = ensure_split_registry(repository)
+    added: dict[str, HUDSplit] = {}
+    for sample in samples:
+        if sample.split_registered or sample.truth is None or sample.group_id in registry["groups"]:
+            continue
+        registry["groups"][sample.group_id] = sample.split
+        added[sample.group_id] = sample.split
+    if added:
+        registry["frozen_test"] = sorted(set(registry["frozen_test"])
+                                         | {group for group, split in added.items() if split == "test"})
+        registry["registered_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+        (repository.manifests / SPLIT_REGISTRY).write_text(
+            json.dumps(registry, ensure_ascii=False, indent=2), encoding="utf-8")
+    return added
+
+
 def inventory(repository: CorpusRepository, *, require_human: bool = True) -> tuple[HUDSample, ...]:
     """Crops PA/PM avec vérité humaine confirmée seulement (``require_human``).
 
