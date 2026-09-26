@@ -27,8 +27,9 @@ def tracking_metrics(frames: list[dict], *, greedy: bool = False) -> dict:
                            "observed_this_frame": True} for k, v in frame["greedy_tracks"].items()]
             else:
                 tracks = [t for t in frame["tracked_entities"] if t["kind"] == "ENEMY"]
+            # Positions affirmées : observées, ou maintenues (HELD, LOT 3B-5D).
             cell_ids = {t["cell_id"]: t["track_id"] for t in tracks
-                        if t["state"] == "OBSERVED" and t["observed_this_frame"]}
+                        if (t["state"] == "OBSERVED" and t["observed_this_frame"]) or t["state"] == "HELD"}
             current_states = {t["track_id"]: t["state"] for t in tracks}
             for track, state in current_states.items():
                 lost += int(state == "LOST" and last_states.get(track) != "LOST")

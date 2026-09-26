@@ -343,16 +343,19 @@ class RealCombatObserver:
         tracker_ms = (time.perf_counter() - started) * 1000
         by_id = {cell.cell_id: cell for cell in grid.cells if cell.cell_id is not None}
         confidence_by_cell = {item.cell_id: item.confidence for item in detection.entities}
+        # Une entité maintenue (HELD) occupe sa cellule : jamais FREE.
+        occupancy = {**detection.occupancy, **{item.claimed_cell: "OCCUPIED" for item in tracked
+                                              if item.state is TrackState.HELD}}
         cells = tuple(
-            _replace(cell, state=CellVisualState(detection.occupancy.get(cell.cell_id, "UNKNOWN")),
+            _replace(cell, state=CellVisualState(occupancy.get(cell.cell_id, "UNKNOWN")),
                      confidence=confidence_by_cell.get(cell.cell_id, 0.0))
             for cell in grid.cells)
         grid = _replace(grid, cells=cells)
         player_cell = player_cell_id = None
         player_confidence = 0.0
         player_track = next((item for item in tracked if item.kind is EntityKind.PLAYER), None)
-        if player_track is not None and player_track.observed_this_frame and player_track.cell_id in by_id:
-            player_cell_id = player_track.cell_id
+        if player_track is not None and player_track.claimed_cell in by_id:
+            player_cell_id = player_track.claimed_cell
             player_cell = by_id[player_cell_id].logical
             player_confidence = player_track.confidence
         enemies = []

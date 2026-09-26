@@ -19,6 +19,9 @@ class EntityKind(str, Enum):
 
 class TrackState(str, Enum):
     OBSERVED = "OBSERVED"
+    # LOT 3B-5D : marqueur invisible mais un sprite occupe toujours la dernière cellule observée
+    # (animation de sort, portée bleue, bulle) : la position est maintenue, non observée.
+    HELD = "HELD"
     OCCLUDED = "OCCLUDED"
     LOST = "LOST"
 
@@ -99,7 +102,9 @@ class EntityDetectionResult:
 @dataclass(frozen=True)
 class TrackedEntity:
     """Piste temporelle. ``cell_id`` est la cellule observée ; en OCCLUDED elle vaut None
-    et ``last_known_cell_id`` garde la dernière position observée (jamais « occupée »)."""
+    et ``last_known_cell_id`` garde la dernière position observée (jamais « occupée »).
+    En HELD, ``cell_id`` est la position maintenue (sprite présent) avec ``observed_this_frame``
+    faux : c'est une affirmation de position, de confiance réduite, pas une observation."""
 
     track_id: str
     kind: EntityKind
@@ -112,6 +117,11 @@ class TrackedEntity:
     last_known_cell_id: int | None
     observed_this_frame: bool
     evidence: EntityEvidence | None = None
+
+    @property
+    def claimed_cell(self) -> int | None:
+        """Cellule affirmée cette frame : observée, ou maintenue (HELD)."""
+        return self.cell_id if self.state in (TrackState.OBSERVED, TrackState.HELD) else None
 
     def to_dict(self) -> dict[str, object]:
         return {

@@ -517,7 +517,9 @@ class CombatPage(QWidget):
         if observation.entities is not None:
             # LOT 3B-5 : identités par DofusCellId ; une piste occultée n'est jamais « observée ».
             track = observation.player_track or {}
-            if observation.player_cell_id is not None:
+            if observation.player_cell_id is not None and track.get("state") == "HELD":
+                player_text = f"Cell {observation.player_cell_id} — maintenu (masqué) — {observation.player_confidence:.2f}"
+            elif observation.player_cell_id is not None:
                 player_text = f"Cell {observation.player_cell_id} — confirmé — {observation.player_confidence:.2f}"
             elif track.get("state") == "OCCLUDED":
                 player_text = f"Occulté (dernière cellule {track.get('last_known_cell_id')})"
@@ -529,6 +531,8 @@ class CombatPage(QWidget):
                 label = "E" + enemy.id.rsplit("_", 1)[-1]
                 lines.append(f"{label} : Cell {enemy.cell_id} — observé — {enemy.confidence:.2f}"
                              if enemy.observed_this_frame else
+                             f"{label} : Cell {enemy.cell_id} — maintenu (masqué) — {enemy.confidence:.2f}"
+                             if enemy.track_state == "HELD" else
                              f"{label} : occulté (dernière cellule {enemy.cell_id})")
             unknown = observation.unknown_entities
             if unknown:

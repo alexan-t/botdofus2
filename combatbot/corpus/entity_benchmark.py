@@ -657,12 +657,16 @@ def run_entity_benchmark(repository: CorpusRepository, *, save_profiles: bool = 
         timings["tracker_ms"].append((time.perf_counter() - started) * 1000)
         if sample.analysis_ms:
             timings["observer_ms"].append(float(sample.analysis_ms))
-        player = next((item.cell_id for item in tracked if item.kind is EntityKind.PLAYER
-                       and item.observed_this_frame), None)
-        enemies = [item.cell_id for item in tracked if item.kind is EntityKind.ENEMY and item.observed_this_frame]
+        # LOT 3B-5D : une position maintenue (HELD) est une affirmation du système, comptée comme telle.
+        player = next((item.claimed_cell for item in tracked if item.kind is EntityKind.PLAYER
+                       and item.claimed_cell is not None), None)
+        enemies = [item.claimed_cell for item in tracked if item.kind is EntityKind.ENEMY
+                   and item.claimed_cell is not None]
         unknown = [item.cell_id for item in result.entities if item.kind is EntityKind.UNKNOWN]
+        occupancy = {**result.occupancy, **{item.claimed_cell: "OCCUPIED" for item in tracked
+                                           if item.state is TrackState.HELD}}
         for scope in (sample.split, "all"):
-            detail = _frame_metrics(sample, player, enemies, unknown, result.occupancy, after[scope])
+            detail = _frame_metrics(sample, player, enemies, unknown, occupancy, after[scope])
             if scope == "all":
                 detail.update({"layout": layout_digest(sample.layout_signature), "timestamp": context.timestamp,
                                "group_id": sample.group_id, "frame_index": sample.frame_index,
@@ -679,9 +683,9 @@ def run_entity_benchmark(repository: CorpusRepository, *, save_profiles: bool = 
                                "tracked_entities": [item.to_dict() for item in tracked],
                                "diagnostics": result.diagnostics})
                 frames_after.append(detail)
-        sequences[sample.group_id].append((sample, {item.track_id: item.cell_id for item in tracked
-                                                    if item.kind is EntityKind.ENEMY and item.observed_this_frame
-                                                    and item.state is TrackState.OBSERVED}))
+        sequences[sample.group_id].append((sample, {item.track_id: item.claimed_cell for item in tracked
+                                                    if item.kind is EntityKind.ENEMY
+                                                    and item.claimed_cell is not None}))
         # Référence gloutonne sur les MÊMES détections, pour mesurer le gain de l'affectation globale.
         state = greedy_state.setdefault(sample.group_id, {})
         detections = [item.cell_id for item in result.entities if item.kind is EntityKind.ENEMY]

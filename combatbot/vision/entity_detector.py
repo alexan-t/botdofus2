@@ -359,6 +359,11 @@ class CellEntityDetector:
                                                reasons + ["joueur non confirmé (profil absent ou ambigu)"], maps))
         for entity in entities:
             occupancy[entity.cell_id] = "OCCUPIED"
+        # LOT 3B-5D : cellules où un sprite est présent (centre hétérogène), quelle que soit la
+        # visibilité de l'anneau ; le suivi s'en sert pour maintenir une entité masquée.
+        diagnostics["sprite_cells"] = [
+            int(cell_id) for index, cell_id in enumerate(maps.cell_ids.tolist())
+            if features["center_std"][index] >= config.center_std_min and visibility[index] > 0.5]
         if background is not None:
             # Après décision : une frame ne valide jamais son propre FREE. Toute preuve, même
             # faible (pic ≥ seuil faible), interdit d'apprendre le fond de cette cellule.

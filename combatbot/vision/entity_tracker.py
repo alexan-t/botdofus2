@@ -10,6 +10,9 @@ scipy n'est pas installé et quelques entités seulement sont suivies).
 - OCCLUDED : absente brièvement ; ``cell_id`` vaut None, ``last_known_cell_id`` est conservé et
   la cellule n'est jamais déclarée occupée pour autant. LOST au-delà de la tolérance
   (temps ET frames, configurables).
+- HELD (LOT 3B-5D) : absente de la détection mais un sprite occupe toujours sa dernière cellule
+  (``sprite_cells`` du détecteur) : la position est maintenue avec une confiance réduite. Un
+  ennemi tué laisse une case vide : il n'est pas maintenu. Réglé sur TRAIN/VALIDATION seulement.
 - Distance = distance topologique GameData (Manhattan en coordonnées logiques, équivalence au
   plus court chemin 4-connexe démontrée par test sur les 560 cellules), jamais en pixels.
 """
@@ -113,6 +116,8 @@ class TrackerConfig:
     occlusion_frames: int = 6
     occlusion_seconds: float = 4.0
     player_confirm_frames: int = 2     # saut du joueur hors gabarit : confirmé à la même cellule
+    hold_with_sprite: bool = True      # 3B-5D : maintien si un sprite reste sur la dernière cellule
+    hold_confidence_factor: float = 0.5
 
 
 @dataclass
@@ -164,6 +169,8 @@ class EntityTracker:
     def update(self, detections, timestamp: float) -> tuple[TrackedEntity, ...]:
         """``detections`` : EntityDetectionResult ou itérable d'EntityEvidence."""
         entities = tuple(getattr(detections, "entities", detections))
+        # Sans ce diagnostic (appel historique avec une simple liste), aucun maintien.
+        sprite_cells = set((getattr(detections, "diagnostics", None) or {}).get("sprite_cells", ()))
         observed: set[str] = set()
         diagnostics: dict[str, object] = {"assignments": [], "rejected": [], "new": []}
         player_detections = [item for item in entities if item.kind is EntityKind.PLAYER]
@@ -181,6 +188,8 @@ class EntityTracker:
             if track.missed > self.config.occlusion_frames or elapsed > self.config.occlusion_seconds:
                 self._lost[track_id] = self._tracks.pop(track_id)
                 output.append(self._public(track, TrackState.LOST, False))
+            elif self.config.hold_with_sprite and track.cell_id in sprite_cells:
+                output.append(self._public(track, TrackState.HELD, False, self.config.hold_confidence_factor))
             else:
                 output.append(self._public(track, TrackState.OCCLUDED, False))
         self.last_diagnostics = diagnostics
@@ -257,10 +266,12 @@ class EntityTracker:
         track.hue = detection.marker_hue if detection.marker_hue is not None else track.hue
 
     @staticmethod
-    def _public(track: _Track, state: TrackState, observed: bool) -> TrackedEntity:
-        return TrackedEntity(track.track_id, track.kind, track.cell_id if observed else None,
-                             track.confidence if observed else 0.0, state, track.age, track.missed,
-                             track.last_seen, track.cell_id, observed, track.evidence if observed else None)
+    def _public(track: _Track, state: TrackState, observed: bool, held_factor: float = 0.0) -> TrackedEntity:
+        held = state is TrackState.HELD
+        return TrackedEntity(track.track_id, track.kind, track.cell_id if observed or held else None,
+                             track.confidence if observed else track.confidence * held_factor if held else 0.0,
+                             state, track.age, track.missed, track.last_seen, track.cell_id, observed,
+                             track.evidence if observed else None)
 
     def tracks(self) -> dict[str, _Track]:
         return dict(self._tracks)
