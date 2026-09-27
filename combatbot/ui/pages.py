@@ -168,7 +168,7 @@ class ObservationPreview(QLabel):
         self.setMouseTracking(True)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setMinimumSize(560, 390)
-        self.setStyleSheet("border: 1px solid #34445b; background: #111a28;")
+        self.setStyleSheet("border: 1px solid rgba(143,209,79,36); background: #0f1510;")
         self._image_size: tuple[int, int] | None = None
 
     def set_image(self, image) -> None:
@@ -364,7 +364,7 @@ class CombatPage(QWidget):
         self.checklist = QLabel()
         self.checklist.setWordWrap(True)
         self.checklist.setTextFormat(Qt.TextFormat.RichText)
-        self.checklist.setStyleSheet("background:#172234; border:1px solid #2e3d52; border-radius:10px; padding:8px 12px;")
+        self.checklist.setStyleSheet("background:#121813; border:1px solid rgba(255,255,255,20); border-radius:10px; padding:8px 12px;")
         self.checklist.setVisible(False)
         real_layout.addWidget(self.checklist)
         real_content = QHBoxLayout()
@@ -623,7 +623,7 @@ class CombatPage(QWidget):
         self.show_checklist(collection_checklist(packet.metadata, observation, self.recording_status))
 
     def show_checklist(self, items: list[tuple[str, str]]) -> None:
-        icons = {"ok": ("✓", "#7ee8cf"), "warn": ("!", "#f5cf7a"), "todo": ("✗", "#f59aa5")}
+        icons = {"ok": ("✓", "#b6e68a"), "warn": ("!", "#e5a13a"), "todo": ("✗", "#f59aa5")}
         rows = [f"<span style='color:{icons[state][1]}; font-weight:700'>{icons[state][0]}</span>&nbsp; {text}"
                 for state, text in items]
         self.checklist.setText("<br>".join(rows))

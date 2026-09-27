@@ -156,8 +156,8 @@ def test_dock_navigation_and_crumb(window) -> None:
     view.dock.bubbles["sorts"].click()
     assert view.current_tab == "sorts" and window.title_bar.crumb.text() == "· Sorts"
     assert view.stack.currentWidget() is view.pages["sorts"]
-    assert _wait_for(lambda: view.dock.bubbles["sorts"].width() == view.dock.bubbles["sorts"].full_width)
-    assert view.dock.bubbles["home"].width() == 48
+    assert _wait_for(lambda: view.dock.bubbles["sorts"].width() == view.dock.bubbles["sorts"].full_width
+                     and view.dock.bubbles["home"].width() == 48)
 
 
 def test_schedule_a_zone_and_session(window, storage) -> None:

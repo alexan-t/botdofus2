@@ -303,17 +303,21 @@ def input_row(binding: SettingsBinding, key: str, title: str, placeholder: str,
 
 
 def info_row(title: str, value: str, action: Callable[[], None] | None = None,
-             action_text: str = "Changer") -> SettingRow:
+             action_text: str = "Changer", description: str = "", outlined: bool = False) -> SettingRow:
+    """Valeur mono dans une pastille (masquée si vide) et action « Changer » ; ``outlined`` donne un
+    bouton entouré (pages des outils avancés)."""
     box = QWidget()
     layout = QHBoxLayout(box)
     layout.setContentsMargins(0, 0, 0, 0)
     layout.setSpacing(12)
-    layout.addWidget(label(value, "d2InfoValue"))
+    pill = label(value, "d2InfoValue")
+    pill.setVisible(bool(value))
+    layout.addWidget(pill)
     if action is not None:
-        link = button(action_text, "d2InfoAction")
+        link = button(action_text, "d2SmallOutline" if outlined else "d2InfoAction")
         link.clicked.connect(action)
         layout.addWidget(link)
-    return SettingRow(title, "", box)
+    return SettingRow(title, description, box)
 
 
 class _AccordionHeader(HoverButton):

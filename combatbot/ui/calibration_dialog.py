@@ -41,18 +41,18 @@ SHORT_TAGS = {"combat": "Combat", "spell_bar": "Sorts", "hp": "PV", "ap": "PA", 
               "end_turn": "Fin de tour", "identity": "Nom"}
 
 SIDEBAR_STYLE = """
-QFrame#calibrationSidebar { background: #0f1726; border-left: 1px solid #273449; }
-QFrame#zoneRow { background: #172234; border: 1px solid #243249; border-radius: 10px; }
-QFrame#zoneRow[selected="true"] { border: 1px solid #40c8aa; background: #173b43; }
-QLabel#zoneName { font-weight: 600; color: #f1f5f9; }
-QLabel#zoneHint { color: #8b98ab; font-size: 11px; }
+QFrame#calibrationSidebar { background: #0a0d0b; border-left: 1px solid rgba(255,255,255,20); }
+QFrame#zoneRow { background: #121813; border: 1px solid rgba(255,255,255,15); border-radius: 10px; }
+QFrame#zoneRow[selected="true"] { border: 1px solid #8fd14f; background: rgba(143,209,79,26); }
+QLabel#zoneName { font-weight: 600; color: #e6ede4; }
+QLabel#zoneHint { color: #8e9c8f; font-size: 11px; }
 QLabel#chip { border-radius: 9px; padding: 2px 8px; font-size: 11px; font-weight: 600; }
-QLabel#chip[state="ok"] { background: #134e45; color: #7ee8cf; }
-QLabel#chip[state="check"] { background: #4a3a17; color: #f5cf7a; }
-QLabel#chip[state="missing"] { background: #273449; color: #9ca3af; }
+QLabel#chip[state="ok"] { background: rgba(143,209,79,41); color: #b6e68a; }
+QLabel#chip[state="check"] { background: rgba(229,161,58,41); color: #e5a13a; }
+QLabel#chip[state="missing"] { background: rgba(255,255,255,20); color: #8e9c8f; }
 QPushButton#rowAction { padding: 4px 10px; border-radius: 7px; }
-QProgressBar { background: #172234; border: none; border-radius: 4px; height: 8px; }
-QProgressBar::chunk { background: #40c8aa; border-radius: 4px; }
+QProgressBar { background: #121813; border: none; border-radius: 4px; height: 8px; }
+QProgressBar::chunk { background: #8fd14f; border-radius: 4px; }
 """
 
 
@@ -138,7 +138,7 @@ class ResizableRectItem(QGraphicsRectItem):
         painter.setBrush(self.color)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRect(tag)
-        painter.setPen(QColor("#0b1220"))
+        painter.setPen(QColor("#0f1510"))
         painter.drawText(tag, Qt.AlignmentFlag.AlignCenter, self.label)
 
     def hoverMoveEvent(self, event) -> None:
@@ -208,7 +208,7 @@ class _ImageDialog(QDialog):
         self.view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.view.setFrameShape(QFrame.Shape.NoFrame)
-        self.view.setStyleSheet("background: #070b12;")
+        self.view.setStyleSheet("background: #070908;")
         self.view.setMinimumSize(600, 400)
 
     def showEvent(self, event) -> None:
