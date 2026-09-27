@@ -214,10 +214,11 @@ class RealCombatObserver:
             assert self._last_number_results is not None
             ap_read, mp_read = self._last_number_results
 
-        counter_signal = (_visual_activity(_zone(frame, self.calibration, transform, "ap")) +
-                          _visual_activity(_zone(frame, self.calibration, transform, "mp"))) / 2
-        end_signal = _visual_activity(_zone(frame, self.calibration, transform, "end_turn"))
-        spell_signal = _visual_activity(_zone(frame, self.calibration, transform, "spell_bar"))
+        counter_signal = (_visual_activity(ap_image) + _visual_activity(mp_image)) / 2
+        end_turn_image = _zone(frame, self.calibration, transform, "end_turn")
+        spell_image = _zone(frame, self.calibration, transform, "spell_bar")
+        end_signal = _visual_activity(end_turn_image)
+        spell_signal = _visual_activity(spell_image)
         signals = {"grid": grid.confidence, "counters": counter_signal,
                    "end_turn": end_signal, "spell_bar": spell_signal}
         # LOT 3B-3 : les 560 cellules GameData ne prouvent rien ; plus aucun len(grid.cells).
@@ -320,7 +321,10 @@ class RealCombatObserver:
             "frame_index": self._frame_index,
         }
         self._frame_index += 1
-        hud_crops = {name: value for name, value in (("ap", ap_image), ("mp", mp_image))
+        # LOT 3B-6B : bouton fin de tour, barre de sorts et client entier gardés pour la phase/tour.
+        hud_crops = {name: value for name, value in (("ap", ap_image), ("mp", mp_image),
+                                                     ("end_turn", end_turn_image), ("spell_bar", spell_image),
+                                                     ("client", frame.image))
                      if value is not None and value.size > 0}
         return ObservationPacket(observation, combat_image, annotated, elapsed_ms, metadata, hud_crops)
 
@@ -663,6 +667,11 @@ def _draw_alignment_debug(output: np.ndarray, grid, validation: dict) -> None:
         cv2.putText(output, text, (10, 22 + 20 * index), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 200, 255), 1, cv2.LINE_AA)
 
 
+# Crops HUD enregistrés avec une observation ; « client » est l'image entière du client (JPEG).
+STATE_CROP_FILES = (("ap", "ap_original.png"), ("mp", "mp_original.png"), ("end_turn", "end_turn.png"),
+                    ("spell_bar", "spell_bar.png"), ("client", "client.jpg"))
+
+
 def save_debug_observation(packet: ObservationPacket, directory: Path | None = None) -> Path:
     root = directory or (app_data_root() / "data" / "debug")
     root.mkdir(parents=True, exist_ok=True)
@@ -678,11 +687,12 @@ def save_debug_observation(packet: ObservationPacket, directory: Path | None = N
     if packet.hud_crops:
         hud_directory = root / f"{stamp}-hud"
         hud_directory.mkdir(parents=True, exist_ok=True)
-        for name, filename in (("ap", "ap_original.png"), ("mp", "mp_original.png")):
+        for name, filename in STATE_CROP_FILES:
             crop = packet.hud_crops.get(name)
             if crop is not None and np.asarray(crop).size:
                 path = hud_directory / filename
-                if not cv2.imwrite(str(path), np.asarray(crop)):
+                parameters = [cv2.IMWRITE_JPEG_QUALITY, 90] if filename.endswith(".jpg") else []
+                if not cv2.imwrite(str(path), np.asarray(crop), parameters):
                     raise OSError(f"Impossible d'enregistrer le crop {name.upper()}")
                 hud_files[name] = f"{hud_directory.name}/{filename}"
     prediction = asdict(packet.observation)

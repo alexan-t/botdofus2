@@ -16,6 +16,11 @@ from combatbot.corpus.models import Annotation, CorpusEntry, CorpusManifest, SCH
 from combatbot.runtime import PROJECT_ROOT, app_data_root
 
 
+# Crop enregistré → clé de chemin du manifeste (LOT 3B-6B : fin de tour, sorts, client entier).
+CROP_PATH_KEYS = {"ap": "ap_crop", "mp": "mp_crop", "end_turn": "end_turn_crop",
+                  "spell_bar": "spell_bar_crop", "client": "client_frame"}
+
+
 def _read_json(path: Path) -> object:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -144,6 +149,9 @@ class CorpusRepository:
             "overlay": ("overlay.png", "annotated.png"),
             "ap": ("hud/ap_original.png", "ap_original.png"),
             "mp": ("hud/mp_original.png", "mp_original.png"),
+            "end_turn": ("hud/end_turn.png",),
+            "spell_bar": ("hud/spell_bar.png",),
+            "client": ("hud/client.jpg",),
         }
         prefix = json_path.name.removesuffix("-observation.json")
         legacy = {
@@ -151,6 +159,9 @@ class CorpusRepository:
             "overlay": base / f"{prefix}-annotated.png",
             "ap": base / f"{prefix}-ap_original.png",
             "mp": base / f"{prefix}-mp_original.png",
+            "end_turn": base / f"{prefix}-end_turn.png",
+            "spell_bar": base / f"{prefix}-spell_bar.png",
+            "client": base / f"{prefix}-client.jpg",
         }
         for key, names in aliases.items():
             candidates: list[Path] = []
@@ -205,10 +216,12 @@ class CorpusRepository:
             shutil.copy2(files["frame"], destination / "frame.png")
             shutil.copy2(files["overlay"], destination / "overlay.png")
             hud_paths: dict[str, str] = {}
-            if "ap" in files or "mp" in files:
+            if set(CROP_PATH_KEYS) & set(files):
                 hud = destination / "hud"
                 hud.mkdir()
-                for key, filename in (("ap", "ap_original.png"), ("mp", "mp_original.png")):
+                for key, filename in (("ap", "ap_original.png"), ("mp", "mp_original.png"),
+                                      ("end_turn", "end_turn.png"), ("spell_bar", "spell_bar.png"),
+                                      ("client", "client.jpg")):
                     if key in files:
                         shutil.copy2(files[key], hud / filename)
                         hud_paths[key] = f"hud/{filename}"
@@ -233,10 +246,9 @@ class CorpusRepository:
                 "overlay": f"{relative_base}/overlay.png",
                 "observation": f"{relative_base}/observation.json",
             }
-            if "ap" in hud_paths:
-                paths["ap_crop"] = f"{relative_base}/{hud_paths['ap']}"
-            if "mp" in hud_paths:
-                paths["mp_crop"] = f"{relative_base}/{hud_paths['mp']}"
+            for key, path_key in CROP_PATH_KEYS.items():
+                if key in hud_paths:
+                    paths[path_key] = f"{relative_base}/{hud_paths[key]}"
             entry = CorpusEntry(observation_id, chosen_session, frame_index, paths,
                                 tags=tags, usage=usage)  # type: ignore[arg-type]
             self.save_manifest(CorpusManifest(manifest.entries + (entry,)))
@@ -390,6 +402,26 @@ class CorpusRepository:
             session_id=entry.session_id, hud_review=review, truth_history=history,
             hud_suggestion=suggestion if suggestion is not None else previous.hud_suggestion,
         )
+        self.save_annotation(annotation)
+        return annotation
+
+    def confirm_combat_state(self, observation_id: str, *, phase: str, turn_owner: str | None,
+                             mode: str = "manual", suggestion: dict | None = None,
+                             confirmed_at: str | None = None) -> Annotation:
+        """LOT 3B-6B : vérité humaine phase/tour ; PA/PM et entités restent intacts.
+
+        Sur une frame TEST (split déclaré), aucune suggestion logicielle n'est acceptée.
+        """
+        entry = self.get_entry(observation_id)
+        split = (self.read_observation(entry).get("capture") or {}).get("entity_split_declared")
+        if split == "test" and (suggestion is not None or mode.startswith("assisted")):
+            raise ValueError("TEST est aveugle : aucune suggestion logicielle ne peut accompagner la vérité")
+        previous = self.read_annotation(entry) or Annotation(observation_id)
+        stamp = confirmed_at or datetime.now().astimezone().isoformat(timespec="seconds")
+        annotation = replace(
+            previous, combat_phase_truth=phase, turn_owner_truth=turn_owner,
+            combat_state_source="human_confirmed", combat_state_confirmed_at=stamp,
+            combat_state_mode=mode, combat_state_suggestion=suggestion, session_id=entry.session_id)
         self.save_annotation(annotation)
         return annotation
 

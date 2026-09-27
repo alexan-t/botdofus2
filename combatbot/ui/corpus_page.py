@@ -423,6 +423,9 @@ class CorpusPage(QWidget):
         hud_buttons.addWidget(self.hud_collection_button)
         hud_buttons.addWidget(self.entity_button)
         self.entity_button.clicked.connect(self._annotate_entities)
+        self.combat_state_button = QPushButton("Annoter phase et tour…")
+        hud_buttons.addWidget(self.combat_state_button)
+        self.combat_state_button.clicked.connect(self._annotate_combat_state)
         hud_buttons.addStretch()
         outer.addLayout(hud_buttons)
         self.hud_review_button.clicked.connect(self._hud_review)
@@ -522,6 +525,17 @@ class CorpusPage(QWidget):
             dialog.exec()
         except ValueError as exc:
             QMessageBox.warning(self, "Annotation des entités", str(exc))
+        self.refresh()
+
+    def _annotate_combat_state(self) -> None:
+        from combatbot.ui.combat_state_dialog import CombatStateDialog
+
+        try:
+            dialog = CombatStateDialog(self.repository, self)
+            dialog.showMaximized()
+            dialog.exec()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Phase et tour", str(exc))
         self.refresh()
 
     def _hud_review(self) -> None:

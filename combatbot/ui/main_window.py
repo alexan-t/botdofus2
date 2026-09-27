@@ -937,9 +937,17 @@ class MainWindow(QMainWindow):
         rect = (zone["x"], zone["y"], zone["width"], zone["height"]) if isinstance(zone, dict) else None
         now = time.monotonic()
         last = getattr(self, "_sequence_last", None)
-        if last is not None and (now - last[0] < 0.4 or sequence_change(last[1], image, rect) < 0.002):
-            return
-        self._sequence_last = (now, image)
+        button = packet.hud_crops.get("end_turn")
+        button = np.asarray(button) if button is not None else None
+        if last is not None:
+            if now - last[0] < 0.4:
+                return
+            # LOT 3B-6B : un changement de tour modifie le bouton fin de tour même si la map ne bouge pas.
+            button_changed = (button is not None and last[2] is not None
+                              and sequence_change(last[2], button) >= 0.02)
+            if not button_changed and sequence_change(last[1], image, rect) < 0.002:
+                return
+        self._sequence_last = (now, image, button)
         try:
             entry = self.corpus.repository.import_packet(packet)
         except (OSError, ValueError) as exc:

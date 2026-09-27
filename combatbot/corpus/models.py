@@ -30,6 +30,8 @@ ENTITY_FIELDS = ("entity_annotation_source", "entity_confirmed_at", "player_cell
 ANNOTATION_MODES = {"manual_blind", "manual", "assisted_confirmed", "assisted_corrected"}
 # LOT 3B-5D : décision humaine sur une cellule tirée indépendamment des prédictions.
 SAMPLED_CELL_LABELS = {"EMPTY", "OCCUPIED", "UNKNOWN"}
+# LOT 3B-6B : provenance de la vérité phase/tour (TEST : jamais « assisted_* »).
+COMBAT_STATE_MODES = {"manual_blind", "manual", "carried_previous", "assisted_confirmed", "assisted_corrected"}
 
 
 def _optional_bool(value: object, field_name: str) -> bool | None:
@@ -147,7 +149,31 @@ class Annotation:
     suggestion_snapshot: dict[str, object] | None = None
     suggestion_review: dict[str, object] | None = None
     entity_confirmed_by: str | None = None
+    # LOT 3B-6B : phase de combat et propriétaire du tour (vérité humaine, jamais une prédiction).
+    combat_phase_truth: str | None = None
+    turn_owner_truth: str | None = None
+    combat_state_source: str | None = None
+    combat_state_confirmed_at: str | None = None
+    combat_state_mode: str | None = None
+    combat_state_suggestion: dict[str, object] | None = None
     schema_version: int = SCHEMA_VERSION
+
+    @property
+    def combat_state_confirmed(self) -> bool:
+        return self.combat_state_source == "human_confirmed" and bool(self.combat_state_confirmed_at)
+
+    def validate_combat_state(self) -> None:
+        from combatbot.vision.combat_state import validate_truth
+        validate_truth(self.combat_phase_truth, self.turn_owner_truth)
+        if self.combat_state_source not in (None, "human_confirmed"):
+            raise ValueError("combat_state_source doit valoir human_confirmed")
+        if self.combat_state_source == "human_confirmed" and (
+                not self.combat_state_confirmed_at or self.combat_phase_truth is None):
+            raise ValueError("Une vérité phase/tour exige sa date et sa phase")
+        if self.combat_state_mode is not None and self.combat_state_mode not in COMBAT_STATE_MODES:
+            raise ValueError(f"combat_state_mode non reconnu : {self.combat_state_mode}")
+        if self.combat_state_mode in ("assisted_confirmed", "assisted_corrected") and not self.combat_state_suggestion:
+            raise ValueError("Une annotation phase/tour assistée exige la suggestion d'origine")
 
     @property
     def entities_confirmed(self) -> bool:
@@ -256,6 +282,7 @@ class Annotation:
             if (self.hud_review or {}).get(kind) == "unreadable" and truth is not None:
                 raise ValueError(f"{kind.upper()} marqué illisible ne peut pas porter de vérité")
         self.validate_entities()
+        self.validate_combat_state()
 
     def to_dict(self) -> dict[str, object]:
         self.validate()
@@ -296,6 +323,12 @@ class Annotation:
             "suggestion_snapshot": self.suggestion_snapshot,
             "suggestion_review": self.suggestion_review,
             "entity_confirmed_by": self.entity_confirmed_by,
+            "combat_phase_truth": self.combat_phase_truth,
+            "turn_owner_truth": self.turn_owner_truth,
+            "combat_state_source": self.combat_state_source,
+            "combat_state_confirmed_at": self.combat_state_confirmed_at,
+            "combat_state_mode": self.combat_state_mode,
+            "combat_state_suggestion": self.combat_state_suggestion,
         }
         result.update({key: value for key, value in scalar_values.items() if value is not None})
         if self.truth_history:
@@ -386,6 +419,13 @@ class Annotation:
             suggestion_snapshot=raw.get("suggestion_snapshot") if isinstance(raw.get("suggestion_snapshot"), dict) else None,
             suggestion_review=raw.get("suggestion_review") if isinstance(raw.get("suggestion_review"), dict) else None,
             entity_confirmed_by=raw.get("entity_confirmed_by"),
+            combat_phase_truth=raw.get("combat_phase_truth"),
+            turn_owner_truth=raw.get("turn_owner_truth"),
+            combat_state_source=raw.get("combat_state_source"),
+            combat_state_confirmed_at=raw.get("combat_state_confirmed_at"),
+            combat_state_mode=raw.get("combat_state_mode"),
+            combat_state_suggestion=(raw.get("combat_state_suggestion")
+                                     if isinstance(raw.get("combat_state_suggestion"), dict) else None),
             schema_version=int(raw.get("schema_version", SCHEMA_VERSION)),
         )
         item.validate()
