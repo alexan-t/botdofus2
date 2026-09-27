@@ -2,8 +2,9 @@
 
 Chaque frame capturée en Vision réelle garde l'image entière du client, le bouton fin de tour et
 la barre de sorts. L'humain choisit la phase (1 Hors combat, 2 Placement, 3 Combat, 4 Résultats,
-0 Inconnu) et, en combat, le tour (M mon tour, E tour d'un autre, I inconnu). Entrée enregistre et
-passe à la frame suivante, préremplie avec la vérité HUMAINE de la frame précédente (jamais une
+0 Inconnu) et, en combat, le tour (M mon tour, E tour d'un autre, I inconnu). Un clic (ou la touche)
+sur une phase hors combat, ou sur un tour, ENREGISTRE et passe à la frame suivante ; « Combat » attend
+le tour. Entrée confirme la réponse préremplie : la vérité HUMAINE de la frame précédente (jamais une
 prédiction). Aucune prédiction logicielle n'est affichée : TEST reste aveugle. Rien n'est cliqué
 dans DOFUS.
 """
@@ -156,7 +157,7 @@ class CombatStateDialog(QDialog):
                       CombatPhase.RESULTS, CombatPhase.UNKNOWN):
             button = QPushButton(f"{PHASE_SHORTCUTS[phase]} · {PHASE_LABELS[phase]}")
             button.setCheckable(True)
-            button.clicked.connect(lambda _checked=False, value=phase: self._set_phase(value))
+            button.clicked.connect(lambda _checked=False, value=phase: self._choose_phase(value))
             self.phase_group.addButton(button)
             self.phase_buttons[phase] = button
             side.addWidget(button)
@@ -166,7 +167,7 @@ class CombatStateDialog(QDialog):
         for turn in (TurnOwner.PLAYER, TurnOwner.OTHER, TurnOwner.UNKNOWN):
             button = QPushButton(f"{TURN_SHORTCUTS[turn]} · {TURN_LABELS[turn]}")
             button.setCheckable(True)
-            button.clicked.connect(lambda _checked=False, value=turn: self._set_turn(value))
+            button.clicked.connect(lambda _checked=False, value=turn: self._choose_turn(value))
             self.turn_group.addButton(button)
             self.turn_buttons[turn] = button
             side.addWidget(button)
@@ -177,7 +178,9 @@ class CombatStateDialog(QDialog):
         body.addLayout(side, 1)
         root.addLayout(body, 1)
 
-        self.status = QLabel("Entrée : enregistrer et suivante · ←/→ : naviguer · 1-4/0 : phase · M/E/I : tour")
+        self.status = QLabel("Clic (ou 1, 2, 4, 0) sur une phase = enregistré + frame suivante · en combat, "
+                             "cliquez le tour (M, E, I) · Entrée : même réponse que la frame précédente · "
+                             "←/→ : naviguer")
         self.status.setWordWrap(True)
         root.addWidget(self.status)
         actions = QHBoxLayout()
@@ -341,6 +344,20 @@ class CombatStateDialog(QDialog):
         self.turn = turn
         self._sync_buttons()
 
+    def _choose_phase(self, phase: CombatPhase) -> None:
+        """Clic ou touche : hors combat, enregistre tout de suite ; « Combat » attend le tour."""
+        self._set_phase(phase)
+        if phase is CombatPhase.FIGHTING:
+            self.turn = None
+            self._sync_buttons()
+            self.status.setText("Combat : à qui est le tour ? M (mon tour), E (tour d'un autre) ou I (inconnu).")
+            return
+        self._confirm()
+
+    def _choose_turn(self, turn: TurnOwner) -> None:
+        self._set_turn(turn)
+        self._confirm()
+
     def _confirm(self) -> None:
         entries = self.current_entries
         if not entries:
@@ -394,8 +411,8 @@ class CombatStateDialog(QDialog):
         elif key in (Qt.Key.Key_Left, Qt.Key.Key_PageUp):
             self._move(-1)
         elif key in PHASE_KEYS:
-            self._set_phase(PHASE_KEYS[key])
+            self._choose_phase(PHASE_KEYS[key])
         elif key in TURN_KEYS:
-            self._set_turn(TURN_KEYS[key])
+            self._choose_turn(TURN_KEYS[key])
         else:
             super().keyPressEvent(event)

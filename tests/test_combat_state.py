@@ -145,17 +145,35 @@ def test_dialog_requires_turn_in_combat_and_is_blind_on_test(repository: CorpusR
 def test_dialog_keyboard_shortcuts(repository: CorpusRepository) -> None:
     from PySide6.QtGui import QKeyEvent
     from PySide6.QtCore import QEvent
-    _combat(repository, "s1", 2)
+    first, second, third = _combat(repository, "s1", 3)
     dialog = _dialog(repository)
     press = lambda key: dialog.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, key, Qt.KeyboardModifier.NoModifier))
-    press(Qt.Key.Key_2)
-    assert dialog.phase is CombatPhase.PLACEMENT
+    press(Qt.Key.Key_2)                                  # phase hors combat : enregistrée + frame suivante
+    assert dialog.index == 1 and repository.read_annotation(first.observation_id).combat_phase_truth == "PLACEMENT"
+    press(Qt.Key.Key_3)                                  # Combat : attend le tour, rien n'est enregistré
+    assert dialog.index == 1 and repository.read_annotation(second.observation_id) is None
     press(Qt.Key.Key_E)
-    assert dialog.phase is CombatPhase.FIGHTING and dialog.turn is TurnOwner.OTHER
-    press(Qt.Key.Key_Return)
-    assert dialog.index == 1
+    saved = repository.read_annotation(second.observation_id)
+    assert dialog.index == 2 and (saved.combat_phase_truth, saved.turn_owner_truth) == ("FIGHTING", "OTHER")
+    press(Qt.Key.Key_Return)                             # Entrée : même réponse que la frame précédente
+    assert repository.read_annotation(third.observation_id).combat_state_mode == "carried_previous"
     press(Qt.Key.Key_Left)
-    assert dialog.index == 0
+    assert dialog.index == 1
+    dialog.close()
+
+
+def test_dialog_click_saves_directly(repository: CorpusRepository) -> None:
+    """Retour utilisateur : cliquer sur une phase doit valider sans passer par Entrée."""
+    first, second = _combat(repository, "s1", 2)
+    dialog = _dialog(repository)
+    dialog.phase_buttons[CombatPhase.OUT_OF_COMBAT].click()
+    assert repository.read_annotation(first.observation_id).combat_phase_truth == "OUT_OF_COMBAT"
+    assert dialog.index == 1
+    dialog.phase_buttons[CombatPhase.FIGHTING].click()
+    assert repository.read_annotation(second.observation_id) is None and dialog.turn_buttons[TurnOwner.PLAYER].isEnabled()
+    dialog.turn_buttons[TurnOwner.PLAYER].click()
+    saved = repository.read_annotation(second.observation_id)
+    assert (saved.combat_phase_truth, saved.turn_owner_truth) == ("FIGHTING", "PLAYER")
     dialog.close()
 
 
