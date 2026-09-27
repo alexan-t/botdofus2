@@ -79,7 +79,9 @@ def test_dialog_optional_anchors(qapp):
 
 def test_real_vision_page_declared_map_and_hover(qapp):
     page = CombatPage()
-    assert "non détectée" in page.map_id_input.placeholderText()
+    # LOT 3B-6C : détection automatique ; le mapId manuel n'est plus qu'un secours.
+    assert "manuel" in page.map_id_input.placeholderText() and "automatiquement" in page.map_status.text()
+    assert page.map_load.text() == "Utiliser ce mapId manuellement" and not page.map_auto.isVisibleTo(page)
     options = page.overlay_options()
     assert options.grid and not options.red_blue
     page.overlay_boxes["red_blue"].setChecked(True)
@@ -93,6 +95,13 @@ def test_real_vision_page_declared_map_and_hover(qapp):
                                {"grid_source_reason": "READY", "requires_recalibration": False})
     page.set_observation(packet)
     assert "GAMEDATA_PROJECTED" in page.real_values["grid_source"].text()
+    assert "indisponible" in page.real_values["map"].text()
+    packet.metadata["map_resolution"] = {"status": "AMBIGUOUS", "map_id": None, "coordinates": [0, -32],
+                                         "candidate_count": 2, "candidates": [120062467, 122946049],
+                                         "source": "OCR_COORDS + AREA_NAMES", "confidence": 0.0, "reason": ""}
+    page.set_observation(packet)
+    assert page.real_values["map"].text().startswith("AMBIGUË : 2 candidates")
+    assert page.real_values["map_coords"].text() == "[0,-32]"
     assert "déclarée manuellement" in page.real_values["grid_source"].text()
     center = cell_to_combat(287, TRANSFORM).rounded()
     page._preview_hovered(center)

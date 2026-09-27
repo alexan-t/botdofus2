@@ -31,6 +31,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="3B-5D : re-mesure TEST déjà vus, enregistrée comme diagnostic (pas un TEST)")
     parser.add_argument("--hud-split", action="store_true",
                         help="LOT 3B-4R2 : reconstruit explicitement le split HUD (TEST gelé) et affiche la distribution")
+    parser.add_argument("--map-resolution", action="store_true",
+                        help="3B-6C : rejouer le corpus pour mesurer la résolution automatique de map")
+    parser.add_argument("--limit", type=int, help="Nombre maximal de frames (diagnostic)")
     parser.add_argument("--client", type=Path, help="Dossier client GameData (défaut : réglage de l'application)")
     parser.add_argument("--install-runtime-profiles", action="store_true",
                         help="Installation explicite TRAIN vers LocalAppData, avec backup et bascule atomique")
@@ -49,6 +52,8 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("--install-runtime-profiles exige --entities")
         return _install_entities(args)
     repository = CorpusRepository(args.corpus_root)
+    if args.map_resolution:
+        return _map_resolution(repository, args)
     if args.grid_validation:
         return _grid_validation(repository, args)
     if args.entities_3b5d:
@@ -156,6 +161,42 @@ def _install_entities(args) -> int:
     if args.output_dir:
         args.output_dir.mkdir(parents=True, exist_ok=True)
         (args.output_dir / "runtime-installation.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+    return 0
+
+
+def _client_directory(args):
+    if args.client is not None:
+        return args.client
+    try:
+        from combatbot.runtime import database_path
+        from combatbot.storage import Storage
+        storage = Storage(database_path())
+        client = storage.get_setting("dofus_client_directory")
+        storage.close()
+        return Path(client) if client else None
+    except Exception:  # noqa: BLE001 - réglage absent : dossier inconnu
+        return None
+
+
+def _map_resolution(repository: CorpusRepository, args) -> int:
+    import json
+    from combatbot.corpus.map_resolution_benchmark import markdown_summary, run_map_resolution_benchmark
+    from combatbot.gamedata.map_index import load_or_build
+    client = _client_directory(args)
+    if client is None:
+        print("Dossier client GameData inconnu : --client requis", flush=True)
+        return 2
+    root = app_data_root() / "data"
+    index = load_or_build(Path(client), root / "gamedata" / "cache")
+    output = args.output_dir or (root / "benchmarks")
+    output.mkdir(parents=True, exist_ok=True)
+    for simulate, suffix in ((False, ""), (True, "-with-one-confirmation")):
+        report = run_map_resolution_benchmark(repository, index, limit=args.limit,
+                                              simulate_human_confirmation=simulate)
+        (output / f"map-resolution{suffix}.json").write_text(
+            json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+        (output / f"map-resolution{suffix}.md").write_text(markdown_summary(report), encoding="utf-8")
+        print(markdown_summary(report), flush=True)
     return 0
 
 

@@ -28,7 +28,7 @@ GAMEDATA_TOPOLOGY_VERSION = "dlm-v11/560-cells/topology-v1"
 
 class MapIdOrigin(str, Enum):
     DECLARED_MANUALLY = "DECLARED_MANUALLY"
-    # Réservé à un futur MapIdentityProvider ; jamais produit dans ce lot.
+    # LOT 3B-6C : map résolue automatiquement (OCR des infos de map + GameData).
     DETECTED = "DETECTED"
 
 
@@ -36,6 +36,7 @@ class MapIdSource(str, Enum):
     """Provenance of a manually declared map ID (LOT 3B-2R)."""
     USER_VERIFIED_MAPID = "user_verified_mapid"  # typed by the user from /mapid in the client
     MANUAL_GUESS = "manual_guess"                # anything else (memory, coordinates, candidates)
+    AUTO_DETECTED = "auto_detected"              # LOT 3B-6C : MapContextResolver (jamais un choix au hasard)
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,8 @@ class DeclaredMapId:
 
     @property
     def label(self) -> str:
+        if self.origin is MapIdOrigin.DETECTED:
+            return f"Map ID détecté automatiquement : {self.map_id}"
         if self.origin is MapIdOrigin.DECLARED_MANUALLY:
             verified = " (vérifié par /mapid)" if self.source is MapIdSource.USER_VERIFIED_MAPID else " (non vérifié)"
             return f"Map ID déclaré manuellement : {self.map_id}{verified}"

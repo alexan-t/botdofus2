@@ -103,7 +103,8 @@ class RealCombatObserver:
                  entity_detector: CellEntityDetector | None = None,
                  entity_tracker: EntityTracker | None = None,
                  entity_profiles: VisualProfiles | None = None,
-                 background_model: CellBackgroundModel | None = None) -> None:
+                 background_model: CellBackgroundModel | None = None,
+                 map_context=None) -> None:
         self.hwnd = hwnd
         self.calibration = calibration
         self.frame_provider = frame_provider or (lambda: capture_client(hwnd, activate=False))
@@ -143,6 +144,8 @@ class RealCombatObserver:
         self.entity_profiles = entity_profiles if entity_profiles is not None else _load_profiles(calibration)
         self._entity_map: int | None = None
         self.capture_context = dict(capture_context or {})
+        # LOT 3B-6C : MapContextService (détection automatique de map) ; None = map déclarée à la main.
+        self.map_context = map_context
         self.session_id = str(self.capture_context.get("session_id") or f"session_{uuid4().hex[:12]}")
         self._frame_index = 0
         self._last_numbers: tuple[float, tuple[int | None, float], tuple[int | None, float]] | None = None
@@ -162,6 +165,10 @@ class RealCombatObserver:
         combat_image = _zone(frame, self.calibration, transform, "combat")
         assert combat_image is not None
         resolution = None
+        map_resolution = None
+        if self.map_context is not None:
+            # Met à jour l'identité de map AVANT la projection : la grille suit la map détectée.
+            map_resolution = self.map_context.update(frame.image, combat_image)
         if self.grid_resolver is not None:
             zones = {name: rect.to_normalized_rect() for name, rect in self.calibration.zones.items()}
             resolution = self.grid_resolver.resolve(combat_image, frame.client.size, zones)
@@ -316,6 +323,15 @@ class RealCombatObserver:
                 "rapidocr_ap_ms": ap_read.timings_ms.get("rapidocr"),
                 "rapidocr_mp_ms": mp_read.timings_ms.get("rapidocr"),
             },
+            "map_resolution": ({**map_resolution.to_dict(),
+                                "game_data_loaded": grid.grid_source == GRID_SOURCE_GAMEDATA
+                                and grid.map_id_declared == map_resolution.map_id,
+                                "calibration_status": ("REUSED" if resolution and resolution.status
+                                                       and resolution.status.applicable else
+                                                       (resolution.reason if resolution else None)),
+                                "grid_status": (grid.alignment or {}).get("status"),
+                                "timings_ms": dict(self.map_context.timings)}
+                               if map_resolution is not None else None),
             "capture_source": frame.source,
             "session_id": self.session_id,
             "frame_index": self._frame_index,

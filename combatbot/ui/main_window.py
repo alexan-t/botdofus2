@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from dataclasses import replace
 import json
+from pathlib import Path
 import time
 
 import cv2
@@ -45,7 +46,8 @@ from combatbot.ui.grid_recipe_dialog import GridRecipeDialog
 from combatbot.vision.grid_recipe import CAPTURE_KINDS, RealGridValidationSession
 from combatbot.vision.coordinates import LayoutSignature
 from combatbot.vision.gamedata_grid import GameDataGridResolver, GameDataTopologySource
-from combatbot.vision.grid_profile import PROFILE_SETTING_KEY, CombatGridProfileV2, ManualMapIdentity, MapIdSource
+from combatbot.vision.grid_profile import PROFILE_SETTING_KEY, CombatGridProfileV2, MapIdSource
+from combatbot.vision.map_resolver import AutoMapIdentity
 
 DECLARED_MAP_SETTING = "declared_map_id"
 
@@ -64,8 +66,9 @@ class MainWindow(QMainWindow):
         self._observation_pending = False
         self._observer: RealCombatObserver | None = None
         self._last_observation: ObservationPacket | None = None
-        # LOT 3B-2 : map déclarée manuellement, jamais détectée.
-        self._map_identity = ManualMapIdentity()
+        # LOT 3B-6C : map détectée automatiquement ; la déclaration manuelle reste un secours.
+        self._map_identity = AutoMapIdentity()
+        self._map_preparation = None      # préparation en thread (index GameData + topologie)
         self._topology_source: GameDataTopologySource | None = None
         self._topology_folder: str | None = None
         self._declared_topology = None
@@ -167,6 +170,7 @@ class MainWindow(QMainWindow):
         self.combat.observation_save_requested.connect(self._save_observation)
         self.combat.player_reference_requested.connect(self._set_player_reference)
         self.combat.map_load_requested.connect(self._load_declared_map)
+        self.combat.map_auto_requested.connect(self._resume_map_detection)
         self.combat.projection_calibration_requested.connect(self._calibrate_projection)
         self.combat.overlay_options_changed.connect(self._set_overlay_options)
         self.combat.legacy_fallback_changed.connect(self._set_legacy_fallback)
@@ -651,7 +655,12 @@ class MainWindow(QMainWindow):
             self._declared_topology = topology
             source = (MapIdSource.USER_VERIFIED_MAPID if self.combat.map_id_verified.isChecked()
                       else MapIdSource.MANUAL_GUESS)
+            observer = self._observer
+            if observer is not None and observer.map_context is not None:
+                packet = self._last_observation
+                observer.map_context.declare_manual(map_id, packet.original if packet is not None else None)
             declared = self._map_identity.declare(map_id, source)
+            self.combat.map_auto.setVisible(True)
             cells = topology.cells
             traversable = sum(bool(c.walkable) and not c.non_walkable_during_fight for c in cells)
             blocked_los = sum(c.line_of_sight is False for c in cells)
@@ -659,7 +668,7 @@ class MainWindow(QMainWindow):
             self.combat.set_declared_map(
                 f"{declared.label} — {len(cells)} cellules GameData, {traversable} traversables en combat, "
                 f"{blocked_los} bloquant la LOS, indices rouge/bleu {red}/{blue} (non validés). "
-                "PythonBot ne sait pas si la map change dans le jeu : redéclarez-la."
+                "Mode secours manuel : « Revenir à la détection automatique » pour la reprendre."
             )
             profile_id = self.client_panel.profile_id
             if profile_id is not None:
@@ -872,13 +881,86 @@ class MainWindow(QMainWindow):
             },
         )
         self._last_observation = None
+        self._prepare_map_detection(calibration.layout_signature)
         self.combat.mode.setCurrentText("Vision réelle")
         self.combat.set_observing(True)
         self.observation_timer.start()
         self._on_event(CombatEvent("INFO", "vision.observation", "Session d'observation réelle démarrée sans action"))
         self._observe_once()
 
+    def _prepare_map_detection(self, layout_signature: str | None) -> None:
+        """Index spatial GameData + source de topologie dans un thread : Qt n'est jamais bloqué.
+
+        Le premier lancement construit l'index (≈ 1 min) ; ensuite il vient du cache runtime.
+        """
+        import threading
+        folder = str(self.storage.get_setting("dofus_client_directory") or "").strip()
+        if not folder:
+            self.combat.set_declared_map("Détection de la map impossible : configurez le dossier du client "
+                                         "(Paramètres → Données du client).")
+            return
+        state = self._map_preparation
+        if state is not None and state.get("folder") == folder and state.get("error") is None:
+            state["layout"] = layout_signature
+            return
+        state = {"folder": folder, "layout": layout_signature, "index": None, "source": None, "error": None,
+                 "done": False}
+        self._map_preparation = state
+        self.combat.set_declared_map("Détection de la map… (préparation de l'index GameData, ≈ 1 min la 1re fois)")
+        known_source = self._topology_source if self._topology_folder == folder else None
+
+        def work() -> None:
+            from combatbot.gamedata.map_index import load_or_build
+            try:
+                cache = app_data_root() / "data" / "gamedata" / "cache"
+                state["source"] = known_source or GameDataTopologySource.for_client(folder, cache)
+                state["index"] = load_or_build(Path(folder), cache)
+            except Exception as exc:  # noqa: BLE001 - détection indisponible, secours manuel
+                state["error"] = str(exc)
+            state["done"] = True
+
+        threading.Thread(target=work, name="map-index", daemon=True).start()
+
+    def _attach_map_detection(self) -> None:
+        """Branche le service de détection sur l'observateur dès que l'index est prêt."""
+        state, observer = self._map_preparation, self._observer
+        if state is None or not state.get("done") or observer is None or observer.map_context is not None:
+            return
+        if state.get("error"):
+            if not state.get("reported"):
+                state["reported"] = True
+                self.combat.set_declared_map(f"Détection automatique indisponible : {state['error']} — "
+                                             "utilisez le mapId manuel en secours.")
+            return
+        from combatbot.vision.map_resolver import MapContextResolver, MapContextService, MapKnowledge
+        root = app_data_root() / "data"
+        self._topology_source, self._topology_folder = state["source"], state["folder"]
+        if observer.grid_resolver is not None:
+            observer.grid_resolver.topology_source = state["source"]
+            observer.grid_resolver.map_identity = self._map_identity
+        observer.map_context = MapContextService(
+            MapContextResolver(state["index"], MapKnowledge(root / "map_knowledge.json")),
+            identity=self._map_identity, layout_signature=state.get("layout"),
+            journal=root / "logs" / "map-resolution.jsonl")
+        current = self._map_identity.current_map()
+        if current is not None and current.source is not MapIdSource.AUTO_DETECTED:
+            observer.map_context.declare_manual(current.map_id)
+            self._map_identity.declare(current.map_id, current.source)
+        self.combat.set_declared_map("Détection automatique de la map active (aucune saisie de /mapid nécessaire).")
+
+    def _resume_map_detection(self) -> None:
+        observer = self._observer
+        if observer is not None and observer.map_context is not None:
+            observer.map_context.resume_automatic()
+        else:
+            self._map_identity.declare(None)
+        self.combat.map_auto.setVisible(False)
+        self.combat.set_declared_map("Retour à la détection automatique de la map.")
+
     def _stop_observation(self) -> None:
+        observer = self._observer
+        if observer is not None and getattr(observer, "map_context", None) is not None:
+            observer.map_context.close()
         was_active = self.observation_timer.isActive() or self._observer is not None
         self.observation_timer.stop()
         self._observer = None
@@ -890,6 +972,7 @@ class MainWindow(QMainWindow):
         observer = self._observer
         if observer is None or self._observation_pending or self.jobs.active:
             return
+        self._attach_map_detection()
         self._observation_pending = True
 
         def success(value: object) -> None:
@@ -926,10 +1009,12 @@ class MainWindow(QMainWindow):
     def _capture_sequence(self, packet: ObservationPacket) -> None:
         """Séquence d'entités en lecture seule. 3B-5E : toute frame où la zone de combat a changé
         localement est gardée (≥ 0,4 s d'écart) ; seules les frames identiques sont ignorées."""
-        if packet.observation.grid.grid_source != "GAMEDATA_PROJECTED":
-            self.combat.observation_help.setText(
-                "Séquence non enregistrée : déclarez la map et calibrez la projection (grille GameData).")
-            self.combat.recording_status = ("todo", "Enregistrement bloqué : grille GameData absente sur cette image.")
+        from combatbot.corpus.recording_guard import recording_block_reason
+        blocked = recording_block_reason(packet)
+        if blocked is not None:
+            # LOT 3B-6C : mieux vaut perdre une frame qu'enregistrer une frame avec une mauvaise map.
+            self.combat.observation_help.setText(f"Séquence non enregistrée : {blocked}")
+            self.combat.recording_status = ("todo", blocked)
             return
         from combatbot.vision.combat_models import sequence_change
         image = np.asarray(packet.original)

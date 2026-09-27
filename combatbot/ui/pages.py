@@ -213,6 +213,7 @@ class CombatPage(QWidget):
     observation_save_requested = Signal()
     player_reference_requested = Signal(object)
     map_load_requested = Signal(str)
+    map_auto_requested = Signal()
     projection_calibration_requested = Signal()
     overlay_options_changed = Signal(object)
     legacy_fallback_changed = Signal(bool)
@@ -281,16 +282,20 @@ class CombatPage(QWidget):
         controls.addStretch()
         real_layout.addLayout(controls)
         map_row = QHBoxLayout()
-        map_row.addWidget(QLabel("Map ID active :"))
+        map_row.addWidget(QLabel("Map : détection automatique · secours :"))
         self.map_id_input = QLineEdit()
-        self.map_id_input.setPlaceholderText("saisie manuelle (non détectée)")
+        self.map_id_input.setPlaceholderText("mapId manuel (facultatif)")
         self.map_id_input.setMaximumWidth(170)
-        self.map_load = QPushButton("Charger")
+        self.map_load = QPushButton("Utiliser ce mapId manuellement")
+        self.map_auto = QPushButton("Revenir à la détection automatique")
+        self.map_auto.setVisible(False)
+        self.map_auto.clicked.connect(self.map_auto_requested)
         self.map_load.clicked.connect(lambda: self.map_load_requested.emit(self.map_id_input.text()))
         self.map_id_input.returnPressed.connect(self.map_load.click)
         self.map_id_verified = QCheckBox("vérifié par /mapid")
         self.map_id_verified.setToolTip("Cochez seulement si l'ID vient de la commande /mapid tapée dans le client")
-        self.map_status = QLabel("Aucun map ID déclaré — la map active n'est pas détectée automatiquement")
+        self.map_status = QLabel("La map est détectée automatiquement pendant l'observation (coordonnées affichées "
+                                 "en haut à gauche du jeu + GameData). Le mapId manuel ne sert qu'en secours.")
         self.map_status.setWordWrap(True)
         self.projection_calibrate = QPushButton("Calibrer projection de grille")
         self.projection_calibrate.clicked.connect(self.projection_calibration_requested)
@@ -299,7 +304,7 @@ class CombatPage(QWidget):
         self.grid_recipe.clicked.connect(self.grid_recipe_requested)
         self.legacy_fallback = QCheckBox("Autoriser la grille historique en secours")
         self.legacy_fallback.toggled.connect(self.legacy_fallback_changed)
-        for widget in (self.map_id_input, self.map_id_verified, self.map_load, self.projection_calibrate,
+        for widget in (self.map_id_input, self.map_id_verified, self.map_load, self.map_auto, self.projection_calibrate,
                        self.grid_recipe, self.legacy_fallback):
             map_row.addWidget(widget)
         map_row.addStretch()
@@ -371,6 +376,7 @@ class CombatPage(QWidget):
         self.real_values: dict[str, QLabel] = {}
         real_form = QFormLayout()
         for key, caption in (
+            ("map", "Map"), ("map_coords", "Coordonnées"), ("map_source", "Détection"),
             ("combat", "Combat"), ("turn", "Mon tour"), ("ap", "PA"), ("mp", "PM"),
             ("player", "Ma cellule"), ("enemies", "Ennemis détectés"), ("occupancy", "Occupation"),
             ("grid", "Cellules de grille"), ("grid_source", "Source de grille"),
@@ -450,6 +456,40 @@ class CombatPage(QWidget):
 
     def set_declared_map(self, text: str) -> None:
         self.map_status.setText(text)
+
+    def _show_map_resolution(self, resolution: dict | None, grid) -> None:
+        """LOT 3B-6C : bloc Map (ID, coordonnées, source, confiance, GameData, projection)."""
+        if not resolution:
+            self.real_values["map"].setText("Détection indisponible (index GameData non chargé)")
+            self.real_values["map_coords"].setText("—")
+            self.real_values["map_source"].setText("—")
+            return
+        status = resolution.get("status")
+        coords = resolution.get("coordinates")
+        self.real_values["map_coords"].setText(f"[{coords[0]},{coords[1]}]" if coords else "—")
+        labels = {"UNKNOWN": "Détection de la map…", "TRANSITION": "Changement de map en cours…",
+                  "STALE": "Lecture des coordonnées trop ancienne", "INCONSISTENT": "Lecture incohérente avec GameData"}
+        if status == "RESOLVED":
+            aligned = (grid.alignment or {}).get("status") == "ALIGNED"
+            loaded = grid.grid_source == GRID_SOURCE_GAMEDATA and grid.map_id_declared == resolution.get("map_id")
+            text = (f"{resolution.get('map_id')} — GameData {'OK' if loaded else 'en chargement'} — "
+                    f"projection {'ALIGNÉE' if aligned else 'à vérifier'}")
+            if loaded and not aligned and grid.grid_visibility_state == "VISIBLE":
+                text += " (Map détectée automatiquement, mais projection de grille à vérifier.)"
+        elif status == "AMBIGUOUS":
+            candidates = resolution.get("candidates") or []
+            text = (f"AMBIGUË : {resolution.get('candidate_count')} candidates ({', '.join(map(str, candidates[:4]))}"
+                    f"{'…' if len(candidates) > 4 else ''}) — saisissez le mapId en secours si besoin")
+        else:
+            text = labels.get(status, str(status))
+            if resolution.get("map_id") is not None:
+                text += f" (suivi conservé sur {resolution.get('map_id')})"
+        self.real_values["map"].setText(text)
+        manual = resolution.get("source") == "MANUAL"
+        self.map_auto.setVisible(manual)
+        source = "Manuelle (secours)" if manual else ("Automatique — " + (resolution.get("source") or "—"))
+        self.real_values["map_source"].setText(f"{source} · confiance {float(resolution.get('confidence') or 0):.1%}"
+                                               f" · {resolution.get('reason') or ''}")
 
     def _preview_hovered(self, point: tuple[int, int]) -> None:
         packet = self._last_packet
@@ -557,13 +597,15 @@ class CombatPage(QWidget):
         grid = observation.grid
         source = grid.grid_source
         if source == GRID_SOURCE_GAMEDATA:
-            source += f" — map {grid.map_id_declared} (déclarée manuellement), {grid.projection_status}"
+            origin = "détectée automatiquement" if grid.map_id_source == "auto_detected" else "déclarée manuellement"
+            source += f" — map {grid.map_id_declared} ({origin}), {grid.projection_status}"
         else:
             source += f" — {packet.metadata.get('grid_source_reason', '')}"
         if packet.metadata.get("requires_recalibration"):
             source += " — recalibration de projection requise"
         self.real_values["grid_source"].setText(source)
         self._show_validation(grid)
+        self._show_map_resolution(packet.metadata.get("map_resolution"), grid)
         self.real_values["quality"].setText(f"{observation.observation_confidence:.0%}")
         self.real_values["safe"].setText("Oui" if observation.safe_for_decision else "Non")
         self.real_values["performance"].setText(f"{packet.elapsed_ms:.0f} ms")
