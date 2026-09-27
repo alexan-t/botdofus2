@@ -197,30 +197,39 @@ class MainWindow(QMainWindow):
         self.dashboard.values["character"].setText(str(storage.get_setting("player_name")))
         self.combat.set_snapshot(CombatEngine(storage.list_spells(), storage.load_strategy()).snapshot())
 
+    # Intégrée dans DofBot2, cette vue n'est plus une fenêtre : l'état plein écran est celui de l'hôte.
     def _toggle_fullscreen(self) -> None:
-        if self.isFullScreen():
+        host = self.window()
+        if host.isFullScreen():
             self._leave_fullscreen()
             return
-        self._fullscreen_restore_maximized = self.isMaximized()
-        self._fullscreen_restore_geometry = self.normalGeometry()
-        self.showFullScreen()
+        self._fullscreen_restore_maximized = host.isMaximized()
+        self._fullscreen_restore_geometry = host.normalGeometry()
+        host.showFullScreen()
+        self._sync_fullscreen_label()
 
     def _leave_fullscreen(self) -> None:
-        if not self.isFullScreen():
+        host = self.window()
+        if not host.isFullScreen():
             return
         if self._fullscreen_restore_maximized:
-            self.showMaximized()
+            host.showMaximized()
         else:
-            self.showNormal()
+            host.showNormal()
             if self._fullscreen_restore_geometry is not None:
-                self.setGeometry(self._fullscreen_restore_geometry)
+                host.setGeometry(self._fullscreen_restore_geometry)
+        self._sync_fullscreen_label()
+
+    def _sync_fullscreen_label(self) -> None:
+        if hasattr(self, "fullscreen_button"):
+            self.fullscreen_button.setText(
+                "Quitter le plein écran  ·  F11" if self.window().isFullScreen() else "Plein écran  ·  F11"
+            )
 
     def changeEvent(self, event: QEvent) -> None:
         super().changeEvent(event)
-        if event.type() == QEvent.Type.WindowStateChange and hasattr(self, "fullscreen_button"):
-            self.fullscreen_button.setText(
-                "Quitter le plein écran  ·  F11" if self.isFullScreen() else "Plein écran  ·  F11"
-            )
+        if event.type() == QEvent.Type.WindowStateChange:
+            self._sync_fullscreen_label()
 
     def _navigate(self, index: int) -> None:
         self.stack.setCurrentIndex(index)
@@ -293,7 +302,7 @@ class MainWindow(QMainWindow):
 
     def _on_ready(self) -> None:
         if self._closing and self.controller.thread is None and not self.jobs.active and not self._pending_capture:
-            self.close()
+            self.window().close()
         elif not self._closing:
             self.dashboard.set_status(self._status)
 
@@ -307,12 +316,12 @@ class MainWindow(QMainWindow):
         self._pending_capture = True
         self.client_panel.connection_status.setText("Vérification de la fenêtre et de la capture…")
         known = self.storage.known_icons(profile_id)
-        self.hide()
+        self.window().hide()
 
         def success(result: ConnectionResult) -> None:
             self._pending_capture = False
-            self.show()
-            self.raise_()
+            self.window().show()
+            self.window().raise_()
             if self.client_panel.profile_id != profile_id or self.client_panel.windows.currentData() != hwnd:
                 self.client_panel.show_error("Le profil ou la fenêtre a changé pendant la vérification")
                 return
@@ -342,8 +351,8 @@ class MainWindow(QMainWindow):
 
         def failure(message: str) -> None:
             self._pending_capture = False
-            self.show()
-            self.raise_()
+            self.window().show()
+            self.window().raise_()
             self._disconnect_client()
             self.client_panel.set_connection_result(
                 ConnectionResult("capture", False, "UNEXPECTED_ERROR", message, {"hwnd": hwnd})
@@ -440,7 +449,7 @@ class MainWindow(QMainWindow):
             self._vision_error("Connectez d'abord une fenêtre DOFUS dans Paramètres.")
             return
         self._pending_capture = True
-        self.hide()  # Évite que la fenêtre PythonBot recouvre la zone capturée.
+        self.window().hide()  # Évite que la fenêtre recouvre la zone capturée (hôte DofBot2 inclus).
 
         def work():
             frame = capture_client(hwnd)
@@ -449,8 +458,8 @@ class MainWindow(QMainWindow):
         def success(value) -> None:
             self._pending_capture = False
             frame, result = value
-            self.show()
-            self.raise_()
+            self.window().show()
+            self.window().raise_()
             if self.client_panel.profile_id != profile_id or self.client_panel.connected_hwnd != hwnd:
                 self.client_panel.diagnostic.emit("Résultat de capture ignoré : profil ou fenêtre modifié")
                 return
@@ -462,8 +471,8 @@ class MainWindow(QMainWindow):
 
         def failure(message: str) -> None:
             self._pending_capture = False
-            self.show()
-            self.raise_()
+            self.window().show()
+            self.window().raise_()
             self._vision_error(message)
 
         QTimer.singleShot(delay_ms, lambda: self.jobs.submit(work, success, failure))
@@ -534,7 +543,7 @@ class MainWindow(QMainWindow):
             return
         self.scan_panel.summary.setText("Survolez le sort dans DOFUS : capture avant/après dans 3 secondes…")
         self._pending_capture = True
-        self.hide()
+        self.window().hide()
 
         def work():
             before = capture_client(hwnd)
@@ -552,8 +561,8 @@ class MainWindow(QMainWindow):
 
         def success(value) -> None:
             self._pending_capture = False
-            self.show()
-            self.raise_()
+            self.window().show()
+            self.window().raise_()
             if self.client_panel.profile_id != profile_id or self.client_panel.connected_hwnd != hwnd:
                 self.scan_panel.summary.setText("Profil ou fenêtre changé pendant la lecture ; résultat ignoré")
                 return
@@ -575,8 +584,8 @@ class MainWindow(QMainWindow):
 
         def failure(message: str) -> None:
             self._pending_capture = False
-            self.show()
-            self.raise_()
+            self.window().show()
+            self.window().raise_()
             self.scan_panel.summary.setText(f"Échec de lecture : {message}")
             self.client_panel.diagnostic.emit(f"[INFOBULLE] {message}")
 

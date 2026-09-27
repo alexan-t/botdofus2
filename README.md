@@ -6,6 +6,22 @@ Le LOT 3B-0 ajoute un corpus volontaire, une annotation humaine indépendante et
 
 Le LOT 3B-2 change la source de la grille réelle : les 560 cellules, leurs identités (`DofusCellId`), leur voisinage, la walkability et la LOS **statiques** viennent de GameData ; la vision ne fait plus qu'estimer la projection écran et l'occupation. Voir [LOT-3B-2-GAMEDATA-GRID.md](LOT-3B-2-GAMEDATA-GRID.md).
 
+## Interface DofBot2 (migration écran par écran)
+
+L'application s'ouvre désormais dans la nouvelle interface **DofBot2** (maquette
+`design_handoff_dofbot2_ui/`), fenêtre sans cadre avec barre de titre custom. Écrans livrés :
+
+1. **Démarrage** : logo, progression ~1,8 s ; un clic passe l'écran.
+2. **Connexion** : fenêtres du jeu détectées (titre « Dofus · perso », taille, écran, miniature
+   capturée sans activer le jeu), actualisation automatique toutes les 3 s.
+3. **Choix du profil** et 4. **Création** (nom, couleur ou image d'avatar, classe facultative).
+   L'avatar et le niveau sont stockés dans `profile_settings` : pas de migration SQLite.
+
+Après le choix du profil, l'interface historique s'affiche sous la barre profil de DofBot2, profil
+sélectionné et fenêtre choisie en cours de vérification ; elle sera remplacée par les onglets
+Accueil, Donjons, Zones, Sorts, Alertes et Réglages. `python main.py --screen=connect` (ou `profile`,
+`create`, `app`) ouvre directement un écran. Polices Manrope et JetBrains Mono : `assets/fonts/` (SIL OFL).
+
 ## Grille GameData projetée (LOT 3B-2)
 
 Chaîne : `DofusCellId` → `GridCoordinate` (GameData) → `GridScreenTransform` → `CombatPoint` → `LayoutTransform` → `ClientPoint` / `ScreenPoint`.
