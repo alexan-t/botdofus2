@@ -156,7 +156,7 @@ LOCAL LOG MAP SOURCE:            UNAVAILABLE
 COORDINATE READER:               PARTIAL   (RapidOCR + parseur strict ; pas de gabarits spécialisés)
 GAMEDATA SPATIAL INDEX:          PASS
 MAP RESOLVER:                    PASS offline + live (extérieur, graphe, salles de donjon)
-MAP CHANGE DETECTION:            PASS live (à pied, entrée de donjon, salle à salle) ; zaap non testé
+MAP CHANGE DETECTION:            PASS live (à pied, entrée de donjon, salle à salle, zaap)
 GAMEDATA AUTOLOAD:               PASS (tests) ; live à confirmer
 CALIBRATION REUSE:               PASS (tests) ; live à confirmer
 GRID ALIGNMENT AFTER MAP CHANGE: PARTIAL   (live à faire)
@@ -202,8 +202,8 @@ Rejeu des deux observations réelles : Première salle → **121373185**, Deuxi�
 
 L'utilisateur confirme que les salles du donjon Bouftou sont désormais reconnues. Couverture live
 observée : cartes extérieures à pied (dont désambiguïsation par le graphe), entrée de donjon (transition
-non locale) et passage de salle en salle. Non rapportés à ce stade : alignement de grille après chaque
-changement, zaap.
+non locale), passage de salle en salle et zaap (confirmé par l'utilisateur). Non rapportés à ce stade : alignement de grille après chaque
+changement.
 
 Remarque de l'utilisateur pour plus tard (hors 3B-6C, aucune action) : en mode créature, les boss de
 donjon portent une **couronne dorée** au-dessus du sprite ; utile pour une future option « cibler le
