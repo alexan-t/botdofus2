@@ -15,6 +15,9 @@ application_data = []
 reference = root / "assets" / "user_spellbar_reference.png"
 if reference.exists():
     application_data.append((str(reference), "assets"))
+fonts = root / "assets" / "fonts"
+for font_file in sorted(fonts.glob("*.ttf")) + sorted(fonts.glob("OFL-*.txt")):
+    application_data.append((str(font_file), "assets/fonts"))
 
 icon_path = root / "assets" / "pythonbot.ico"
 icon = str(icon_path) if icon_path.exists() else None

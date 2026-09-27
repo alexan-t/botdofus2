@@ -305,6 +305,19 @@ class ClientPanel(QWidget):
             self.progress.setValue(1 if hwnd else 0)
         self.update_state()
 
+    def connect_to(self, hwnd: int) -> bool:
+        """Sélectionne la fenêtre choisie à l'écran « Connexion » de DofBot2 puis la vérifie.
+        Retourne False si elle n'est plus listée ; rien n'est relancé si elle est déjà connectée."""
+        if self.connected_hwnd == hwnd:
+            return True
+        self.refresh_windows()
+        index = self.windows.findData(hwnd)
+        if index < 0:
+            return False
+        self.windows.setCurrentIndex(index)
+        self._connect()
+        return True
+
     def _connect(self) -> None:
         hwnd = self.windows.currentData()
         if hwnd is None:

@@ -6,6 +6,34 @@ Le LOT 3B-0 ajoute un corpus volontaire, une annotation humaine indépendante et
 
 Le LOT 3B-2 change la source de la grille réelle : les 560 cellules, leurs identités (`DofusCellId`), leur voisinage, la walkability et la LOS **statiques** viennent de GameData ; la vision ne fait plus qu'estimer la projection écran et l'occupation. Voir [LOT-3B-2-GAMEDATA-GRID.md](LOT-3B-2-GAMEDATA-GRID.md).
 
+## Interface DofBot2
+
+L'application s'ouvre dans la nouvelle interface **DofBot2** (maquette `design_handoff_dofbot2_ui/`),
+fenêtre sans cadre avec barre de titre custom :
+
+1. **Démarrage** : logo, progression ~1,8 s ; un clic passe l'écran.
+2. **Connexion** : fenêtres du jeu détectées (titre « Dofus · perso », taille, écran, miniature
+   capturée sans activer le jeu), actualisation automatique toutes les 3 s.
+3. **Choix du profil** et 4. **Création** (nom, couleur ou image d'avatar, classe facultative).
+5. **Application** : barre profil + état + Démarrer/Arrêter, dock de bulles et six onglets à accordéons.
+   - **Accueil** : activité programmée et journal du profil (7 dernières entrées).
+   - **Donjons / Zones** : choix du lieu, options facultatives, « Programmer ».
+   - **Sorts** : icônes lues par le scan de la barre de sorts (`profile_spells`) ; coût, portée et
+     conditions sont modifiables (un sort confirmé le reste), cible/moment/priorité par sort.
+     « Relancer la détection » utilise le scan existant sur la fenêtre connectée.
+   - **Alertes** : toasts dans la fenêtre, ou fenêtre toast au premier plan quand vous êtes sur une
+     autre application ; filtres par type, son, durée, webhook Discord.
+   - **Réglages** : fenêtre et profil (« Changer »), F8 démarrer/pause et F9 arrêt d'urgence (raccourcis
+     globaux Windows), lancement avec Windows (clé HKCU `Run`), réduction dans la zone de notification,
+     **Outils avancés** : l'interface historique (calibration, scan, observation, corpus).
+
+Démarrer/Arrêter gère la session (état, journal, alertes, signal `running_changed`) : aucun moteur
+d'automatisation n'y est encore branché et DofBot2 reste en lecture seule vis-à-vis du jeu. Les lieux
+proposés sont le catalogue de la maquette ; illustrations et images restent des emplacements à fournir.
+Réglages stockés en SQLite (`profile_settings` / `settings`), sans migration du schéma.
+`python main.py --screen=connect` (ou `profile`, `create`, `app`) ouvre directement un écran.
+Polices Manrope et JetBrains Mono : `assets/fonts/` (SIL OFL).
+
 ## Grille GameData projetée (LOT 3B-2)
 
 Chaîne : `DofusCellId` → `GridCoordinate` (GameData) → `GridScreenTransform` → `CombatPoint` → `LayoutTransform` → `ClientPoint` / `ScreenPoint`.

@@ -268,6 +268,14 @@ class Storage:
         ).fetchall()
         return list(reversed(rows))
 
+    def recent_profile_events(self, prefix: str, profile_id: int, limit: int) -> list[sqlite3.Row]:
+        """Derniers événements d'un profil dont le type commence par ``prefix`` (plus récent d'abord)."""
+        return self.connection.execute("""
+            SELECT * FROM events
+            WHERE event LIKE ? AND json_extract(context_json, '$.profile_id') = ?
+            ORDER BY id DESC LIMIT ?
+        """, (prefix.replace("%", "") + "%", profile_id, limit)).fetchall()
+
     def record_combat(self, outcome: str, turns: int, xp: int, kamas: int) -> None:
         self.connection.execute(
             "INSERT INTO combats (ended_at, outcome, turns, xp, kamas) VALUES (?, ?, ?, ?, ?)",

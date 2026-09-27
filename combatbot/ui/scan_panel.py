@@ -17,6 +17,7 @@ from combatbot.vision.models import RecognizedText, ScanResult
 class ScanPanel(QWidget):
     scan_requested = Signal(int, int, int, float)
     tooltip_requested = Signal(int)
+    scan_finished = Signal(int)   # nombre d'icônes enregistrées (écran Sorts de DofBot2)
 
     def __init__(self, storage: Storage) -> None:
         super().__init__()
@@ -143,6 +144,10 @@ class ScanPanel(QWidget):
             "Vérifiez ces valeurs avant le scan."
         )
 
+    def request_scan(self) -> None:
+        """Relance le scan avec la grille enregistrée pour le profil (bouton de DofBot2)."""
+        self._request_scan()
+
     def _request_scan(self) -> None:
         if self.profile_id is None:
             QMessageBox.warning(self, "Scan", "Sélectionnez un profil.")
@@ -183,6 +188,7 @@ class ScanPanel(QWidget):
             f"{len(result.empty_slots)} cases vides, {duplicates} doublons ignorés. "
             f"{len(errors)} emplacement(s) à vérifier."
         )
+        self.scan_finished.emit(len(result.candidates) - duplicates)
         if errors:
             QMessageBox.warning(self, "Scan partiel", "\n".join(errors))
 
