@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&amp;family=JetBrains+Mono:wght@500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#070908;font-family:Manrope,system-ui,sans-serif;color:#e6ede4;-webkit-font-smoothing:antialiased}
+a{color:#8fd14f;text-decoration:none}a:hover{color:#b6e68a}
+button{font-family:inherit}
+input::placeholder{color:#5d6a5f}
+</style>
+</helmet>
+<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;background:radial-gradient(ellipse at 50% 0%, #0f1a0f 0%, #070908 60%)">
+<div style="width:{{ fitW }};height:{{ fitH }};flex:none;position:relative">
+<div data-screen-label="DofBot2 window" style="position:absolute;left:0;top:0;transform:{{ fitT }};transform-origin:0 0;width:1200px;height:760px;background:#0c100d;border-radius:14px;border:1px solid rgba(255,255,255,.07);overflow:hidden;position:relative;display:flex;flex-direction:column;box-shadow:0 40px 80px rgba(0,0,0,.55)">
+
+<div style="height:40px;flex:none;display:flex;align-items:center;gap:10px;padding:0 0 0 14px;border-bottom:1px solid rgba(255,255,255,.05);background:#0a0d0b">
+  <div style="width:20px;height:20px;border-radius:6px;background:#8fd14f;color:#0b1408;font:800 10px Manrope;display:flex;align-items:center;justify-content:center">D2</div>
+  <div style="font-size:12px;font-weight:700;letter-spacing:.02em">DofBot2</div>
+  <div style="font-size:12px;color:#5d6a5f">{{ crumb }}</div>
+  <div style="flex:1"></div>
+  <div style="display:flex;height:40px">
+    <div style="width:46px;display:flex;align-items:center;justify-content:center;color:#8e9c8f;font-size:12px">—</div>
+    <div style="width:46px;display:flex;align-items:center;justify-content:center;color:#8e9c8f;font-size:11px">▢</div>
+    <div style="width:46px;display:flex;align-items:center;justify-content:center;color:#8e9c8f;font-size:13px" style-hover="background:#c42b1c;color:#fff">✕</div>
+  </div>
+</div>
+
+<div style="flex:1;position:relative;min-height:0">
+
+<sc-if value="{{ isSplash }}" hint-placeholder-val="{{ true }}">
+<div data-screen-label="01 Splash" onClick="{{ skipSplash }}" title="Cliquer pour passer" style="cursor:pointer;position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px">
+  <div style="width:96px;height:96px;border-radius:28px;background:#8fd14f;color:#0b1408;display:flex;align-items:center;justify-content:center;font:800 34px Manrope;letter-spacing:-.04em;box-shadow:0 0 0 10px rgba(143,209,79,.08),0 0 60px rgba(143,209,79,.25)">D2</div>
+  <div style="text-align:center">
+    <div style="font-size:34px;font-weight:800;letter-spacing:-.03em">DofBot2</div>
+    <div style="font-size:15px;color:#8e9c8f;margin-top:6px">Votre assistant de farm, donjons et zones</div>
+  </div>
+  <div style="width:260px;height:4px;border-radius:2px;background:#1b231e;overflow:hidden;margin-top:14px">
+    <div style="height:100%;width:{{ progW }};background:#8fd14f;border-radius:2px;transition:width .12s linear"></div>
+  </div>
+  <div style="font:500 12px 'JetBrains Mono',monospace;color:#5d6a5f">{{ splashMsg }}</div>
+</div>
+</sc-if>
+
+<sc-if value="{{ isOnboard }}">
+<div style="position:absolute;inset:0;display:flex;flex-direction:column">
+  <div style="display:flex;justify-content:center;gap:28px;padding:22px 0 0">
+    <sc-for list="{{ steps }}" as="st" hint-placeholder-count="3">
+      <div style="display:flex;align-items:center;gap:10px">
+        <div style="width:24px;height:24px;border-radius:50%;background:{{ st.bg }};color:{{ st.color }};font:700 11px Manrope;display:flex;align-items:center;justify-content:center;border:1px solid {{ st.border }}">{{ st.n }}</div>
+        <div style="font-size:13px;font-weight:600;color:{{ st.text }}">{{ st.label }}</div>
+      </div>
+    </sc-for>
+  </div>
+
+  <sc-if value="{{ isConnect }}">
+  <div data-screen-label="02 Connexion" style="flex:1;display:grid;grid-template-columns:1fr 1fr;gap:56px;padding:40px 72px 56px;align-items:center">
+    <div style="display:flex;flex-direction:column;gap:16px">
+      <div style="height:320px;border-radius:18px;border:1px solid rgba(143,209,79,.15);background:repeating-linear-gradient(135deg,rgba(143,209,79,.05) 0 10px,transparent 10px 20px),#111712;display:flex;align-items:center;justify-content:center;font:500 12px 'JetBrains Mono',monospace;color:#6f7f71;text-align:center;padding:24px">illustration<br>DofBot2 se relie à la fenêtre du jeu</div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+        <div style="font-size:12px;color:#8e9c8f;line-height:1.5"><div style="color:#8fd14f;font-weight:700;margin-bottom:2px">1. Lancez le jeu</div>Connectez votre personnage normalement.</div>
+        <div style="font-size:12px;color:#8e9c8f;line-height:1.5"><div style="color:#8fd14f;font-weight:700;margin-bottom:2px">2. Choisissez</div>Sélectionnez sa fenêtre dans la liste.</div>
+        <div style="font-size:12px;color:#8e9c8f;line-height:1.5"><div style="color:#8fd14f;font-weight:700;margin-bottom:2px">3. C'est prêt</div>DofBot2 lit l'écran de cette fenêtre.</div>
+      </div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:22px">
+      <div>
+        <div style="font-size:30px;font-weight:800;letter-spacing:-.03em;line-height:1.15;text-wrap:pretty">Connectez-vous à la fenêtre du jeu</div>
+        <div style="font-size:15px;color:#8e9c8f;margin-top:10px;line-height:1.55;text-wrap:pretty">DofBot2 a trouvé ces fenêtres ouvertes. Choisissez celle du personnage à utiliser.</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <sc-for list="{{ windows }}" as="w" hint-placeholder-count="2">
+          <button onClick="{{ w.pick }}" style="display:flex;align-items:center;gap:14px;padding:14px 16px;border-radius:14px;background:{{ w.bg }};border:1px solid {{ w.border }};color:inherit;cursor:pointer;text-align:left">
+            <div style="width:44px;height:30px;border-radius:6px;background:#1b231e;border:1px solid rgba(255,255,255,.08);flex:none"></div>
+            <div style="flex:1;min-width:0">
+              <div style="font-size:14px;font-weight:700">{{ w.title }}</div>
+              <div style="font:500 11px 'JetBrains Mono',monospace;color:#6f7f71;margin-top:3px">{{ w.meta }}</div>
+            </div>
+            <div style="width:18px;height:18px;border-radius:50%;border:2px solid {{ w.ring }};display:flex;align-items:center;justify-content:center;flex:none"><div style="width:8px;height:8px;border-radius:50%;background:{{ w.dot }}"></div></div>
+          </button>
+        </sc-for>
+      </div>
+      <div style="display:flex;align-items:center;gap:16px">
+        <button onClick="{{ goProfile }}" style="height:46px;padding:0 26px;border-radius:23px;border:none;background:#8fd14f;color:#0b1408;font-size:14px;font-weight:800;cursor:pointer" style-hover="background:#a3dc6a">Se connecter</button>
+        <button onClick="{{ refreshWin }}" style="background:none;border:none;color:#8e9c8f;font-size:13px;font-weight:600;cursor:pointer" style-hover="color:#e6ede4">Actualiser la liste</button>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <sc-if value="{{ isProfile }}">
+  <div data-screen-label="03 Profils" style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:36px;padding-bottom:40px">
+    <div style="text-align:center">
+      <div style="font-size:30px;font-weight:800;letter-spacing:-.03em">Qui joue aujourd'hui ?</div>
+      <div style="font-size:15px;color:#8e9c8f;margin-top:8px">Chaque profil garde ses sorts, ses donjons et ses réglages.</div>
+    </div>
+    <div style="display:flex;gap:18px;flex-wrap:wrap;justify-content:center">
+      <sc-for list="{{ profiles }}" as="p" hint-placeholder-count="3">
+        <button onClick="{{ p.pick }}" style="width:176px;padding:26px 16px 20px;border-radius:20px;background:#121813;border:1px solid rgba(255,255,255,.06);color:inherit;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:12px" style-hover="border-color:rgba(143,209,79,.5);background:#151d16">
+          <div style="width:80px;height:80px;border-radius:50%;background:{{ p.avBg }};display:flex;align-items:center;justify-content:center;font:800 30px Manrope;color:#0b1408">{{ p.initial }}</div>
+          <div style="font-size:16px;font-weight:700">{{ p.name }}</div>
+          <div style="font-size:12px;color:#8e9c8f;margin-top:-6px">{{ p.meta }}</div>
+        </button>
+      </sc-for>
+      <button onClick="{{ goCreate }}" style="width:176px;padding:26px 16px 20px;border-radius:20px;background:transparent;border:1.5px dashed rgba(143,209,79,.35);color:inherit;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:12px" style-hover="background:rgba(143,209,79,.05)">
+        <div style="width:80px;height:80px;border-radius:50%;background:rgba(143,209,79,.1);display:flex;align-items:center;justify-content:center;font:300 38px Manrope;color:#8fd14f">+</div>
+        <div style="font-size:16px;font-weight:700;color:#8fd14f">Nouveau profil</div>
+        <div style="font-size:12px;color:#8e9c8f;margin-top:-6px">Avatar et nom au choix</div>
+      </button>
+    </div>
+  </div>
+  </sc-if>
+
+  <sc-if value="{{ isCreate }}">
+  <div data-screen-label="04 Créer un profil" style="flex:1;display:grid;grid-template-columns:340px 1fr;gap:56px;padding:40px 88px 56px;align-items:center">
+    <div style="border-radius:24px;background:#121813;border:1px solid rgba(255,255,255,.06);padding:40px 24px;display:flex;flex-direction:column;align-items:center;gap:16px">
+      <div style="font:600 11px 'JetBrains Mono',monospace;color:#5d6a5f;letter-spacing:.08em">APERÇU</div>
+      <div style="width:140px;height:140px;border-radius:50%;background:{{ newAvBg }};display:flex;align-items:center;justify-content:center;font:800 56px Manrope;color:#0b1408;box-shadow:0 0 0 8px rgba(255,255,255,.03)">{{ newInitial }}</div>
+      <div style="font-size:22px;font-weight:800;letter-spacing:-.02em">{{ newNameShown }}</div>
+      <div style="font-size:13px;color:#8e9c8f;margin-top:-8px">{{ newClass }}</div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:26px">
+      <div style="font-size:30px;font-weight:800;letter-spacing:-.03em">Créer un profil</div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <div style="font-size:13px;font-weight:700;color:#8e9c8f">Nom du profil</div>
+        <input value="{{ newName }}" onChange="{{ setName }}" placeholder="ex. Kira" style="height:48px;border-radius:12px;background:#121813;border:1px solid rgba(255,255,255,.08);color:#e6ede4;font:600 15px Manrope;padding:0 16px;outline:none;max-width:420px" style-focus="border-color:#8fd14f">
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div style="font-size:13px;font-weight:700;color:#8e9c8f">Avatar</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <sc-for list="{{ avatars }}" as="a" hint-placeholder-count="8">
+            <button onClick="{{ a.pick }}" style="width:44px;height:44px;border-radius:50%;background:{{ a.bg }};border:none;cursor:pointer;box-shadow:{{ a.ring }}"></button>
+          </sc-for>
+          <div style="width:44px;height:44px;border-radius:50%;border:1.5px dashed rgba(255,255,255,.2);display:flex;align-items:center;justify-content:center;color:#8e9c8f;font-size:18px" title="Importer une image">↑</div>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div style="font-size:13px;font-weight:700;color:#8e9c8f">Classe <span style="font-weight:500;color:#5d6a5f">· facultatif</span></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;max-width:560px">
+          <sc-for list="{{ classes }}" as="c" hint-placeholder-count="12">
+            <button onClick="{{ c.pick }}" style="height:32px;padding:0 14px;border-radius:16px;background:{{ c.bg }};border:1px solid {{ c.border }};color:{{ c.color }};font-size:13px;font-weight:600;cursor:pointer">{{ c.label }}</button>
+          </sc-for>
+        </div>
+      </div>
+      <div style="display:flex;gap:14px;align-items:center;margin-top:6px">
+        <button onClick="{{ createProfile }}" style="height:46px;padding:0 26px;border-radius:23px;border:none;background:#8fd14f;color:#0b1408;font-size:14px;font-weight:800;cursor:pointer" style-hover="background:#a3dc6a">Créer le profil</button>
+        <button onClick="{{ goProfile }}" style="background:none;border:none;color:#8e9c8f;font-size:13px;font-weight:600;cursor:pointer">Retour</button>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+</div>
+</sc-if>
+
+<sc-if value="{{ isApp }}">
+<div style="position:absolute;inset:0;display:flex;flex-direction:column">
+  <div style="height:64px;flex:none;display:flex;align-items:center;gap:14px;padding:0 28px;border-bottom:1px solid rgba(255,255,255,.05)">
+    <button onClick="{{ goProfile }}" style="display:flex;align-items:center;gap:10px;background:none;border:none;color:inherit;cursor:pointer;padding:6px 12px 6px 6px;border-radius:22px" style-hover="background:#121813">
+      <div style="width:32px;height:32px;border-radius:50%;background:{{ curAvBg }};display:flex;align-items:center;justify-content:center;font:800 13px Manrope;color:#0b1408">{{ curInitial }}</div>
+      <div style="text-align:left"><div style="font-size:13px;font-weight:700">{{ curName }}</div><div style="font-size:11px;color:#8e9c8f">{{ curMeta }}</div></div>
+    </button>
+    <div style="flex:1"></div>
+    <div style="display:flex;align-items:center;gap:8px;height:32px;padding:0 14px;border-radius:16px;background:#121813;font-size:12px;font-weight:600;color:{{ statusColor }}">
+      <div style="width:7px;height:7px;border-radius:50%;background:{{ statusColor }};box-shadow:0 0 8px {{ statusColor }}"></div>{{ statusLabel }}
+    </div>
+    <button onClick="{{ toggleRun }}" style="height:38px;padding:0 20px;border-radius:19px;border:{{ runBorder }};background:{{ runBg }};color:{{ runColor }};font-size:13px;font-weight:800;cursor:pointer">{{ runLabel }}</button>
+  </div>
+
+  <div style="flex:1;overflow:auto;min-height:0">
+    <div style="max-width:800px;margin:0 auto;padding:32px 24px 140px;display:flex;flex-direction:column;gap:24px">
+
+      <div style="display:flex;gap:24px;align-items:center">
+        <div style="width:200px;height:120px;flex:none;border-radius:16px;border:1px solid rgba(143,209,79,.14);background:repeating-linear-gradient(135deg,rgba(143,209,79,.05) 0 8px,transparent 8px 16px),#111712;display:flex;align-items:center;justify-content:center;font:500 11px 'JetBrains Mono',monospace;color:#6f7f71;text-align:center;padding:12px;box-sizing:border-box">{{ hero.img }}</div>
+        <div style="min-width:0">
+          <div style="font-size:28px;font-weight:800;letter-spacing:-.03em">{{ hero.title }}</div>
+          <div style="font-size:14px;color:#8e9c8f;margin-top:8px;line-height:1.55;text-wrap:pretty;max-width:480px">{{ hero.text }}</div>
+        </div>
+      </div>
+
+      <sc-if value="{{ isHome }}">
+      <div data-screen-label="05 Accueil" style="display:flex;flex-direction:column;gap:16px">
+        <div style="border-radius:18px;background:#121813;border:1px solid rgba(255,255,255,.06);padding:22px 24px;display:flex;align-items:center;gap:20px">
+          <div style="flex:1;min-width:0">
+            <div style="font:600 11px 'JetBrains Mono',monospace;color:#5d6a5f;letter-spacing:.08em">ACTIVITÉ PROGRAMMÉE</div>
+            <div style="font-size:20px;font-weight:800;margin-top:6px">{{ planName }}</div>
+            <div style="font-size:13px;color:#8e9c8f;margin-top:4px">{{ planSub }}</div>
+          </div>
+          <button onClick="{{ editPlan }}" style="height:38px;padding:0 18px;border-radius:19px;background:transparent;border:1px solid rgba(255,255,255,.12);color:#e6ede4;font-size:13px;font-weight:700;cursor:pointer" style-hover="border-color:#8fd14f">Modifier</button>
+          <button onClick="{{ toggleRun }}" style="height:38px;padding:0 20px;border-radius:19px;border:{{ runBorder }};background:{{ runBg }};color:{{ runColor }};font-size:13px;font-weight:800;cursor:pointer">{{ runLabel }}</button>
+        </div>
+        <div style="border-radius:18px;background:#121813;border:1px solid rgba(255,255,255,.06);padding:8px 24px">
+          <div style="font:600 11px 'JetBrains Mono',monospace;color:#5d6a5f;letter-spacing:.08em;padding:14px 0 6px">JOURNAL</div>
+          <sc-for list="{{ log }}" as="l" hint-placeholder-count="3">
+            <div style="display:flex;gap:16px;padding:12px 0;border-top:1px solid rgba(255,255,255,.04);font-size:13px">
+              <div style="font:500 12px 'JetBrains Mono',monospace;color:#5d6a5f;width:44px;flex:none">{{ l.time }}</div>
+              <div style="color:{{ l.color }}">{{ l.text }}</div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>
+
+      <sc-if value="{{ isPlaces }}">
+      <div data-screen-label="06 Donjons / Zones" style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px">
+        <sc-for list="{{ places }}" as="pl" hint-placeholder-count="4">
+          <button onClick="{{ pl.pick }}" style="padding:0;border-radius:16px;background:#121813;border:1.5px solid {{ pl.border }};color:inherit;cursor:pointer;overflow:hidden;text-align:left;display:flex;flex-direction:column">
+            <div style="height:78px;background:repeating-linear-gradient(135deg,rgba(143,209,79,.05) 0 8px,transparent 8px 16px),#0f1510;display:flex;align-items:center;justify-content:center;font:500 10px 'JetBrains Mono',monospace;color:#5d6a5f">image</div>
+            <div style="padding:10px 12px 12px">
+              <div style="font-size:13px;font-weight:700;line-height:1.3">{{ pl.name }}</div>
+              <div style="font-size:11px;color:#8e9c8f;margin-top:3px">{{ pl.meta }}</div>
+            </div>
+          </button>
+        </sc-for>
+      </div>
+      </sc-if>
+
+      <sc-if value="{{ isSorts }}">
+      <div data-screen-label="07 Sorts" style="display:flex;flex-direction:column;gap:16px">
+        <div style="border-radius:18px;background:#121813;border:1px solid rgba(255,255,255,.06);padding:18px 20px;display:flex;flex-direction:column;gap:14px">
+          <div style="display:flex;align-items:center;gap:12px">
+            <div style="flex:1;font-size:13px;color:#8e9c8f"><span style="color:#8fd14f;font-weight:700">20 sorts détectés</span> dans la barre de sorts · {{ detectAgo }}</div>
+            <button onClick="{{ redetect }}" style="height:32px;padding:0 14px;border-radius:16px;background:transparent;border:1px solid rgba(255,255,255,.12);color:#e6ede4;font-size:12px;font-weight:700;cursor:pointer" style-hover="border-color:#8fd14f">Relancer la détection</button>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(10,1fr);gap:8px">
+            <sc-for list="{{ spells }}" as="s" hint-placeholder-count="20">
+              <button onClick="{{ s.pick }}" style="padding:0;border:none;background:none;cursor:pointer;border-radius:12px;box-shadow:{{ s.ring }};opacity:{{ s.op }};position:relative;aspect-ratio:1">
+                <div style="width:100%;height:100%;border-radius:12px;background-color:#1b231e;background-size:cover;background-image:{{ s.bgi }}"></div>
+                <div style="position:absolute;right:-4px;top:-4px;min-width:18px;height:18px;border-radius:9px;background:#0c100d;border:1px solid rgba(255,255,255,.1);font:600 10px 'JetBrains Mono',monospace;color:#b6e68a;display:flex;align-items:center;justify-content:center">{{ s.pa }}</div>
+              </button>
+            </sc-for>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:16px;padding:4px 4px 0">
+          <div style="width:56px;height:56px;flex:none;border-radius:14px;background-color:#1b231e;background-size:cover;background-image:{{ spellBgi }}"></div>
+          <div style="flex:1">
+            <div style="font-size:18px;font-weight:800">{{ spellName }}</div>
+            <div style="font-size:12px;color:#8e9c8f;margin-top:3px">{{ spellMeta }}</div>
+          </div>
+          <div style="font-size:13px;color:#8e9c8f;font-weight:600">Utiliser en combat</div>
+          <button onClick="{{ spellUse.toggle }}" style="width:40px;height:22px;border-radius:11px;border:none;background:{{ spellUse.bg }};position:relative;cursor:pointer;flex:none;transition:background .2s"><span style="position:absolute;top:3px;left:{{ spellUse.x }};width:16px;height:16px;border-radius:50%;background:{{ spellUse.knob }};transition:left .2s"></span></button>
+        </div>
+      </div>
+      </sc-if>
+
+      <sc-if value="{{ isNotifs }}">
+      <div data-screen-label="08 Notifications" style="display:flex;align-items:center;gap:14px;border-radius:18px;background:#121813;border:1px solid rgba(255,255,255,.06);padding:16px 20px">
+        <div style="flex:1;font-size:13px;color:#8e9c8f;line-height:1.5">Les alertes apparaissent en bas à droite de l'écran, même quand vous êtes sur une autre application.</div>
+        <button onClick="{{ testToast }}" style="height:36px;padding:0 16px;border-radius:18px;background:transparent;border:1px solid rgba(143,209,79,.4);color:#b6e68a;font-size:12px;font-weight:700;cursor:pointer" style-hover="background:rgba(143,209,79,.08)">Envoyer un test</button>
+      </div>
+      </sc-if>
+
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <sc-for list="{{ accs }}" as="ac" hint-placeholder-count="3">
+          <div style="border-radius:16px;background:#121813;border:1px solid {{ ac.border }};overflow:hidden">
+            <button onClick="{{ ac.toggle }}" style="width:100%;display:flex;align-items:center;gap:14px;padding:16px 20px;background:none;border:none;color:inherit;cursor:pointer;text-align:left">
+              <div style="flex:1;min-width:0">
+                <div style="display:flex;align-items:center;gap:10px"><span style="font-size:15px;font-weight:700">{{ ac.title }}</span><sc-if value="{{ ac.optional }}"><span style="font:600 10px 'JetBrains Mono',monospace;color:#6f7f71;padding:2px 7px;border-radius:6px;background:#1b231e">facultatif</span></sc-if></div>
+                <div style="font-size:12px;color:#8e9c8f;margin-top:3px">{{ ac.sub }}</div>
+              </div>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8e9c8f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="transform:{{ ac.rot }};transition:transform .2s;flex:none"><path d="M6 9l6 6 6-6"></path></svg>
+            </button>
+            <sc-if value="{{ ac.open }}">
+            <div style="padding:0 20px 8px">
+              <sc-for list="{{ ac.rows }}" as="r" hint-placeholder-count="2">
+                <div style="display:flex;align-items:center;gap:16px;padding:13px 0;border-top:1px solid rgba(255,255,255,.05)">
+                  <div style="flex:1;min-width:0">
+                    <div style="font-size:14px;font-weight:600">{{ r.label }}</div>
+                    <div style="font-size:12px;color:#8e9c8f;margin-top:2px;text-wrap:pretty">{{ r.desc }}</div>
+                  </div>
+                  <sc-if value="{{ r.isSwitch }}">
+                    <button onClick="{{ r.toggle }}" style="width:40px;height:22px;border-radius:11px;border:none;background:{{ r.bg }};position:relative;cursor:pointer;flex:none;transition:background .2s"><span style="position:absolute;top:3px;left:{{ r.x }};width:16px;height:16px;border-radius:50%;background:{{ r.knob }};transition:left .2s"></span></button>
+                  </sc-if>
+                  <sc-if value="{{ r.isStep }}">
+                    <div style="display:flex;align-items:center;height:34px;border-radius:17px;background:#0c100d;border:1px solid rgba(255,255,255,.08);flex:none">
+                      <button onClick="{{ r.dec }}" style="width:34px;height:34px;background:none;border:none;color:#8e9c8f;font-size:16px;cursor:pointer" style-hover="color:#8fd14f">−</button>
+                      <div style="min-width:54px;text-align:center;font:600 13px 'JetBrains Mono',monospace">{{ r.val }}</div>
+                      <button onClick="{{ r.inc }}" style="width:34px;height:34px;background:none;border:none;color:#8e9c8f;font-size:16px;cursor:pointer" style-hover="color:#8fd14f">+</button>
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{ r.isSeg }}">
+                    <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;max-width:380px">
+                      <sc-for list="{{ r.opts }}" as="o" hint-placeholder-count="3">
+                        <button onClick="{{ o.on }}" style="height:30px;padding:0 12px;border-radius:15px;background:{{ o.bg }};border:1px solid {{ o.border }};color:{{ o.color }};font-size:12px;font-weight:700;cursor:pointer">{{ o.label }}</button>
+                      </sc-for>
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{ r.isInput }}">
+                    <input placeholder="{{ r.placeholder }}" style="width:300px;height:34px;border-radius:10px;background:#0c100d;border:1px solid rgba(255,255,255,.08);color:#e6ede4;font:500 12px 'JetBrains Mono',monospace;padding:0 12px;outline:none" style-focus="border-color:#8fd14f">
+                  </sc-if>
+                  <sc-if value="{{ r.isInfo }}">
+                    <div style="display:flex;align-items:center;gap:12px;flex:none">
+                      <span style="font:600 12px 'JetBrains Mono',monospace;color:#b6e68a;padding:4px 10px;border-radius:8px;background:#0c100d">{{ r.value }}</span>
+                      <sc-if value="{{ r.action }}"><button onClick="{{ r.action }}" style="background:none;border:none;color:#8e9c8f;font-size:12px;font-weight:700;cursor:pointer" style-hover="color:#8fd14f">Changer</button></sc-if>
+                    </div>
+                  </sc-if>
+                </div>
+              </sc-for>
+            </div>
+            </sc-if>
+          </div>
+        </sc-for>
+      </div>
+
+      <sc-if value="{{ isPlaces }}">
+        <div style="display:flex;justify-content:flex-end;gap:12px;align-items:center">
+          <div style="font-size:12px;color:#5d6a5f">Tout est facultatif, les valeurs par défaut suffisent pour démarrer.</div>
+          <button onClick="{{ schedule }}" style="height:44px;padding:0 24px;border-radius:22px;border:none;background:#8fd14f;color:#0b1408;font-size:14px;font-weight:800;cursor:pointer" style-hover="background:#a3dc6a">{{ scheduleLabel }}</button>
+        </div>
+      </sc-if>
+    </div>
+  </div>
+
+  <div style="position:absolute;left:0;right:0;bottom:22px;display:flex;justify-content:center;pointer-events:none">
+    <div style="display:flex;gap:6px;padding:7px;border-radius:32px;background:rgba(18,24,19,.86);backdrop-filter:blur(14px);border:1px solid rgba(255,255,255,.08);box-shadow:0 16px 40px rgba(0,0,0,.5);pointer-events:auto">
+      <sc-for list="{{ tabs }}" as="t" hint-placeholder-count="6">
+        <button onClick="{{ t.go }}" title="{{ t.label }}" style="height:48px;min-width:48px;padding:{{ t.pad }};border-radius:24px;border:none;background:{{ t.bg }};color:{{ t.color }};display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;font-size:13px;font-weight:800;transition:all .2s" style-hover="color:#e6ede4">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="{{ t.d }}"></path></svg>
+          <sc-if value="{{ t.showLabel }}"><span>{{ t.label }}</span></sc-if>
+          <sc-if value="{{ t.badge }}"><span style="width:7px;height:7px;border-radius:50%;background:#e5a13a;margin-left:-4px;align-self:flex-start;margin-top:12px"></span></sc-if>
+        </button>
+      </sc-for>
+    </div>
+  </div>
+</div>
+</sc-if>
+
+<div style="position:absolute;right:20px;bottom:96px;display:flex;flex-direction:column;gap:10px;width:320px;pointer-events:none">
+  <sc-for list="{{ toasts }}" as="n" hint-placeholder-count="0">
+    <div style="display:flex;gap:12px;padding:14px 16px;border-radius:14px;background:#161e17;border:1px solid rgba(255,255,255,.08);box-shadow:0 14px 36px rgba(0,0,0,.5);pointer-events:auto">
+      <div style="width:32px;height:32px;border-radius:10px;background:#8fd14f;color:#0b1408;font:800 12px Manrope;display:flex;align-items:center;justify-content:center;flex:none">D2</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:700;color:{{ n.color }}">{{ n.title }}</div>
+        <div style="font-size:12px;color:#8e9c8f;margin-top:2px;line-height:1.4">{{ n.body }}</div>
+      </div>
+    </div>
+  </sc-for>
+</div>
+
+</div>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;startScreen&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;splash&quot;,&quot;connect&quot;,&quot;profile&quot;,&quot;create&quot;,&quot;app&quot;],&quot;default&quot;:&quot;splash&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;dockLabels&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;}}">
+const G = '#8fd14f';
+const AV = ['#8fd14f','#5cc4d6','#e0a257','#b27ae0','#e0677e','#d9cf5a','#4fd1a0','#8a97ff'];
+const CLASSES = ['Cra','Iop','Eniripsa','Sram','Enutrof','Féca','Sacrieur','Osamodas','Xélor','Pandawa','Ecaflip','Roublard'];
+const DJ = [
+  {name:'Donjon des Bouftous', meta:'Niv. 20 · 5 salles', boss:'Bouftou Royal'},
+  {name:'Château Ensablé', meta:'Niv. 40 · 4 salles', boss:'Mob l\'Éponge'},
+  {name:'Antre du Dragon Cochon', meta:'Niv. 60 · 6 salles', boss:'Dragon Cochon'},
+  {name:'Donjon des Larves', meta:'Niv. 30 · 5 salles', boss:'Shin Larve'}
+];
+const ZN = [
+  {name:'Champs d\'Astrub', meta:'Niv. 1–30 · 12 maps', mobs:['Pissenlit','Tofu','Moskito','Larve Bleue']},
+  {name:'Plaine des Porkass', meta:'Niv. 30–60 · 9 maps', mobs:['Porkass','Sanglier','Prespic']},
+  {name:'Forêt des Abraknydes', meta:'Niv. 60–90 · 14 maps', mobs:['Abraknyde','Tronknyde','Arakne']},
+  {name:'Cimetière d\'Amakna', meta:'Niv. 40–70 · 8 maps', mobs:['Chafer','Chafer Archer','Fantôme']}
+];
+const PA = [3,4,2,3,4,5,3,2,4,3,2,3,4,1,3,4,2,5,3,4];
+const ICONS = {
+  home:'M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z',
+  donjon:'M4 21V9l3 1.5V6l2.5 1.5V4h5v3.5L17 6v4.5L20 9v12zM10 21v-4a2 2 0 0 1 4 0v4',
+  zone:'M9 4l6 2 6-2v16l-6 2-6-2-6 2V6zM9 4v16M15 6v16',
+  sorts:'M12 3l2.4 6.6L21 12l-6.6 2.4L12 21l-2.4-6.6L3 12l6.6-2.4z',
+  notifs:'M6 16v-5a6 6 0 0 1 12 0v5l2 2H4zM10 21a2 2 0 0 0 4 0',
+  params:'M4 7h9M17 7h3M4 17h3M11 17h9M15 5v4M9 15v4'
+};
+const TABS = [['home','Accueil'],['donjon','Donjons'],['zone','Zones'],['sorts','Sorts'],['notifs','Alertes'],['params','Réglages']];
+
+class Component extends DCLogic {
+  state = {
+    screen: this.props.startScreen ?? 'splash', prog: 0, win: 0, winN: 2,
+    profiles: [{name:'Kira',cls:'Cra',lvl:200,av:0},{name:'Brakmar',cls:'Iop',lvl:187,av:3},{name:'Soin-Soin',cls:'Eniripsa',lvl:162,av:5}],
+    cur: 0, newName: '', newAv: 1, newClass: 'Cra',
+    tab: 'home', acc: {}, sw: {}, num: {}, seg: {},
+    spell: 0, mode: 'donjon', dj: 0, zn: 0, planned: false,
+    running: false, toasts: [], log: [], unread: false, detectAgo: 'il y a 2 min', tick: 0
+  };
+  fit = () => { const k = Math.min(1, (window.innerWidth - 32) / 1200, (window.innerHeight - 32) / 760); this.setState({k: Math.max(.3, k)}); };
+  componentDidMount() { this.fit(); window.addEventListener('resize', this.fit); if (this.state.screen === 'splash') this.runSplash(); }
+  componentDidUpdate(pp) { if (this.state.screen === 'splash' && !this.sp) this.runSplash(); if (pp.startScreen !== this.props.startScreen && this.props.startScreen) { this.setState({screen: this.props.startScreen}); if (this.props.startScreen === 'splash') this.runSplash(); } }
+  componentWillUnmount() { window.removeEventListener('resize', this.fit); clearInterval(this.sp); this.sp = null; clearInterval(this.rt); }
+  runSplash() {
+    clearInterval(this.sp);
+    const t0 = Date.now();
+    this.sp = setInterval(() => {
+      if (this.state.screen !== 'splash') { clearInterval(this.sp); this.sp = null; return; }
+      const p = Math.min(100, Math.round((Date.now() - t0) / 18));
+      this.setState({prog: p});
+      if (p >= 100) { clearInterval(this.sp); this.sp = null; setTimeout(() => this.setState({screen: 'connect'}), 300); }
+    }, 50);
+  }
+  skipSplash = () => { clearInterval(this.sp); this.sp = null; this.setState({screen: 'connect'}); };
+  now() { return new Date().toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit'}); }
+  toast(title, body, color) {
+    const id = Math.random();
+    this.setState(s => ({toasts: [...s.toasts, {id, title, body, color: color || '#e6ede4'}].slice(-3), unread: s.tab !== 'home'}));
+    setTimeout(() => this.setState(s => ({toasts: s.toasts.filter(t => t.id !== id)})), 4500);
+  }
+  addLog(text, color) { this.setState(s => ({log: [{time: this.now(), text, color: color || '#e6ede4'}, ...s.log].slice(0, 7)})); }
+  swv(k, d) { return this.state.sw[k] ?? d; }
+  numv(k, d) { return this.state.num[k] ?? d; }
+  segv(k, d) { return this.state.seg[k] ?? d; }
+  toggleRun = () => {
+    if (this.state.running) {
+      clearInterval(this.rt); this.setState({running: false});
+      this.addLog('Session arrêtée', '#8e9c8f');
+      if (this.swv('nfEnd', true)) this.toast('Session arrêtée', 'Le personnage est à l\'arrêt.');
+      return;
+    }
+    const isDj = this.state.mode === 'donjon';
+    const place = isDj ? DJ[this.state.dj] : ZN[this.state.zn];
+    const ev = isDj ? [
+      ['Combat gagné · salle 1/5', null], ['Combat gagné · salle 2/5', null],
+      ['Boss vaincu · ' + place.boss, 'nfBoss', 'Boss vaincu', place.boss + ' est tombé en 3 tours.'],
+      ['Run terminé · 1/' + this.numv('runs', 10), 'nfRun', 'Run terminé', 'Nouveau départ dans ' + this.numv('pause', 30) + ' s.'],
+      ['Message privé reçu', 'nfMp', 'Message privé', 'Meryde : « salut, tu fais le donjon ? »']
+    ] : [
+      ['Groupe de 3 ' + place.mobs[0] + ' vaincu', null], ['Changement de map', null],
+      ['Inventaire à 86 %', 'nfPods', 'Inventaire presque plein', 'Retour banque prévu à ' + this.numv('pods', 90) + ' %.'],
+      ['Message privé reçu', 'nfMp', 'Message privé', 'Meryde : « tu farmes où ? »']
+    ];
+    this.setState({running: true, tick: 0});
+    this.addLog('Session démarrée · ' + place.name, G);
+    this.toast('Session démarrée', place.name, G);
+    clearInterval(this.rt);
+    this.rt = setInterval(() => {
+      const e = ev[this.state.tick % ev.length];
+      this.setState(s => ({tick: s.tick + 1}));
+      this.addLog(e[0], e[1] ? '#b6e68a' : '#e6ede4');
+      if (e[1] && this.swv(e[1], true)) this.toast(e[2], e[3], '#b6e68a');
+    }, 3800);
+  };
+  sw(k, label, desc, d = true) {
+    const on = this.swv(k, d);
+    return {isSwitch: true, label, desc, bg: on ? G : '#2a332c', x: on ? '21px' : '3px', knob: on ? '#0b1408' : '#8e9c8f',
+      toggle: () => this.setState(s => ({sw: {...s.sw, [k]: !this.swv(k, d)}}))};
+  }
+  step(k, label, desc, d, min, max, inc = 1, unit = '') {
+    const v = this.numv(k, d);
+    const set = n => this.setState(s => ({num: {...s.num, [k]: Math.max(min, Math.min(max, n))}}));
+    return {isStep: true, label, desc, val: (v === 0 && unit === 'runs') ? '∞' : v + (unit && unit !== 'runs' ? ' ' + unit : ''), dec: () => set(v - inc), inc: () => set(v + inc)};
+  }
+  seg(k, label, desc, options, d, multi) {
+    const cur = this.segv(k, d);
+    return {isSeg: true, label, desc, opts: options.map(o => {
+      const a = multi ? cur.includes(o) : cur === o;
+      return {label: o, bg: a ? 'rgba(143,209,79,.16)' : 'transparent', border: a ? 'rgba(143,209,79,.55)' : 'rgba(255,255,255,.09)', color: a ? '#b6e68a' : '#8e9c8f',
+        on: () => this.setState(s => ({seg: {...s.seg, [k]: multi ? (a ? cur.filter(x => x !== o) : [...cur, o]) : o}}))};
+    })};
+  }
+  acc(k, title, sub, rows, d = false, optional = true) {
+    const open = this.state.acc[k] ?? d;
+    return {title, sub, rows, optional, open, rot: open ? 'rotate(180deg)' : 'rotate(0deg)', border: open ? 'rgba(143,209,79,.22)' : 'rgba(255,255,255,.06)',
+      toggle: () => this.setState(s => ({acc: {...s.acc, [k]: !(s.acc[k] ?? d)}}))};
+  }
+  safety() {
+    return this.acc('safe', 'Sécurité', 'Pauses et arrêts automatiques', [
+      this.step('hp', 'Se soigner sous', 'Le personnage se repose avant le prochain combat', 35, 0, 100, 5, '%'),
+      this.sw('mpPause', 'Pause si un joueur vous écrit', 'Reprend quand vous cliquez sur Démarrer'),
+      this.sw('deathStop', 'Arrêt si le personnage meurt', '')
+    ]);
+  }
+  accsFor(tab) {
+    const i = this.state.spell, p = 'sp' + i + '_';
+    if (tab === 'home') return [];
+    if (tab === 'donjon') return [
+      this.acc('djStrat', 'Stratégie de combat', 'Ordre des cibles et style de jeu', [
+        this.sw('bossFirst', 'Prioriser le boss', 'Attaque le boss en premier dès qu\'il est à portée'),
+        this.seg('target', 'Ensuite, cibler', '', ['Plus proche', 'Moins de PV', 'Plus dangereux'], 'Plus proche'),
+        this.seg('style', 'Style', '', ['Distance', 'Corps-à-corps', 'Survie'], 'Distance'),
+        this.step('reserve', 'Garder des PA en réserve', 'Utile pour un soin ou une fuite en fin de tour', 0, 0, 12)
+      ], true),
+      this.acc('djRuns', 'Déroulement', 'Nombre de runs et pauses', [
+        this.step('runs', 'Nombre de runs', '0 = sans limite', 10, 0, 999, 1, 'runs'),
+        this.step('pause', 'Pause entre deux runs', '', 30, 0, 600, 10, 's'),
+        this.sw('retry', 'Recommencer après une défaite', '', false)
+      ]),
+      this.acc('djKeys', 'Clés & inventaire', 'Achat de clé, banque, recyclage', [
+        this.sw('buyKey', 'Acheter la clé automatiquement', 'Au prix moyen de l\'hôtel de vente', false),
+        this.step('pods', 'Retour banque au-delà de', 'Poids de l\'inventaire', 90, 50, 100, 5, '%'),
+        this.sw('recycle', 'Recycler les objets sans valeur', '', false)
+      ]),
+      this.safety()
+    ];
+    if (tab === 'zone') { const z = ZN[this.state.zn]; return [
+      this.acc('znMob', 'Monstres ciblés', 'Quels groupes attaquer', [
+        this.seg('mobs' + this.state.zn, 'Monstres', 'Laissez vide pour tout attaquer', z.mobs, z.mobs.slice(0, 2), true),
+        this.step('grp', 'Taille max d\'un groupe', '', 4, 1, 8),
+        this.step('grpLvl', 'Niveau max du groupe', '', 120, 10, 1000, 10)
+      ], true),
+      this.acc('znPath', 'Trajet', 'Parcours des maps de la zone', [
+        this.seg('path', 'Parcours', '', ['Boucle', 'Aléatoire'], 'Boucle'),
+        this.sw('avoid', 'Éviter les maps avec d\'autres joueurs', '', false)
+      ]),
+      this.acc('znHarv', 'Récolte', 'Ramasser des ressources en chemin', [
+        this.sw('harvest', 'Récolter sur le trajet', '', false),
+        this.seg('jobs', 'Métiers', '', ['Paysan', 'Bûcheron', 'Alchimiste', 'Mineur', 'Pêcheur'], ['Paysan'], true)
+      ]),
+      this.safety()
+    ]; }
+    if (tab === 'sorts') return [
+      this.acc('spCost', 'Coût & portée', 'Lus automatiquement, modifiables', [
+        this.step(p + 'pa', 'Coût en PA', '', PA[i], 0, 12),
+        this.step(p + 'min', 'Portée minimale', '', 1, 0, 20),
+        this.step(p + 'max', 'Portée maximale', '', 6, 0, 20),
+        this.sw(p + 'mod', 'Portée modifiable', 'Les bonus de portée s\'appliquent', true)
+      ], true, false),
+      this.acc('spCond', 'Conditions de lancer', 'Ligne de vue, en ligne, limites', [
+        this.sw(p + 'los', 'Ligne de vue requise', '', true),
+        this.sw(p + 'line', 'Lancer en ligne uniquement', '', false),
+        this.step(p + 'turn', 'Lancers par tour', '', 2, 1, 10),
+        this.step(p + 'tgt', 'Lancers par cible', '', 1, 1, 10)
+      ], false, false),
+      this.acc('spTgt', 'Ciblage', 'Sur qui et quand l\'utiliser', [
+        this.seg(p + 'on', 'Cible', '', ['Ennemi', 'Allié', 'Soi-même', 'Case vide'], 'Ennemi'),
+        this.seg(p + 'when', 'Quand', '', ['Toujours', 'Premier tour', 'PV bas'], 'Toujours'),
+        this.step(p + 'prio', 'Priorité', '1 = lancé en premier', i + 1, 1, 20)
+      ])
+    ];
+    if (tab === 'notifs') return [
+      this.acc('nfDesk', 'Notifications bureau', 'Choisissez ce qui vous prévient', [
+        this.sw('nfBoss', 'Boss vaincu', ''), this.sw('nfRun', 'Run terminé', ''),
+        this.sw('nfPods', 'Inventaire presque plein', ''), this.sw('nfMp', 'Message privé reçu', ''),
+        this.sw('nfDeath', 'Personnage mort', ''), this.sw('nfEnd', 'Session arrêtée', '')
+      ], true, false),
+      this.acc('nfSide', 'Quand je fais autre chose', 'Comportement en arrière-plan', [
+        this.sw('nfFocus', 'Seulement si le jeu n\'est pas au premier plan', '', false),
+        this.sw('nfSound', 'Jouer un son', ''),
+        this.seg('nfDur', 'Durée d\'affichage', '', ['4 s', '8 s', 'Jusqu\'au clic'], '4 s')
+      ]),
+      this.acc('nfPhone', 'Sur le téléphone', 'Via un webhook Discord', [
+        this.sw('nfDiscord', 'Envoyer aussi sur Discord', '', false),
+        {isInput: true, label: 'Webhook', desc: '', placeholder: 'https://discord.com/api/webhooks/…'}
+      ])
+    ];
+    const pr = this.state.profiles[this.state.cur];
+    return [
+      this.acc('stConn', 'Connexion', 'Fenêtre et profil actifs', [
+        {isInfo: true, label: 'Fenêtre du jeu', desc: '', value: 'Dofus · ' + pr.name, action: () => this.setState({screen: 'connect'})},
+        {isInfo: true, label: 'Profil', desc: '', value: pr.name, action: () => this.setState({screen: 'profile'})}
+      ], true, false),
+      this.acc('stKeys', 'Raccourcis', 'Contrôler DofBot2 sans quitter le jeu', [
+        {isInfo: true, label: 'Démarrer / pause', desc: '', value: 'F8'},
+        {isInfo: true, label: 'Arrêt d\'urgence', desc: '', value: 'F9'}
+      ], false, false),
+      this.acc('stApp', 'Application', 'Démarrage et langue', [
+        this.sw('boot', 'Lancer DofBot2 avec Windows', '', false),
+        this.sw('tray', 'Réduire dans la barre des tâches', ''),
+        this.seg('lang', 'Langue', '', ['Français', 'English'], 'Français')
+      ], false, false)
+    ];
+  }
+  renderVals() {
+    const s = this.state, sc = s.screen;
+    const pr = s.profiles[s.cur] || s.profiles[0];
+    const labels = this.props.dockLabels ?? true;
+    const stepIdx = sc === 'connect' ? 0 : 1;
+    const heroes = {
+      home: {title: 'Bonjour, ' + pr.name, text: 'Programmez un donjon ou une zone, réglez vos sorts, puis démarrez. DofBot2 vous prévient de ce qui se passe pendant que vous faites autre chose.', img: 'illustration · personnage'},
+      donjon: {title: 'Farm de donjon', text: 'Choisissez un donjon. Les options sont repliées et facultatives : ouvrez seulement celles que vous voulez personnaliser.', img: 'illustration · entrée de donjon'},
+      zone: {title: 'Farm de zone', text: 'Choisissez une zone, les monstres à attaquer et le trajet. DofBot2 enchaîne les combats map après map.', img: 'illustration · carte de zone'},
+      sorts: {title: 'Sorts', text: 'DofBot2 lit votre barre de sorts. Touchez un sort pour régler son coût, sa portée et quand l\'utiliser.', img: 'illustration · barre de sorts'},
+      notifs: {title: 'Alertes', text: 'Restez informé sans surveiller le jeu : boss vaincu, inventaire plein, message privé…', img: 'illustration · notification'},
+      params: {title: 'Réglages', text: 'Fenêtre connectée, profil, raccourcis clavier.', img: 'illustration · réglages'}
+    };
+    const isDj = s.tab === 'donjon';
+    const placeList = isDj ? DJ : ZN;
+    const plan = s.mode === 'donjon' ? DJ[s.dj] : ZN[s.zn];
+    const selIdx = isDj ? s.dj : s.zn;
+    const newAvBg = AV[s.newAv];
+    const spellOn = this.swv('sp' + s.spell + '_use', true);
+    return {
+      crumb: sc === 'app' ? '· ' + TABS.find(t => t[0] === s.tab)[1] : '',
+      isSplash: sc === 'splash', isOnboard: ['connect', 'profile', 'create'].includes(sc),
+      isConnect: sc === 'connect', isProfile: sc === 'profile', isCreate: sc === 'create', isApp: sc === 'app',
+      fitW: 1200 * (s.k || 1) + 'px', fitH: 760 * (s.k || 1) + 'px', fitT: 'scale(' + (s.k || 1) + ')',
+      progW: s.prog + '%', skipSplash: this.skipSplash,
+      splashMsg: s.prog < 40 ? 'Chargement des données…' : s.prog < 80 ? 'Recherche des fenêtres du jeu…' : 'Prêt',
+      steps: ['Connexion', 'Profil', 'C\'est parti'].map((l, i) => ({n: i < stepIdx ? '✓' : i + 1, label: l,
+        bg: i < stepIdx ? G : i === stepIdx ? 'rgba(143,209,79,.14)' : 'transparent', color: i < stepIdx ? '#0b1408' : i === stepIdx ? G : '#5d6a5f',
+        border: i <= stepIdx ? G : 'rgba(255,255,255,.12)', text: i <= stepIdx ? '#e6ede4' : '#5d6a5f'})),
+      windows: [['Dofus · Kira', '1920×1080 · écran 1'], ['Dofus · Brakmar', '1600×900 · écran 2'], ['Dofus · Soin-Soin', '1280×720 · écran 1']].slice(0, s.winN).map((w, i) => {
+        const a = s.win === i;
+        return {title: w[0], meta: w[1], bg: a ? 'rgba(143,209,79,.07)' : '#121813', border: a ? 'rgba(143,209,79,.6)' : 'rgba(255,255,255,.06)', ring: a ? G : '#3a453c', dot: a ? G : 'transparent', pick: () => this.setState({win: i})};
+      }),
+      refreshWin: () => this.setState(st => ({winN: st.winN === 3 ? 2 : 3})),
+      goProfile: () => this.setState({screen: 'profile'}),
+      goCreate: () => this.setState({screen: 'create', newName: '', newAv: 1, newClass: 'Cra'}),
+      profiles: s.profiles.map((p, i) => ({name: p.name, initial: p.name[0].toUpperCase(), meta: p.cls + (p.lvl ? ' · niv. ' + p.lvl : ''), avBg: AV[p.av], pick: () => this.setState({cur: i, screen: 'app', tab: 'home'})})),
+      newName: s.newName, setName: e => this.setState({newName: e.target.value}),
+      newNameShown: s.newName.trim() || 'Nouveau profil', newInitial: (s.newName.trim()[0] || '?').toUpperCase(), newAvBg, newClass: s.newClass,
+      avatars: AV.map((c, i) => ({bg: c, ring: s.newAv === i ? '0 0 0 3px #0c100d, 0 0 0 5px ' + c : 'none', pick: () => this.setState({newAv: i})})),
+      classes: CLASSES.map(c => ({label: c, bg: s.newClass === c ? 'rgba(143,209,79,.16)' : 'transparent', border: s.newClass === c ? 'rgba(143,209,79,.55)' : 'rgba(255,255,255,.09)', color: s.newClass === c ? '#b6e68a' : '#8e9c8f', pick: () => this.setState({newClass: c})})),
+      createProfile: () => this.setState(st => ({profiles: [...st.profiles, {name: st.newName.trim() || 'Nouveau profil', cls: st.newClass, lvl: 0, av: st.newAv}], cur: st.profiles.length, screen: 'app', tab: 'home'})),
+      curAvBg: AV[pr.av], curInitial: pr.name[0].toUpperCase(), curName: pr.name, curMeta: pr.cls + ' · Dofus · ' + pr.name,
+      statusLabel: s.running ? 'En cours' : 'En pause', statusColor: s.running ? G : '#8e9c8f',
+      runLabel: s.running ? 'Arrêter' : 'Démarrer', runBg: s.running ? 'transparent' : G, runColor: s.running ? '#e6ede4' : '#0b1408', runBorder: s.running ? '1px solid rgba(255,255,255,.18)' : 'none',
+      toggleRun: this.toggleRun,
+      hero: heroes[s.tab],
+      isHome: s.tab === 'home', isPlaces: isDj || s.tab === 'zone', isSorts: s.tab === 'sorts', isNotifs: s.tab === 'notifs',
+      planName: plan.name, planSub: (s.mode === 'donjon' ? 'Donjon · ' + (this.numv('runs', 10) || '∞') + ' runs' + (this.swv('bossFirst', true) ? ' · boss en priorité' : '') : 'Zone · ' + this.segv('path', 'Boucle').toLowerCase()) + ' · ' + (20 - Object.keys(s.sw).filter(k => /_use$/.test(k) && !s.sw[k]).length) + ' sorts actifs',
+      editPlan: () => this.setState({tab: s.mode}),
+      log: s.log.length ? s.log : [{time: '—', text: 'Aucune activité pour le moment. Démarrez une session pour voir le journal.', color: '#5d6a5f'}],
+      places: placeList.map((p, i) => ({name: p.name, meta: p.meta, border: i === selIdx ? G : 'rgba(255,255,255,.06)', pick: () => this.setState(isDj ? {dj: i} : {zn: i})})),
+      scheduleLabel: s.mode === s.tab && s.planned ? 'Programmé ✓' : 'Programmer ' + (isDj ? 'ce donjon' : 'cette zone'),
+      schedule: () => { this.setState({mode: s.tab, planned: true}); this.toast('Activité programmée', placeList[selIdx].name, G); },
+      spells: PA.map((_, i) => ({bgi: 'url(./assets/spells/s' + i + '.png)', pa: this.numv('sp' + i + '_pa', PA[i]), ring: i === s.spell ? '0 0 0 2px #0c100d, 0 0 0 4px ' + G : 'none', op: this.swv('sp' + i + '_use', true) ? 1 : .35, pick: () => this.setState({spell: i})})),
+      spellBgi: 'url(./assets/spells/s' + s.spell + '.png)', spellName: 'Sort ' + (s.spell + 1),
+      spellMeta: 'Emplacement ' + (s.spell < 10 ? 'ligne 1' : 'ligne 2') + ', case ' + (s.spell % 10 + 1) + (spellOn ? '' : ' · désactivé'),
+      spellUse: this.sw('sp' + s.spell + '_use', '', '', true),
+      detectAgo: s.detectAgo, redetect: () => { this.setState({detectAgo: 'à l\'instant'}); this.toast('Détection terminée', '20 sorts trouvés dans la barre.', G); },
+      testToast: () => this.toast('Notification test', 'Voici à quoi ressemblent les alertes de DofBot2.', G),
+      accs: sc === 'app' ? this.accsFor(s.tab) : [],
+      tabs: TABS.map(([k, l]) => { const a = s.tab === k; return {label: l, d: ICONS[k], showLabel: a && labels, pad: a && labels ? '0 18px 0 14px' : '0', bg: a ? G : 'transparent', color: a ? '#0b1408' : '#8e9c8f', badge: k === 'home' && s.unread && !a,
+        go: () => this.setState({tab: k, unread: k === 'home' ? false : s.unread})}; }),
+      toasts: s.toasts
+    };
+  }
+}
+</script>
+</body>
+</html>
