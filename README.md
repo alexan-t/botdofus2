@@ -25,7 +25,25 @@ fenêtre sans cadre avec barre de titre custom :
      autre application ; filtres par type, son, durée, webhook Discord.
    - **Réglages** : fenêtre et profil (« Changer »), F8 démarrer/pause et F9 arrêt d'urgence (raccourcis
      globaux Windows), lancement avec Windows (clé HKCU `Run`), réduction dans la zone de notification,
-     **Outils avancés** : l'interface historique (calibration, scan, observation, corpus).
+     **Outils avancés** (voir ci-dessous).
+6. **Outils avancés** (maquette « DofBot2 Avancé »), badge « LECTURE SEULE », dock de six onglets :
+   - **Connexion** : aperçu de la capture, confirmation « Oui, c'est DOFUS », zones calibrées, lecture du
+     profil visible, diagnostic (revérification toutes les 2 s, reconnaissance de la fenêtre déjà
+     confirmée, détacher) et dossier du client DOFUS.
+   - **Observation** : overlays, aperçu (clic « Voici mon personnage », survol d'une cellule), Combat /
+     Mon tour / PA / PM / Map, raisons des valeurs inconnues, map automatique ou manuelle, projection et
+     recette de grille, entités et split de la séquence.
+   - **Sorts** : grille de la barre (lignes × colonnes), scan, analyse d'infobulle avec décompte,
+     validation du sort sélectionné, sorts simulés, page et seuil du scan.
+   - **Simulation** : état, pause, statistiques, console, stratégie et paramètres.
+   - **Corpus** : observations enregistrées, outils d'annotation, baseline, import et fixtures.
+   - **Journal** : tous les événements, filtrés par niveau.
+
+   Les pages pilotent `MainWindow`, qui reste le contrôleur masqué (mêmes vérifications, captures et
+   vérités humaines). Les outils (calibration des zones, projection, recette, revue HUD, collecte HUD,
+   entités, phase et tour, annotation) s'ouvrent en plein écran dans la fenêtre DofBot2 (écran A7 :
+   en-tête, ✕ ou Échap) via `combatbot/ui/tool_host.py` ; leurs contrôles gardent leur logique et
+   reçoivent la palette DofBot2 (`combatbot/ui/theme.py`).
 
 Démarrer/Arrêter gère la session (état, journal, alertes, signal `running_changed`) : aucun moteur
 d'automatisation n'y est encore branché et DofBot2 reste en lecture seule vis-à-vis du jeu. L'onglet

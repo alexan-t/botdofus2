@@ -187,6 +187,54 @@ QWidget#d2Toast {{ background: {TOAST}; border: 1px solid rgba(255,255,255,20); 
 QLabel#d2ToastTitle {{ font-size: 13px; font-weight: 700; }}
 QLabel#d2ToastBody {{ font-size: 12px; color: {TEXT_2}; }}
 
+QWidget#d2ToolHeader {{ background: {WINDOW}; border-bottom: 1px solid rgba(255,255,255,13); }}
+QLabel#d2ToolTitle {{ font-size: 16px; font-weight: 800; }}
+QLabel#d2ToolSub {{ font-size: 12px; color: {TEXT_2}; }}
+QLabel#d2AdvTitle {{ font-size: 15px; font-weight: 800; }}
+QLabel#d2Badge {{ font-family: '{MONO_FONT}'; font-size: 10px; font-weight: 600; color: {TEXT_3};
+    background: {SURFACE_2}; border-radius: 6px; padding: 3px 8px; }}
+QPushButton#d2BackPill {{ background: {SURFACE}; border: 1px solid rgba(255,255,255,15); border-radius: 18px;
+    min-height: 36px; max-height: 36px; padding: 0 16px 0 12px; font-size: 13px; font-weight: 700; color: {TEXT}; }}
+QPushButton#d2BackPill:hover {{ border-color: rgba(143,209,79,128); }}
+QLabel#d2HeroTitle {{ font-size: 26px; font-weight: 800; letter-spacing: -0.78px; }}
+QWidget#d2Canvas {{ background: #0f1510; border: 1px solid rgba(143,209,79,36); border-radius: 14px; }}
+QWidget#d2Tile {{ background: {WINDOW}; border: 1px solid rgba(255,255,255,13); border-radius: 12px; }}
+QWidget#d2StatTile {{ background: {SURFACE}; border: 1px solid rgba(255,255,255,15); border-radius: 14px; }}
+QLabel#d2TileLabel {{ font-size: 11px; color: {TEXT_2}; }}
+QLabel#d2StatLabel {{ font-size: 12px; color: {TEXT_2}; }}
+QLabel#d2TileValue {{ font-family: '{MONO_FONT}'; font-size: 14px; font-weight: 600; }}
+QLabel#d2StatValue {{ font-family: '{MONO_FONT}'; font-size: 20px; font-weight: 600; }}
+QLabel#d2MonoValue {{ font-family: '{MONO_FONT}'; font-size: 12px; font-weight: 600; }}
+QLabel#d2MetaMono {{ font-family: '{MONO_FONT}'; font-size: 11px; font-weight: 500; color: {TEXT_3}; }}
+QLabel#d2WindowTitle {{ font-size: 15px; font-weight: 700; }}
+QLabel#d2Question {{ font-size: 13px; font-weight: 600; }}
+QLabel#d2HoverPill {{ font-family: '{MONO_FONT}'; font-size: 11px; font-weight: 500; color: {TEXT_2};
+    background: rgba(12,16,13,217); border-radius: 8px; padding: 5px 10px; }}
+QLabel#d2Checklist {{ font-size: 12px; color: {TEXT_2}; background: {WINDOW}; border: 1px solid rgba(229,161,58,60);
+    border-radius: 12px; padding: 10px 14px; }}
+QPushButton#d2Action {{ background: {GREEN}; color: {ON_GREEN}; border: none; border-radius: 21px;
+    min-height: 42px; max-height: 42px; padding: 0 20px; font-size: 13px; font-weight: 800; }}
+QPushButton#d2Action:hover {{ background: {GREEN_HOVER}; }}
+QPushButton#d2Action:disabled {{ background: {SURFACE_2}; color: {TEXT_MUTED}; }}
+QPushButton#d2Action[running="true"] {{ background: transparent; color: {TEXT}; border: 1px solid rgba(255,255,255,41); }}
+QPushButton#d2ActionOutline {{ background: transparent; border: 1px solid rgba(255,255,255,31); border-radius: 21px;
+    min-height: 42px; max-height: 42px; padding: 0 18px; font-size: 13px; font-weight: 700; color: {TEXT}; }}
+QPushButton#d2ActionOutline:hover {{ border-color: {GREEN}; }}
+QPushButton#d2ActionOutline:checked {{ background: rgba(143,209,79,41); border-color: rgba(143,209,79,140); color: {GREEN_LIGHT}; }}
+QPushButton#d2ActionOutline:disabled {{ color: {TEXT_MUTED}; border-color: rgba(255,255,255,13); }}
+QPushButton#d2ListItem {{ background: transparent; border: none; border-radius: 12px; text-align: left; padding: 0; }}
+QPushButton#d2ListItem:hover {{ background: {TOAST}; }}
+QPushButton#d2ListItem:checked {{ background: rgba(143,209,79,20); }}
+QPushButton#d2ToolCard {{ background: {SURFACE}; border: 1px solid rgba(255,255,255,15); border-radius: 16px;
+    text-align: left; padding: 0; }}
+QPushButton#d2ToolCard:hover {{ border-color: rgba(143,209,79,128); background: {SURFACE_HOVER}; }}
+QLabel#d2CardTitle {{ font-size: 14px; font-weight: 700; }}
+QLabel#d2CardCount {{ font-family: '{MONO_FONT}'; font-size: 11px; font-weight: 600; color: {GREEN_LIGHT}; }}
+QLabel#d2Tag {{ font-family: '{MONO_FONT}'; font-size: 10px; font-weight: 600; background: {WINDOW};
+    border-radius: 6px; padding: 3px 8px; }}
+QLabel#d2Level {{ font-family: '{MONO_FONT}'; font-size: 10px; font-weight: 600; }}
+QLabel#d2Event {{ font-family: '{MONO_FONT}'; font-size: 11px; font-weight: 500; color: {TEXT_3}; }}
+
 QScrollArea {{ background: transparent; border: none; }}
 QScrollArea > QWidget > QWidget {{ background: transparent; }}
 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}

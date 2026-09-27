@@ -20,15 +20,15 @@ from combatbot.vision.window import list_dofus_windows
 
 STEP_CAPTIONS = ("Fenêtre", "Capture", "Calibration", "Prêt")
 PANEL_STYLE = """
-QLabel#step { background: #172234; border: 1px solid #273449; border-radius: 14px; padding: 6px 10px;
-              color: #8b98ab; font-weight: 600; }
-QLabel#step[state="done"] { background: #134e45; border-color: #1f7a6b; color: #7ee8cf; }
-QLabel#step[state="current"] { background: #173b43; border-color: #40c8aa; color: #f1f5f9; }
-QLabel#nextStep { background: #173b43; border: 1px solid #2f8f7e; border-radius: 10px; padding: 10px 14px;
-                  color: #d9fbf2; font-weight: 600; font-size: 14px; }
-QLabel#preview { border: 1px solid #273449; border-radius: 12px; background: #0b1220; color: #8b98ab; }
-QToolButton#section { border: none; color: #9ca3af; font-weight: 600; padding: 4px 0; background: transparent; }
-QToolButton#section:hover { color: #e5e7eb; }
+QLabel#step { background: #121813; border: 1px solid rgba(255,255,255,20); border-radius: 14px; padding: 6px 10px;
+              color: #8e9c8f; font-weight: 600; }
+QLabel#step[state="done"] { background: rgba(143,209,79,41); border-color: rgba(143,209,79,140); color: #b6e68a; }
+QLabel#step[state="current"] { background: rgba(143,209,79,26); border-color: #8fd14f; color: #e6ede4; }
+QLabel#nextStep { background: rgba(143,209,79,26); border: 1px solid rgba(143,209,79,102); border-radius: 10px; padding: 10px 14px;
+                  color: #e6ede4; font-weight: 600; font-size: 14px; }
+QLabel#preview { border: 1px solid rgba(255,255,255,20); border-radius: 12px; background: #0f1510; color: #8e9c8f; }
+QToolButton#section { border: none; color: #8e9c8f; font-weight: 600; padding: 4px 0; background: transparent; }
+QToolButton#section:hover { color: #e6ede4; }
 """
 
 

@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from combatbot.corpus.benchmark import run_benchmark, write_reports
+from combatbot.ui.tool_host import present_tool
 from combatbot.corpus.models import ENTITY_FIELDS, Annotation, CorpusEntry, HUD_CROP_QUALITIES, PixelAnnotation
 from combatbot.corpus.repository import CorpusRepository
 from combatbot.runtime import app_data_root
@@ -29,7 +30,7 @@ class AnnotationCanvas(QLabel):
         super().__init__()
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setMinimumSize(600, 430)
-        self.setStyleSheet("background:#0b1220; border:1px solid #34445b;")
+        self.setStyleSheet("background:#0f1510; border:1px solid rgba(143,209,79,36);")
         self._image: np.ndarray | None = None
         self._image_size: tuple[int, int] | None = None
 
@@ -504,7 +505,8 @@ class CorpusPage(QWidget):
         while index < len(entries):
             try:
                 dialog = AnnotationDialog(self.repository, entries[index], self)
-                dialog.showFullScreen()
+                if not present_tool(dialog, "annot"):
+                    dialog.showFullScreen()
                 accepted = dialog.exec() == QDialog.DialogCode.Accepted
             except ValueError as exc:
                 QMessageBox.warning(self, "Observation illisible", str(exc))
@@ -521,7 +523,8 @@ class CorpusPage(QWidget):
 
         try:
             dialog = EntityAnnotationDialog(self.repository, self)
-            dialog.showMaximized()
+            if not present_tool(dialog, "entites"):
+                dialog.showMaximized()
             dialog.exec()
         except ValueError as exc:
             QMessageBox.warning(self, "Annotation des entités", str(exc))
@@ -532,7 +535,8 @@ class CorpusPage(QWidget):
 
         try:
             dialog = CombatStateDialog(self.repository, self)
-            dialog.showMaximized()
+            if not present_tool(dialog, "phase"):
+                dialog.showMaximized()
             dialog.exec()
         except ValueError as exc:
             QMessageBox.warning(self, "Phase et tour", str(exc))
@@ -542,7 +546,9 @@ class CorpusPage(QWidget):
         from combatbot.ui.hud_review_dialog import HUDReviewDialog
 
         try:
-            HUDReviewDialog(self.repository, self).exec()
+            dialog = HUDReviewDialog(self.repository, self)
+            present_tool(dialog, "hud")
+            dialog.exec()
         except ValueError as exc:
             QMessageBox.warning(self, "Revue HUD", str(exc))
         self.refresh()

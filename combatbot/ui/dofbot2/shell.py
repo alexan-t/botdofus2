@@ -5,23 +5,25 @@ from __future__ import annotations
 import ctypes
 import sys
 
-from PySide6.QtCore import QEvent, QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QIcon, QKeySequence, QPainter, QPainterPath, QPen, QPixmap, QRegion, QShortcut
+from PySide6.QtCore import QEvent, QRect, QRectF, Qt, QTimer
+from PySide6.QtGui import QColor, QIcon, QKeySequence, QPainter, QPen, QPixmap, QShortcut
 from PySide6.QtWidgets import (
-    QHBoxLayout, QMenu, QSizeGrip, QStackedWidget, QSystemTrayIcon, QVBoxLayout, QWidget,
+    QMenu, QSizeGrip, QStackedWidget, QSystemTrayIcon, QVBoxLayout, QWidget,
 )
 
 from combatbot.storage import Storage
 from combatbot.ui.dofbot2 import theme as t
+from combatbot.ui.dofbot2.advanced import ADVANCED_LABELS, AdvancedView
 from combatbot.ui.dofbot2.app import TAB_LABELS, AppView
-from combatbot.ui.dofbot2.controls import button, label
 from combatbot.ui.dofbot2.game_windows import GameWindow
 from combatbot.ui.dofbot2.profiles import last_profile_id, remember_profile
 from combatbot.ui.dofbot2.screens import ConnectScreen, CreateProfileScreen, ProfileScreen, SplashScreen
 from combatbot.ui.dofbot2.system import hotkey_from_message, register_hotkeys, unregister_hotkeys
+from combatbot.ui.dofbot2.tool_frame import global_area, present_in
 from combatbot.ui.dofbot2.widgets import LogoBadge, StepIndicator, TitleBar
 from combatbot.ui.jobs import JobRunner
 from combatbot.ui.theme import STYLE as LEGACY_STYLE
+from combatbot.ui.tool_host import set_presenter
 
 
 RESIZE_BORDER = 6
@@ -122,28 +124,9 @@ class DofBot2Window(QWidget):
         self.screens.addWidget(self.app_view)
         self.app_page = self.app_view
 
-        self.advanced_page = QWidget()
-        self.advanced_page.setObjectName("d2Screen")
-        advanced_layout = QVBoxLayout(self.advanced_page)
-        advanced_layout.setContentsMargins(0, 0, 0, 0)
-        advanced_layout.setSpacing(0)
-        advanced_bar = QWidget()
-        advanced_bar.setObjectName("d2AppBar")
-        advanced_bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
-        advanced_bar.setFixedHeight(64)
-        advanced_bar_layout = QHBoxLayout(advanced_bar)
-        advanced_bar_layout.setContentsMargins(28, 0, 28, 0)
-        advanced_bar_layout.setSpacing(14)
-        back = button("← Retour à DofBot2", "d2Back")
-        back.clicked.connect(lambda: self.show_screen("app"))
-        advanced_bar_layout.addWidget(back)
-        advanced_bar_layout.addWidget(label("Calibration, scan des sorts, observation et corpus", "d2Hint"))
-        advanced_bar_layout.addStretch(1)
-        advanced_layout.addWidget(advanced_bar)
-        self.legacy_host = QVBoxLayout()
-        self.legacy_host.setContentsMargins(0, 0, 0, 0)
-        advanced_layout.addLayout(self.legacy_host, 1)
-        self.screens.addWidget(self.advanced_page)
+        self.advanced_view: AdvancedView | None = None   # créée à la première ouverture
+        set_presenter(lambda dialog, key: present_in(self, dialog, key))
+        self._tool_title: str | None = None
 
         self.connect_screen.window_chosen.connect(self._window_chosen)
         self.profile_screen.profile_chosen.connect(self.enter_app)
@@ -182,7 +165,7 @@ class DofBot2Window(QWidget):
             return "splash"
         if page is self.app_view:
             return "app"
-        if page is self.advanced_page:
+        if page is not None and page is self.advanced_view:
             return "advanced"
         return {self.connect_screen: "connect", self.profile_screen: "profile",
                 self.create_screen: "create"}[self.onboarding_stack.currentWidget()]
@@ -232,8 +215,16 @@ class DofBot2Window(QWidget):
             QTimer.singleShot(250, lambda: self._connect_legacy(hwnd))
 
     def open_advanced(self) -> None:
-        self._ensure_legacy()
-        self.screens.setCurrentWidget(self.advanced_page)
+        legacy = self._ensure_legacy()
+        if self.advanced_view is None:
+            view = AdvancedView(self.storage, legacy, lambda: self.game_window)
+            view.back_requested.connect(lambda: self.show_screen("app"))
+            view.window_change_requested.connect(lambda: self.show_screen("connect"))
+            view.tab_changed.connect(lambda _key: self._update_crumb())
+            self.screens.addWidget(view)
+            self.advanced_view = view
+            self.app_view.toast_sink = view.notify
+        self.screens.setCurrentWidget(self.advanced_view)
         self._update_crumb()
 
     def _connect_legacy(self, hwnd: int) -> None:
@@ -254,17 +245,18 @@ class DofBot2Window(QWidget):
         legacy.scan_panel.request_scan()
 
     def _ensure_legacy(self):
+        """Interface historique : contrôleur masqué (connexion, captures, scan, observation, corpus).
+        Ses écrans sont remplacés par la vue « Outils avancés » ; ses outils s'ouvrent en écran A7."""
         if self.legacy is None:
             from combatbot.ui.main_window import MainWindow  # import tardif : démarrage plus rapide
             legacy = MainWindow(self.storage)
             legacy.setWindowFlags(Qt.WindowType.Widget)
-            legacy.setStyleSheet(LEGACY_STYLE)   # plus proche dans la cascade : garde son apparence
-            legacy.stack.currentChanged.connect(lambda _index: self._update_crumb())
+            legacy.setParent(self)
+            legacy.setStyleSheet(LEGACY_STYLE)   # dialogues enfants : palette historique alignée sur DofBot2
             legacy.fullscreen_shortcut.setEnabled(False)   # un seul F11 par fenêtre, sinon Qt l'ignore
+            legacy.exit_fullscreen_shortcut.setEnabled(False)
             legacy.scan_panel.scan_finished.connect(self.app_view.spells_detected)
-            self.legacy_host.addWidget(legacy)
-            legacy.installEventFilter(self)
-            legacy.show()
+            legacy.hide()
             self.legacy = legacy
         return self.legacy
 
@@ -273,11 +265,28 @@ class DofBot2Window(QWidget):
         page = self.screens.currentWidget()
         if page is self.app_view:
             crumb = TAB_LABELS.get(self.app_view.current_tab, "")
-        elif page is self.advanced_page and self.legacy is not None:
-            index = self.legacy.stack.currentIndex()
-            name = self.legacy.nav_buttons[index].text() if 0 <= index < len(self.legacy.nav_buttons) else ""
-            crumb = f"Outils avancés · {name}" if name else "Outils avancés"
+        elif page is not None and page is self.advanced_view:
+            crumb = f"Outils avancés · {ADVANCED_LABELS[self.advanced_view.current_tab]}"
+        if self._tool_title:
+            crumb = f"Outils avancés · {self._tool_title}"
         self.title_bar.set_crumb(crumb)
+
+    # --- Outils plein écran (A7) ----------------------------------------------------------------
+    def tool_area(self) -> QRect:
+        return global_area(self, self.title_bar.height() + 1)
+
+    def is_expanded(self) -> bool:
+        return self.isMaximized() or self.isFullScreen()
+
+    def tool_opened(self, title: str) -> None:
+        self._tool_title = title
+        self._update_crumb()
+
+    def tool_closed(self) -> None:
+        self._tool_title = None
+        self._update_crumb()
+        if self.advanced_view is not None and self.screens.currentWidget() is self.advanced_view:
+            self.advanced_view.refresh_current()
 
     # --- Raccourcis F8 / F9 ---------------------------------------------------------------------
     def _hotkey_start_pause(self) -> None:
@@ -327,25 +336,6 @@ class DofBot2Window(QWidget):
         if self.tray is not None:
             self.tray.hide()
 
-    def eventFilter(self, watched, event) -> bool:  # noqa: N802 - API Qt
-        if watched is self.legacy and event.type() == QEvent.Type.Resize:
-            self._mask_legacy()
-        return super().eventFilter(watched, event)
-
-    def _mask_legacy(self) -> None:
-        """L'interface historique peint des coins carrés : on suit l'arrondi bas de la fenêtre."""
-        if self.legacy is None:
-            return
-        rect = self.legacy.rect()
-        if self.frame.maximized:
-            self.legacy.clearMask()
-            return
-        radius = 13
-        path = QPainterPath()
-        path.addRoundedRect(QRectF(rect), radius, radius)
-        rounded = QRegion(path.toFillPolygon().toPolygon())
-        self.legacy.setMask(rounded.united(QRegion(0, 0, rect.width(), radius)))   # seuls les coins bas s'arrondissent
-
     # --- Fenêtre sans cadre --------------------------------------------------------------------
     def _toggle_maximized(self) -> None:
         if self.isFullScreen():
@@ -371,7 +361,6 @@ class DofBot2Window(QWidget):
             full = self.isMaximized() or self.isFullScreen()
             self.frame.maximized = full
             self.frame.update()
-            self._mask_legacy()
             self.title_bar.set_maximized(full)
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - API Qt
@@ -398,6 +387,7 @@ class DofBot2Window(QWidget):
         if self.legacy is not None and not self.legacy.close():
             event.ignore()   # capture ou simulation en cours : l'application historique rappellera close()
             return
+        set_presenter(None)
         if self.jobs.active:   # miniature encore en cours de capture
             if not self._close_when_idle:
                 self._close_when_idle = True

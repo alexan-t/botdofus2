@@ -26,6 +26,7 @@ from combatbot.ui.pages import (
     SpellsPage, StatisticsPage, StrategiesPage,
 )
 from combatbot.ui.jobs import JobRunner
+from combatbot.ui.tool_host import present_tool
 from combatbot.ui.calibration_dialog import CalibrationDialog, ImageCropDialog
 from combatbot.ui.corpus_page import CorpusPage
 from combatbot.vision.capture import capture_client
@@ -89,7 +90,7 @@ class MainWindow(QMainWindow):
         nav = QVBoxLayout(sidebar)
         nav.setContentsMargins(12, 20, 12, 16)
         brand = QLabel("PYTHONBOT")
-        brand.setStyleSheet("font-size: 17px; font-weight: 800; color: #65d6b5; padding: 8px;")
+        brand.setStyleSheet("font-size: 17px; font-weight: 800; color: #8fd14f; padding: 8px;")
         nav.addWidget(brand)
         caption = QLabel("COMBAT • SIMULATION")
         caption.setObjectName("subtitle")
@@ -366,6 +367,9 @@ class MainWindow(QMainWindow):
 
     def _window_already_confirmed(self, profile_id: int, details: dict) -> bool:
         """Même titre de fenêtre et même taille que lors de la dernière confirmation humaine."""
+        advanced = self.storage.get_profile_setting(profile_id, "dofbot2_advanced", None)
+        if isinstance(advanced, dict) and advanced.get("auto_confirm_window") is False:
+            return False   # désactivé dans Outils avancés → Diagnostic
         saved = self.storage.get_profile_setting(profile_id, "confirmed_window", None)
         return isinstance(saved, dict) and bool(saved.get("title")) and saved == self._window_identity(details)
 
@@ -490,6 +494,7 @@ class MainWindow(QMainWindow):
         def show_dialog(frame: CapturedFrame, suggestions) -> None:
             existing = self.storage.load_calibration(profile_id)
             dialog = CalibrationDialog(frame, profile_id, existing, self, suggestions)
+            present_tool(dialog, "zones")
             if dialog.exec() == QDialog.DialogCode.Accepted:
                 try:
                     calibration = dialog.calibration()
@@ -719,7 +724,8 @@ class MainWindow(QMainWindow):
                 combat_image, layout_signature=signature, topology=self._declared_topology,
                 map_id=declared.map_id if declared else None, current=self._load_grid_profile(profile_id), parent=self,
             )
-            dialog.showMaximized()
+            if not present_tool(dialog, "proj"):
+                dialog.showMaximized()
             if dialog.exec() and dialog.result_profile is not None:
                 self.storage.set_profile_setting(profile_id, PROFILE_SETTING_KEY, dialog.result_profile.to_dict())
                 observer = self._observer
@@ -777,7 +783,9 @@ class MainWindow(QMainWindow):
                 map_id=declared.map_id, map_id_source=declared.source.value, kind=kind,
                 transform_id=transform_id, frame=frame.image, combat_image=calibration.crop(frame, "combat"),
                 topology=topology, red_blue=kind == "D", context={"mode": mode, "client": frame.client.to_dict()})
-            GridRecipeDialog(session, record["capture_id"], topology, self).exec()
+            recipe = GridRecipeDialog(session, record["capture_id"], topology, self)
+            present_tool(recipe, "recette")
+            recipe.exec()
             status, reasons = session.map_status(session.map_record(declared.map_id))
             self._on_event(CombatEvent("INFO", "vision.recipe",
                                        f"Recette {record['capture_id']} : map {declared.map_id} {status} {reasons}"))
@@ -826,6 +834,7 @@ class MainWindow(QMainWindow):
         self._hud_collection_dialog = dialog
         self._on_event(CombatEvent("INFO", "vision.hud_collection",
                                    f"Collecte HUD en lecture seule : {dialog.session.session_id}"))
+        present_tool(dialog, "collecte")
         dialog.show()
 
     def _start_observation(self) -> None:

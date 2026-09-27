@@ -83,7 +83,7 @@ class _CellCanvas(QLabel):
         self.setMouseTracking(True)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setMinimumSize(900, 480)
-        self.setStyleSheet("background:#0b1220; border:1px solid #34445b;")
+        self.setStyleSheet("background:#0f1510; border:1px solid rgba(143,209,79,36);")
         self.image_size: tuple[int, int] | None = None
 
     def _image_point(self, position) -> tuple[float, float] | None:
@@ -165,7 +165,7 @@ class EntityAnnotationDialog(QDialog):
         self.zoom = QLabel("Zoom local")
         self.zoom.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.zoom.setFixedSize(360, 240)
-        self.zoom.setStyleSheet("background:#0b1220; border:1px solid #34445b;")
+        self.zoom.setStyleSheet("background:#0f1510; border:1px solid rgba(143,209,79,36);")
         side.addWidget(self.zoom)
         self.hover = QLabel("Survolez une cellule projetée.")
         side.addWidget(self.hover)
@@ -209,7 +209,7 @@ class EntityAnnotationDialog(QDialog):
         self.compare = QLabel()
         self.compare.setWordWrap(True)
         self.compare.setTextFormat(Qt.TextFormat.RichText)
-        self.compare.setStyleSheet("background:#172234; border:1px solid #2e3d52; border-radius:8px; padding:6px;")
+        self.compare.setStyleSheet("background:#121813; border:1px solid rgba(255,255,255,20); border-radius:8px; padding:6px;")
         side.addWidget(self.compare)
         self.compare_button = QPushButton("Comparer avec la prédiction")
         self.compare_button.clicked.connect(self._reveal_prediction)

@@ -60,7 +60,9 @@ def relative_time(when: datetime, now: datetime | None = None) -> str:
 class Page(QScrollArea):
     """Colonne centrée max 800px, padding 32/24/140 (place du dock), gap 24."""
 
-    def __init__(self, app: "AppView", key: str) -> None:
+    def __init__(self, app: "AppView", key: str, hero: QWidget | None = None, max_width: int = 800,
+                 margins: tuple[int, int, int, int] = (24, 32, 24, 140), spacing: int = 24) -> None:
+        """``hero`` remplace l'en-tête illustré (pages des outils avancés : titre et texte seuls)."""
         super().__init__()
         self.app, self.key = app, key
         self.setWidgetResizable(True)
@@ -73,16 +75,18 @@ class Page(QScrollArea):
         row.addStretch(1)
         self.column = QWidget()
         self.column.setObjectName("d2Screen")
-        self.column.setMaximumWidth(800)
+        self.column.setMaximumWidth(max_width)
         self.column.setMinimumWidth(640)
         self.layout_ = QVBoxLayout(self.column)
-        self.layout_.setContentsMargins(24, 32, 24, 140)
-        self.layout_.setSpacing(24)
+        self.layout_.setContentsMargins(*margins)
+        self.layout_.setSpacing(spacing)
         row.addWidget(self.column, 100)
         row.addStretch(1)
         self.setWidget(outer)
-        title, text, image = HEROES[key]
-        self.hero = HeroHeader(title, text, image)
+        if hero is None:
+            title, text, image = HEROES[key]
+            hero = HeroHeader(title, text, image)
+        self.hero = hero
         self.layout_.addWidget(self.hero)
         self.content = QVBoxLayout()
         self.content.setSpacing(16)
@@ -833,7 +837,8 @@ class SettingsPage(Page):
                            ("Français", "English"), "Français", disabled=("English",)),
             ], False, False),
             ("stAdvanced", "Outils avancés", "Calibration, scan des sorts, observation et corpus", [
-                info_row("Interface avancée", "DofBot2", self.app.open_advanced.emit, "Ouvrir"),
+                info_row("Outils avancés", "", self.app.open_advanced.emit, "Ouvrir",
+                         "Connexion, observation, scan, simulation, corpus et journal"),
             ], False, False),
         ])
 
