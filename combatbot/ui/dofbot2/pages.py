@@ -8,7 +8,9 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QFontMetrics, QImage, QPainter, QPainterPath, QPen
-from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QScrollArea, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QDialog, QGridLayout, QHBoxLayout, QLineEdit, QScrollArea, QVBoxLayout, QWidget,
+)
 
 from combatbot.ui.dofbot2 import theme as t
 from combatbot.ui.dofbot2.controls import (
@@ -16,7 +18,8 @@ from combatbot.ui.dofbot2.controls import (
 )
 from combatbot.ui.dofbot2.settings import (
     ALERT_KINDS, DETECTED_AT_KEY, DUNGEONS, SPELL_DEFAULTS, SPELL_TARGETS, SPELL_TIMINGS, ZONES, Place,
-    SpellBinding, clamp_index, current_plan, monsters_key, plan_summary,
+    SpellBinding, clamp_index, current_plan, load_dungeon_places, monsters_key, plan_summary,
+    recent_dungeon_ids,
 )
 from combatbot.ui.dofbot2.system import webhook_problem
 from combatbot.ui.dofbot2.widgets import HoverButton, rounded_pixmap
@@ -197,6 +200,7 @@ class PlaceCard(HoverButton):
         self.setFixedHeight(78 + 10 + 34 + 12)
         self.setMinimumWidth(120)
         self.setToolTip(place.name)
+        self.image = QImage(place.image_path) if place.image_path else QImage()
 
     def paintEvent(self, _event) -> None:  # noqa: N802 - API Qt
         painter = QPainter(self)
@@ -208,13 +212,21 @@ class PlaceCard(HoverButton):
         painter.save()
         painter.setClipPath(path)
         image = QRectF(0, 0, self.width(), 78)
-        painter.fillRect(image, QColor("#0f1510"))
-        painter.setPen(QPen(t.green(0.05), 5.66))
-        for offset in range(-78, self.width() + 78, 16):
-            painter.drawLine(QPointF(offset, 78), QPointF(offset + 78, 0))
-        painter.setPen(QColor(t.TEXT_MUTED))
-        painter.setFont(t.font(10, 500, mono=True))
-        painter.drawText(image, Qt.AlignmentFlag.AlignCenter, "image")
+        if self.image.isNull():
+            painter.fillRect(image, QColor("#0f1510"))
+            painter.setPen(QPen(t.green(0.05), 5.66))
+            for offset in range(-78, self.width() + 78, 16):
+                painter.drawLine(QPointF(offset, 78), QPointF(offset + 78, 0))
+            painter.setPen(QColor(t.TEXT_MUTED))
+            painter.setFont(t.font(10, 500, mono=True))
+            painter.drawText(image, Qt.AlignmentFlag.AlignCenter, "image")
+        else:
+            scaled = self.image.scaled(QSize(self.width(), 78), Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                                       Qt.TransformationMode.SmoothTransformation)
+            source = QRectF((scaled.width() - self.width()) / 2, (scaled.height() - 78) / 2,
+                            self.width(), 78)
+            painter.drawImage(image, scaled, source)
+            painter.fillRect(image, QColor(0, 0, 0, 38))
         painter.restore()
         name_font = t.font(13, 700)
         painter.setFont(name_font)
@@ -233,26 +245,114 @@ class PlaceCard(HoverButton):
         self._focus_ring(painter, rect.adjusted(2, 2, -2, -2), 14)
 
 
+class DungeonCatalogDialog(QDialog):
+    """Fenêtre dédiée au catalogue complet, avec recherche instantanée."""
+
+    def __init__(self, places: tuple[Place, ...], selected_index: int, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.places = places
+        self.selected_index: int | None = None
+        self.setWindowTitle("DofBot2 · Tous les donjons")
+        self.setObjectName("d2Screen")
+        self.setStyleSheet(t.STYLE)
+        self.resize(1080, 760)
+        self.setMinimumSize(820, 600)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(28, 24, 28, 24)
+        layout.setSpacing(14)
+        heading = QHBoxLayout()
+        titles = QVBoxLayout()
+        titles.setSpacing(3)
+        titles.addWidget(label("Tous les donjons", "d2H2"))
+        self.result_count = label("", "d2Note")
+        titles.addWidget(self.result_count)
+        heading.addLayout(titles, 1)
+        close = button("Fermer", "d2Secondary")
+        close.clicked.connect(self.reject)
+        heading.addWidget(close)
+        layout.addLayout(heading)
+
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Rechercher un donjon, un niveau ou un boss…")
+        self.search.setClearButtonEnabled(True)
+        layout.addWidget(self.search)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        host = QWidget()
+        host.setObjectName("d2Screen")
+        self.grid = QGridLayout(host)
+        self.grid.setContentsMargins(0, 4, 0, 8)
+        self.grid.setSpacing(12)
+        self.cards: list[PlaceCard] = []
+        for index, place in enumerate(places):
+            place_card = PlaceCard(place)
+            place_card.setChecked(index == selected_index)
+            place_card.clicked.connect(lambda _checked=False, index=index: self._choose(index))
+            self.cards.append(place_card)
+        scroll.setWidget(host)
+        layout.addWidget(scroll, 1)
+        self.search.textChanged.connect(self._filter)
+        self._filter("")
+        self.search.setFocus()
+
+    def _choose(self, index: int) -> None:
+        self.selected_index = index
+        self.accept()
+
+    def _filter(self, query: str) -> None:
+        words = query.casefold().split()
+        visible = []
+        for place, place_card in zip(self.places, self.cards):
+            haystack = f"{place.name} {place.meta} {place.boss or ''}".casefold()
+            match = all(word in haystack for word in words)
+            place_card.setVisible(match)
+            if match:
+                visible.append(place_card)
+        for place_card in self.cards:
+            self.grid.removeWidget(place_card)
+        for position, place_card in enumerate(visible):
+            self.grid.addWidget(place_card, position // 4, position % 4)
+        self.result_count.setText(f"{len(visible)} donjon{'s' if len(visible) != 1 else ''}")
+
+
 class PlacesPage(Page):
-    """Donjons (``donjon``) ou zones (``zone``) : grille de 4 cartes, accordéons, « Programmer »."""
+    """Donjons récents + catalogue séparé, ou grille des zones."""
 
     def __init__(self, app: "AppView", mode: str) -> None:
         super().__init__(app, mode)
         self.mode = mode
-        self.places = DUNGEONS if mode == "donjon" else ZONES
+        self.places = load_dungeon_places(app.storage) if mode == "donjon" else ZONES
         self.index_key = "dj" if mode == "donjon" else "zn"
+        if mode == "donjon":
+            recent_header = QHBoxLayout()
+            recent_header.addWidget(label("DONJONS FARMÉS RÉCEMMENT", "d2Caps"))
+            recent_header.addStretch(1)
+            show_all = button("Afficher tous les donjons", "d2Secondary")
+            show_all.clicked.connect(self.show_all_dungeons)
+            recent_header.addWidget(show_all)
+            self.content.addLayout(recent_header)
         grid_host = QWidget()
-        grid = QGridLayout(grid_host)
-        grid.setContentsMargins(0, 0, 0, 0)
-        grid.setSpacing(12)
+        self.places_grid = QGridLayout(grid_host)
+        self.places_grid.setContentsMargins(0, 0, 0, 0)
+        self.places_grid.setSpacing(12)
         self.cards: list[PlaceCard] = []
-        for index, place in enumerate(self.places):
-            place_card = PlaceCard(place)
-            place_card.clicked.connect(lambda _checked=False, index=index: self.select(index))
-            grid.addWidget(place_card, index // 4, index % 4)
-            grid.setColumnStretch(index % 4, 1)
-            self.cards.append(place_card)
+        self.card_indices: list[int] = []
+        self.empty_recent = label(
+            "Aucun donjon farmé récemment. Ouvrez le catalogue pour en choisir un.", "d2Note", wrap=True)
+        if mode == "zone":
+            for index, place in enumerate(self.places):
+                self._add_card(index, place)
         self.content.addWidget(grid_host)
+        if mode == "donjon":
+            self.content.addWidget(self.empty_recent)
+            self.refresh_recent()
+        self.place_details = label("", "d2Note", wrap=True)
+        self.content.addWidget(self.place_details)
+        if self.mode == "donjon":
+            self._save_selected_place(self.selected_index)
         actions = QHBoxLayout()
         actions.setSpacing(12)
         actions.addStretch(1)
@@ -264,14 +364,23 @@ class PlacesPage(Page):
 
     @property
     def selected_index(self) -> int:
+        if self.mode == "donjon":
+            selected_id = self.app.settings.get("dj_id")
+            if isinstance(selected_id, int):
+                for index, place in enumerate(self.places):
+                    if place.place_id == selected_id:
+                        return index
         return clamp_index(self.app.settings.get(self.index_key, 0), len(self.places))
 
     def select(self, index: int) -> None:
         previous = self.selected_index
         self.app.settings.set(self.index_key, index)
+        if self.mode == "donjon":
+            self._save_selected_place(index)
         if self.app.settings.get("plan_mode", "donjon") == self.mode:
             self.app.settings.set("planned", False)   # le lieu programmé a changé : à reprogrammer
         self._sync_cards()
+        self._sync_details()
         if self.mode == "zone" and previous != index:
             self._build_accordions()   # les monstres dépendent de la zone
         self._sync_schedule()
@@ -287,14 +396,84 @@ class PlacesPage(Page):
         self.app.notify("Activité programmée", place.name, t.GREEN)
 
     def refresh(self) -> None:
+        if self.mode == "donjon":
+            self.refresh_recent()
         self._sync_cards()
+        self._sync_details()
         self._sync_schedule()
         if not self.accordions:
             self._build_accordions()
 
     def _sync_cards(self) -> None:
-        for index, place_card in enumerate(self.cards):
+        for index, place_card in zip(self.card_indices, self.cards):
             place_card.setChecked(index == self.selected_index)
+
+    def _add_card(self, index: int, place: Place) -> None:
+        place_card = PlaceCard(place)
+        place_card.clicked.connect(lambda _checked=False, index=index: self.select(index))
+        position = len(self.cards)
+        self.places_grid.addWidget(place_card, position // 4, position % 4)
+        self.places_grid.setColumnStretch(position % 4, 1)
+        self.card_indices.append(index)
+        self.cards.append(place_card)
+
+    def refresh_recent(self) -> None:
+        if self.mode != "donjon":
+            return
+        for place_card in self.cards:
+            self.places_grid.removeWidget(place_card)
+            place_card.hide()
+            place_card.deleteLater()
+        self.cards = []
+        self.card_indices = []
+        by_id = {place.place_id: index for index, place in enumerate(self.places)}
+        indices = [by_id[item] for item in recent_dungeon_ids(self.app.settings) if item in by_id]
+        if not indices:
+            indices = self._legacy_recent_indices()
+        for index in indices:
+            self._add_card(index, self.places[index])
+        self.empty_recent.setVisible(not self.cards)
+        self._sync_cards()
+
+    def _legacy_recent_indices(self) -> list[int]:
+        """Reprend les sessions antérieures au stockage structuré des donjons récents."""
+        if self.app.profile_id is None:
+            return []
+        by_name = {place.name: index for index, place in enumerate(self.places)}
+        result = []
+        for row in self.app.storage.recent_profile_events("dofbot2.", self.app.profile_id, 100):
+            message = str(row["message"])
+            prefix = "Session démarrée · "
+            if message.startswith(prefix):
+                index = by_name.get(message[len(prefix):])
+                if index is not None and index not in result:
+                    result.append(index)
+            if len(result) >= 8:
+                break
+        return result
+
+    def show_all_dungeons(self) -> None:
+        dialog = DungeonCatalogDialog(self.places, self.selected_index, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted and dialog.selected_index is not None:
+            self.select(dialog.selected_index)
+
+    def _save_selected_place(self, index: int) -> None:
+        place = self.places[index]
+        self.app.settings.set("dj_id", place.place_id)
+        self.app.settings.set("dj_place", {"place_id": place.place_id, "name": place.name,
+                                           "meta": place.meta, "boss": place.boss})
+
+    def _sync_details(self) -> None:
+        place = self.places[self.selected_index]
+        if self.mode != "donjon" or not place.map_ids:
+            self.place_details.setText("")
+            return
+        rooms = " → ".join(f"{name} [{map_id}]" for name, map_id in zip(place.room_names, place.map_ids))
+        self.place_details.setText(
+            f"Données locales du client · niveau conseillé {place.level} · "
+            f"entrée {place.entrance_map_id} · sortie {place.exit_map_id}\n"
+            f"Cartes déclarées : {rooms}"
+        )
 
     def _sync_schedule(self) -> None:
         plan = current_plan(self.app.settings)
@@ -654,7 +833,7 @@ class SettingsPage(Page):
                            ("Français", "English"), "Français", disabled=("English",)),
             ], False, False),
             ("stAdvanced", "Outils avancés", "Calibration, scan des sorts, observation et corpus", [
-                info_row("Interface avancée", "PythonBot", self.app.open_advanced.emit, "Ouvrir"),
+                info_row("Interface avancée", "DofBot2", self.app.open_advanced.emit, "Ouvrir"),
             ], False, False),
         ])
 

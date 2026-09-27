@@ -111,7 +111,7 @@ class CombatStateDialog(QDialog):
         self.entries = state_entries(repository)
         if not self.entries:
             raise ValueError("Aucune frame avec image du client : capturez d'abord un combat en Vision réelle "
-                             "(« Enregistrer la séquence » coché) avec cette version de PythonBot.")
+                             "(« Enregistrer la séquence » coché) avec cette version de DofBot2.")
         self.sessions: dict[str, list[CorpusEntry]] = {}
         for entry in self.entries:
             self.sessions.setdefault(entry.session_id, []).append(entry)

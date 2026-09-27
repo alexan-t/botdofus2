@@ -401,7 +401,7 @@ GrabCallable = Callable[[], tuple[np.ndarray, np.ndarray | None, np.ndarray | No
 
 
 class HUDCollectionDialog(QDialog):
-    """HUD Real Collection : l'utilisateur joue, PythonBot capture seulement PA/PM."""
+    """HUD Real Collection : l'utilisateur joue, DofBot2 capture seulement PA/PM."""
 
     collection_changed = Signal()
 
@@ -415,7 +415,7 @@ class HUDCollectionDialog(QDialog):
         self.resize(520, 520)
         root = QVBoxLayout(self)
         notice = QLabel(
-            "<b>Lecture seule.</b> Jouez normalement : PythonBot capture uniquement la fenêtre et "
+            "<b>Lecture seule.</b> Jouez normalement : DofBot2 capture uniquement la fenêtre et "
             "découpe PA/PM. Aucun clic, sort, déplacement, fin de tour ni lancement de combat n'est "
             "envoyé. Aucune lecture n'est affichée : les valeurs seront saisies dans la revue HUD."
         )

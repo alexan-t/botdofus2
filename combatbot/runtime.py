@@ -17,7 +17,10 @@ from typing import Callable
 from combatbot import __version__
 
 
-APP_NAME = "PythonBot"
+APP_NAME = "DofBot2"
+# Le dossier historique reste volontairement inchangé : profils, calibrations et corpus existants
+# doivent être retrouvés après le changement de nom de l'application.
+DATA_DIRECTORY_NAME = "PythonBot"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -33,7 +36,7 @@ def app_data_root() -> Path:
         local = os.environ.get("LOCALAPPDATA")
         if not local:
             local = str(Path.home() / "AppData" / "Local")
-        return Path(local) / APP_NAME
+        return Path(local) / DATA_DIRECTORY_NAME
     return PROJECT_ROOT
 
 
@@ -91,7 +94,7 @@ def configure_logging() -> Path:
     root.setLevel(logging.INFO)
     if not any(isinstance(item, RotatingFileHandler) and Path(item.baseFilename) == log_path for item in root.handlers):
         root.addHandler(handler)
-    logging.info("Démarrage PythonBot %s | Python %s | exécutable=%s | données=%s",
+    logging.info("Démarrage DofBot2 %s | Python %s | exécutable=%s | données=%s",
                  __version__, sys.version.replace("\n", " "), executable_path(), app_data_root())
     return log_path
 
@@ -100,7 +103,7 @@ def format_crash(stage: str, exception_type: type[BaseException], exception: Bas
                  tb) -> str:
     return (
         f"Date : {datetime.now().astimezone().isoformat()}\n"
-        f"Version PythonBot : {__version__}\n"
+        f"Version DofBot2 : {__version__}\n"
         f"Étape : {stage}\n"
         f"Exécutable : {executable_path()}\n"
         f"Données : {app_data_root()}\n\n"
@@ -113,7 +116,7 @@ def install_exception_hooks(show_error: Callable[[str], None]) -> None:
         report = format_crash(stage, exception_type, exception, tb)
         logging.critical(report)
         show_error(
-            "PythonBot a rencontré une erreur inattendue.\n\n"
+            "DofBot2 a rencontré une erreur inattendue.\n\n"
             f"{exception_type.__name__} : {exception}\n\n"
             f"Le diagnostic a été enregistré dans :\n{log_directory() / 'pythonbot.log'}"
         )

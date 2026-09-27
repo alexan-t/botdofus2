@@ -19,7 +19,15 @@ fonts = root / "assets" / "fonts"
 for font_file in sorted(fonts.glob("*.ttf")) + sorted(fonts.glob("OFL-*.txt")):
     application_data.append((str(font_file), "assets/fonts"))
 
-icon_path = root / "assets" / "pythonbot.ico"
+logo = root / "assets" / "illustration" / "logo" / "logo.png"
+if logo.exists():
+    application_data.append((str(logo), "assets/illustration/logo"))
+boss_illustrations = root / "assets" / "illustration" / "boss_donjon"
+for illustration in boss_illustrations.glob("*") if boss_illustrations.is_dir() else ():
+    if illustration.is_file():
+        application_data.append((str(illustration), "assets/illustration/boss_donjon"))
+
+icon_path = root / "assets" / "illustration" / "logo" / "DofBot2.ico"
 icon = str(icon_path) if icon_path.exists() else None
 
 a = Analysis(
@@ -82,7 +90,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="PythonBot",
+    name="DofBot2",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -102,5 +110,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name="PythonBot",
+    name="DofBot2",
 )

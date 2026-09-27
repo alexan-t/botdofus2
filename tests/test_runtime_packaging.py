@@ -6,7 +6,7 @@ from combatbot.storage import Storage
 
 def test_packaged_storage_migrates_legacy_database_once(tmp_path, monkeypatch) -> None:
     project = tmp_path / "project"
-    executable = project / "dist" / "PythonBot" / "PythonBot.exe"
+    executable = project / "dist" / "DofBot2" / "DofBot2.exe"
     executable.parent.mkdir(parents=True)
     source = project / "data" / "pythonbot.sqlite3"
     source.parent.mkdir(parents=True)

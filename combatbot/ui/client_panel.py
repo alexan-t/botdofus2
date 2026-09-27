@@ -73,7 +73,7 @@ class ClientPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
         self.setStyleSheet(PANEL_STYLE)
-        subtitle = QLabel("Lecture seule : PythonBot regarde l'écran, il ne clique jamais dans DOFUS.")
+        subtitle = QLabel("Lecture seule : DofBot2 regarde l'écran, il ne clique jamais dans DOFUS.")
         subtitle.setObjectName("subtitle")
         layout.addWidget(subtitle)
         # Étapes visibles d'un coup d'œil, puis une seule consigne : la prochaine action.
@@ -205,7 +205,7 @@ class ClientPanel(QWidget):
     def showEvent(self, event) -> None:  # noqa: N802 - API Qt
         super().showEvent(event)
         if self.connected_hwnd is None:
-            self.refresh_windows()   # DOFUS lancé après PythonBot : pas besoin de cliquer Actualiser
+            self.refresh_windows()   # DOFUS lancé après DofBot2 : pas besoin de cliquer Actualiser
 
     def set_calibration_state(self, state: str, text: str) -> None:
         self.calibration_state = state
@@ -232,7 +232,7 @@ class ClientPanel(QWidget):
         elif not has_window:
             step = "Lancez DOFUS : la fenêtre apparaîtra ici (ou cliquez ↻)."
         elif not connected:
-            step = "Cliquez « Connecter ». PythonBot se masque une seconde le temps de capturer DOFUS."
+            step = "Cliquez « Connecter ». DofBot2 se masque une seconde le temps de capturer DOFUS."
         elif not self.content_confirmed:
             step = "Regardez l'aperçu ci-dessous. Si c'est bien votre jeu, cliquez « Oui, l'aperçu montre DOFUS »."
         elif calibration is None or self.calibration_state == "absent":

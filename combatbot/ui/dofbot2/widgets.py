@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import (
     QColor, QFontMetrics, QImage, QMouseEvent, QPainter, QPainterPath, QPen, QPixmap,
@@ -52,12 +54,14 @@ def rounded_pixmap(image: QImage, size: QSize, radius: float) -> QPixmap:
 
 
 class LogoBadge(QWidget):
-    """Pastille « D2 » ; ``halo`` ajoute l'anneau et la lueur de l'écran de démarrage."""
+    """Logo DofBot2 ; ``halo`` ajoute l'anneau et la lueur de l'écran de démarrage."""
 
     def __init__(self, size: int, radius: int, text_size: int, halo: bool = False, parent: QWidget | None = None):
         super().__init__(parent)
         self.box, self.radius, self.text_size, self.halo = size, radius, text_size, halo
         self.margin = 60 if halo else 0
+        logo_path = Path(__file__).resolve().parents[3] / "assets" / "illustration" / "logo" / "logo.png"
+        self.logo = QImage(str(logo_path))
         self.setFixedSize(size + 2 * self.margin, size + 2 * self.margin)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
@@ -74,11 +78,15 @@ class LogoBadge(QWidget):
             painter.drawEllipse(rect.center(), self.box / 2 + self.margin, self.box / 2 + self.margin)
             painter.setBrush(t.green(0.08))
             painter.drawRoundedRect(rect.adjusted(-10, -10, 10, 10), self.radius + 10, self.radius + 10)
-        painter.setBrush(QColor(t.GREEN))
-        painter.drawRoundedRect(rect, self.radius, self.radius)
-        painter.setPen(QColor(t.ON_GREEN))
-        painter.setFont(t.font(self.text_size, 800, spacing=-0.04))
-        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, "D2")
+        if not self.logo.isNull():
+            pixmap = rounded_pixmap(self.logo, QSize(self.box, self.box), self.radius)
+            painter.drawPixmap(rect.toRect(), pixmap)
+        else:
+            painter.setBrush(QColor(t.GREEN))
+            painter.drawRoundedRect(rect, self.radius, self.radius)
+            painter.setPen(QColor(t.ON_GREEN))
+            painter.setFont(t.font(self.text_size, 800, spacing=-0.04))
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, "D2")
 
 
 class Avatar(QWidget):

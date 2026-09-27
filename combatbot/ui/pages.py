@@ -355,7 +355,7 @@ class CombatPage(QWidget):
         real_layout.addWidget(self.hover_info)
         self.observation_help = QLabel(
             "Lecture seule. Pour identifier le joueur, activez « Voici mon personnage » puis cliquez "
-            "sur son marqueur dans l'aperçu PythonBot."
+            "sur son marqueur dans l'aperçu DofBot2."
         )
         self.observation_help.setWordWrap(True)
         real_layout.addWidget(self.observation_help)

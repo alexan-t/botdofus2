@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+import unicodedata
 
+from combatbot.gamedata.errors import GameDataError
+from combatbot.runtime import PROJECT_ROOT, executable_path, is_frozen
 from combatbot.storage import Storage
 
 
@@ -19,14 +23,21 @@ class Place:
     meta: str
     boss: str | None = None
     monsters: tuple[str, ...] = ()
+    place_id: int | None = None
+    level: int | None = None
+    map_ids: tuple[int, ...] = ()
+    room_names: tuple[str, ...] = ()
+    entrance_map_id: int | None = None
+    exit_map_id: int | None = None
+    image_path: str | None = None
 
 
 # Catalogue initial de la maquette ; les images restent des emplacements à fournir.
 DUNGEONS = (
-    Place("Donjon des Bouftous", "Niv. 20 · 5 salles", boss="Bouftou Royal"),
-    Place("Château Ensablé", "Niv. 40 · 4 salles", boss="Mob l'Éponge"),
-    Place("Antre du Dragon Cochon", "Niv. 60 · 6 salles", boss="Dragon Cochon"),
-    Place("Donjon des Larves", "Niv. 30 · 5 salles", boss="Shin Larve"),
+    Place("Cour du Bouftou Royal", "Niv. 30 · 5 cartes", boss="Bouftou Royal", place_id=1),
+    Place("Château Ensablé", "Niv. 20 · 6 cartes", boss="Mob l'Éponge", place_id=19),
+    Place("Antre du Dragon Cochon", "Niv. 100 · 13 cartes", boss="Dragon Cochon", place_id=6),
+    Place("Donjon des Larves", "Niv. 50 · 15 cartes", boss="Shin Larve", place_id=33),
 )
 ZONES = (
     Place("Champs d'Astrub", "Niv. 1–30 · 12 maps", monsters=("Pissenlit", "Tofu", "Moskito", "Larve Bleue")),
@@ -34,6 +45,83 @@ ZONES = (
     Place("Forêt des Abraknydes", "Niv. 60–90 · 14 maps", monsters=("Abraknyde", "Tronknyde", "Arakne")),
     Place("Cimetière d'Amakna", "Niv. 40–70 · 8 maps", monsters=("Chafer", "Chafer Archer", "Fantôme")),
 )
+
+IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".jfif", ".webp")
+KNOWN_DUNGEON_BOSSES = {
+    "cour_du_bouftou_royal": ("Bouftou Royal", 147, "bouftou_royal"),
+    "antre_du_dragon_cochon": ("Dragon Cochon", 113, "dragon_cochon"),
+    "chateau_ensable": ("Mob l'Éponge", 928, "mob_l_eponge"),
+    "donjon_des_larves": ("Shin Larve", 457, "shin_larve"),
+}
+
+
+def _slug(text: str) -> str:
+    normalized = unicodedata.normalize("NFKD", text.replace("’", "'"))
+    ascii_text = "".join(char for char in normalized if not unicodedata.combining(char)).lower()
+    return "_".join("".join(char if char.isalnum() else " " for char in ascii_text).split())
+
+
+def _illustration_directories() -> tuple[Path, ...]:
+    directories = [PROJECT_ROOT / "assets" / "illustration" / "boss_donjon"]
+    if is_frozen():
+        # Permet d'ajouter une illustration au projet sans reconstruire l'exécutable.
+        directories.insert(0, executable_path().parent.parent.parent / "assets" / "illustration" / "boss_donjon")
+    return tuple(dict.fromkeys(path.resolve() for path in directories))
+
+
+def _manual_illustration(*stems: str) -> Path | None:
+    wanted = {stem.casefold() for stem in stems if stem}
+    for directory in _illustration_directories():
+        if not directory.is_dir():
+            continue
+        for path in directory.iterdir():
+            if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS and path.stem.casefold() in wanted:
+                return path
+    return None
+
+
+def load_dungeon_places(storage: Storage) -> tuple[Place, ...]:
+    """Adapte le catalogue réel à l'UI ; revient au catalogue de démonstration sans client configuré."""
+    client_value = str(storage.get_setting("dofus_client_directory") or "").strip()
+    client = Path(client_value) if client_value else None
+    if client is None or not client.is_dir():
+        return DUNGEONS
+    try:
+        from combatbot.gamedata.dungeons import load_dungeons
+        records = load_dungeons(client)
+    except (GameDataError, KeyError, OSError, ValueError):
+        return DUNGEONS
+
+    generic = client / "content" / "gfx" / "guideBook" / "donjon-200x600.png"
+    places = []
+    for record in records:
+        slug = _slug(record.name)
+        boss_name = None
+        boss_id = None
+        candidates = (f"donjon_{record.dungeon_id}", slug)
+        known = KNOWN_DUNGEON_BOSSES.get(slug)
+        if known:
+            boss_name, boss_id, boss_slug = known
+            candidates += (boss_slug,)
+        manual = _manual_illustration(*candidates)
+        boss_icon = (client / "content" / "themes" / "darkStone" / "texture" / "songes" /
+                     f"boss_{boss_id}.png") if boss_id is not None else None
+        image = manual or (boss_icon if boss_icon and boss_icon.is_file() else None) or \
+            (generic if generic.is_file() else None)
+        names = tuple(room.name or f"Map {room.map_id}" for room in record.rooms)
+        places.append(Place(
+            record.name,
+            f"Niv. {record.optimal_level} · {len(record.rooms)} carte{'s' if len(record.rooms) != 1 else ''}",
+            boss=boss_name,
+            place_id=record.dungeon_id,
+            level=record.optimal_level,
+            map_ids=tuple(room.map_id for room in record.rooms),
+            room_names=names,
+            entrance_map_id=record.entrance_map_id,
+            exit_map_id=record.exit_map_id,
+            image_path=str(image) if image else None,
+        ))
+    return tuple(places) or DUNGEONS
 
 # Types d'alertes filtrés par leur interrupteur dans l'onglet Alertes.
 ALERT_KINDS = {
@@ -96,6 +184,25 @@ def monsters_key(zone_index: int) -> str:
     return f"mobs{zone_index}"
 
 
+def recent_dungeon_ids(settings: SettingsBinding) -> tuple[int, ...]:
+    raw = settings.get("recent_dungeon_ids", [])
+    if not isinstance(raw, list):
+        return ()
+    result = []
+    for value in raw:
+        if isinstance(value, int) and value not in result:
+            result.append(value)
+    return tuple(result[:8])
+
+
+def remember_recent_dungeon(settings: SettingsBinding, place: Place) -> None:
+    """Mémorise un donjon quand sa session démarre, le plus récent en premier."""
+    if place.place_id is None:
+        return
+    values = [place.place_id, *(item for item in recent_dungeon_ids(settings) if item != place.place_id)]
+    settings.set("recent_dungeon_ids", values[:8])
+
+
 def clamp_index(value: object, size: int) -> int:
     return value if isinstance(value, int) and 0 <= value < size else 0
 
@@ -110,6 +217,13 @@ class Plan:
 def current_plan(settings: SettingsBinding) -> Plan:
     mode = settings.get("plan_mode", "donjon")
     mode = mode if mode in ("donjon", "zone") else "donjon"
+    if mode == "donjon":
+        saved = settings.get("dj_place")
+        if isinstance(saved, dict) and isinstance(saved.get("name"), str):
+            place = Place(str(saved["name"]), str(saved.get("meta") or ""),
+                          boss=str(saved["boss"]) if saved.get("boss") else None,
+                          place_id=int(saved["place_id"]) if saved.get("place_id") is not None else None)
+            return Plan(mode, place, bool(settings.get("planned", False)))
     places = DUNGEONS if mode == "donjon" else ZONES
     index = clamp_index(settings.get("dj" if mode == "donjon" else "zn", 0), len(places))
     return Plan(mode, places[index], bool(settings.get("planned", False)))

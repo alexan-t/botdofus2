@@ -1,4 +1,4 @@
-# PythonBot — LOT 3B-4R : recette réelle du lecteur PA/PM (0.4.3)
+# DofBot2 — assistant DOFUS local (0.4.3)
 
 Application Windows/PySide6 avec le **simulateur du LOT 1**, la calibration et le scan de sorts du **LOT 2**, puis une session d'**observation réelle en lecture seule** pour le LOT 3. L'observateur analyse uniquement les pixels de la fenêtre choisie. Il ne lance aucun sort, ne déplace aucun personnage et n'envoie aucun clic au client. Il ne lit ni la mémoire du processus ni le réseau.
 
@@ -28,8 +28,11 @@ fenêtre sans cadre avec barre de titre custom :
      **Outils avancés** : l'interface historique (calibration, scan, observation, corpus).
 
 Démarrer/Arrêter gère la session (état, journal, alertes, signal `running_changed`) : aucun moteur
-d'automatisation n'y est encore branché et DofBot2 reste en lecture seule vis-à-vis du jeu. Les lieux
-proposés sont le catalogue de la maquette ; illustrations et images restent des emplacements à fournir.
+d'automatisation n'y est encore branché et DofBot2 reste en lecture seule vis-à-vis du jeu. L'onglet
+**Donjons** lit `Dungeons.d2o`, `MapPositions.d2o` et `i18n_fr.d2i` depuis le client configuré : nom,
+niveau conseillé, cartes, entrée et sortie viennent donc des données locales. Les illustrations placées
+dans `assets/illustration/boss_donjon/` sont prioritaires ; une vignette du client ou l'image générique de
+donjon sert de repli. Sans client configuré, les quatre cartes de démonstration restent disponibles.
 Réglages stockés en SQLite (`profile_settings` / `settings`), sans migration du schéma.
 `python main.py --screen=connect` (ou `profile`, `create`, `app`) ouvre directement un écran.
 Polices Manrope et JetBrains Mono : `assets/fonts/` (SIL OFL).
@@ -40,7 +43,7 @@ Chaîne : `DofusCellId` → `GridCoordinate` (GameData) → `GridScreenTransform
 
 1. **Paramètres → Données du client** : choisissez le dossier du client (une fois).
 2. **Combat → Vision réelle** : saisissez le **Map ID active** et cliquez sur **Charger**. La map est
-   **déclarée manuellement** : PythonBot ne détecte pas la map courante et ne sait pas quand elle change.
+   **déclarée manuellement** : DofBot2 ne détecte pas la map courante et ne sait pas quand elle change.
 3. **Calibrer projection de grille** : sur une capture figée, cliquez sur **Proposition automatique**
    (acceptée seulement si le score et la marge sont suffisants), utilisez **Hypothèse suivante** si le
    placement est ambigu, ou ajustez position, largeur, hauteur et inclinaison (flèches = ±1 px). Les
@@ -116,7 +119,7 @@ et LayoutTransform restent indépendants de ce module.
 
 L'analyse s'exécute dans un worker. Les index sont mis en cache selon les chemins,
 tailles et dates ; les maps sont chargées à la demande. Les rapports, caches et
-exports JSON sont écrits dans le dossier de données de PythonBot, sous
+exports JSON sont écrits dans le dossier de données de DofBot2, sous
 `data/gamedata/`, jamais dans le client. Le bouton **Exporter JSON** produit
 `data/gamedata/debug/map_<id>.json`. Seules les maps effectivement chargées sont
 comptées comme lisibles ; une entrée d'index ne suffit pas.
@@ -177,7 +180,7 @@ Depuis PowerShell, à la racine du projet :
 .\build_exe.ps1
 ```
 
-Le script utilise `.venv\Scripts\python.exe` s'il démarre, sinon `.venv\validation\Scripts\python.exe`, sinon s'arrête avec une erreur claire. Il n'installe rien : si PyInstaller (>=6.16,<7) manque, il s'arrête avant tout nettoyage et indique la commande d'installation. Il nettoie ensuite les anciens résultats et construit le package ONEDIR décrit par `PythonBot.spec`. Le programme final est `dist\PythonBot\PythonBot.exe` et se lance par double-clic sans console. Si `assets\pythonbot.ico` existe, elle est automatiquement utilisée ; sinon le build conserve l'icône Windows par défaut.
+Le script utilise `.venv\Scripts\python.exe` s'il démarre, sinon `.venv\validation\Scripts\python.exe`, sinon s'arrête avec une erreur claire. Il n'installe rien : si PyInstaller (>=6.16,<7) manque, il s'arrête avant tout nettoyage et indique la commande d'installation. Il nettoie ensuite les anciens résultats et construit le package ONEDIR décrit par `PythonBot.spec`. Le programme final est `dist\DofBot2\DofBot2.exe` et se lance par double-clic sans console. Le logo et l'icône Windows viennent de `assets\illustration\logo\`.
 
 La version packagée conserve ses données dans `%LOCALAPPDATA%\PythonBot\data\pythonbot.sqlite3` et ses diagnostics dans `%LOCALAPPDATA%\PythonBot\logs\pythonbot.log`. Au premier lancement, si aucune base locale n'existe et que l'exécutable se trouve encore dans le dossier `dist` de ce projet, la base `data\pythonbot.sqlite3` est copiée de façon atomique avant les migrations. Une base locale déjà présente est toujours prioritaire et n'est pas remplacée. En développement, `python main.py` continue d'utiliser les dossiers `data\` et `logs\` du projet.
 
@@ -186,10 +189,10 @@ Le package embarque explicitement les trois modèles ONNX, les configurations YA
 ## Parcours d'observation
 
 1. **Paramètres → Client DOFUS** : choisissez un profil, cliquez sur **Actualiser**, sélectionnez la fenêtre dont le titre contient « DOFUS » et cliquez sur **Connecter**. L'application affiche le handle et la taille de la zone cliente. Une fenêtre fermée ou minimisée est signalée. Le handle est enregistré avec le profil, mais une reconnexion manuelle est nécessaire après un nouveau lancement du client.
-2. Cliquez sur **Capture d'écran** pour afficher un diagnostic. PythonBot se masque brièvement et tente de placer la fenêtre choisie au premier plan. Il essaie d'abord une capture de la fenêtre par handle, recadrée à la zone cliente ; si elle échoue, il capture la portion visible du bureau. Le résultat apparaît dans l'aperçu. Windows peut refuser l'activation ; l'application le signale. La capture par handle peut être vide pour certains rendus de jeu et le repli visible peut contenir une fenêtre qui recouvre DOFUS : vérifiez toujours l'aperçu.
+2. Cliquez sur **Capture d'écran** pour afficher un diagnostic. DofBot2 se masque brièvement et tente de placer la fenêtre choisie au premier plan. Il essaie d'abord une capture de la fenêtre par handle, recadrée à la zone cliente ; si elle échoue, il capture la portion visible du bureau. Le résultat apparaît dans l'aperçu. Windows peut refuser l'activation ; l'application le signale. La capture par handle peut être vide pour certains rendus de jeu et le repli visible peut contenir une fenêtre qui recouvre DOFUS : vérifiez toujours l'aperçu.
 3. Cliquez sur **Calibrer / Recalibrer**. Déplacez et redimensionnez les six rectangles obligatoires sur la capture : combat, barre de sorts, PV, PA, PM et fin de tour. Le carré en bas à droite redimensionne chaque rectangle. La zone supplémentaire nom/classe est facultative. La calibration est enregistrée relativement à la zone cliente ; un fort changement de taille ou de rapport largeur/hauteur l'invalide et demande une nouvelle calibration. Un déplacement interne de l'interface sans changement de taille peut aussi nécessiter une recalibration manuelle.
-4. **Sorts → Scanner le client** : indiquez explicitement la page affichée, le nombre de colonnes et de rangées, puis le seuil de reconnaissance. Délimitez uniquement les icônes de la barre dans la calibration : excluez les commandes de pagination. Cliquez sur **Scanner mes sorts**. Les cases vides et doublons de la page sont signalés ; les icônes inconnues n'obtiennent aucun nom inventé. Une page supplémentaire se scanne après l'avoir sélectionnée vous-même dans DOFUS et avoir changé le numéro de page dans PythonBot.
-5. Sélectionnez une icône scannée, puis cliquez sur **Analyser l'infobulle (3 s)**. PythonBot se masque ; survolez le sort dans DOFUS pendant le compte à rebours. Délimitez ensuite l'infobulle sur la capture. L'OCR propose uniquement les valeurs qu'il a pu lire et conserve les autres comme **Inconnu**. Vérifiez et corrigez tous les champs dans le formulaire.
+4. **Sorts → Scanner le client** : indiquez explicitement la page affichée, le nombre de colonnes et de rangées, puis le seuil de reconnaissance. Délimitez uniquement les icônes de la barre dans la calibration : excluez les commandes de pagination. Cliquez sur **Scanner mes sorts**. Les cases vides et doublons de la page sont signalés ; les icônes inconnues n'obtiennent aucun nom inventé. Une page supplémentaire se scanne après l'avoir sélectionnée vous-même dans DOFUS et avoir changé le numéro de page dans DofBot2.
+5. Sélectionnez une icône scannée, puis cliquez sur **Analyser l'infobulle (3 s)**. DofBot2 se masque ; survolez le sort dans DOFUS pendant le compte à rebours. Délimitez ensuite l'infobulle sur la capture. L'OCR propose uniquement les valeurs qu'il a pu lire et conserve les autres comme **Inconnu**. Vérifiez et corrigez tous les champs dans le formulaire.
 6. Cliquez sur **Valider ce sort** ou **Valider les sélectionnés** une fois les champs requis renseignés. **Enregistrer configuration** conserve les modifications en statut « À vérifier » ; **Ignorer l'emplacement** supprime le résultat correspondant. Seules les icônes « Confirmé » servent de références visuelles lors des scans ultérieurs.
 7. **Paramètres → Lire le profil visible** propose les PV, PA, PM et, si la zone facultative contient des libellés explicites, le nom et la classe. Les champs incertains restent vides. Corrigez-les puis cliquez sur **Enregistrer le profil**. Chaque profil a sa calibration, ses scans et ses paramètres de reconnaissance.
 
@@ -197,12 +200,12 @@ La reconnaissance visuelle ne déduit jamais les caractéristiques à partir d'u
 
 ## Recette manuelle du LOT 3
 
-1. Lancez DOFUS, puis lancez PythonBot. Dans **Paramètres**, choisissez le profil, actualisez la liste des fenêtres et connectez le client DOFUS.
+1. Lancez DOFUS, puis lancez DofBot2. Dans **Paramètres**, choisissez le profil, actualisez la liste des fenêtres et connectez le client DOFUS.
 2. Vérifiez l'aperçu et cliquez sur **Confirmer la capture affichée**. Recalibrez si nécessaire. La zone **Combat** doit être présente et confirmée ; les zones **PA**, **PM**, **Fin de tour** et **Barre de sorts** améliorent l'observation.
-3. Entrez vous-même dans un combat. PythonBot ne réalise pas cette étape.
+3. Entrez vous-même dans un combat. DofBot2 ne réalise pas cette étape.
 4. Ouvrez **Combat**, choisissez **Vision réelle**, puis cliquez sur **Démarrer l'observation**.
-5. Jouez normalement. L'écran actualise environ 2,5 fois par seconde : état du combat, tour, PA, PM, cellule du joueur, ennemis, grille et scores de confiance. L'overlay reste dans l'aperçu PythonBot.
-6. Si la cellule du joueur reste inconnue, cliquez sur **Voici mon personnage**, puis cliquez sur le marqueur coloré du personnage dans l'aperçu PythonBot. La signature et la grille observée sont conservées avec le profil.
+5. Jouez normalement. L'écran actualise environ 2,5 fois par seconde : état du combat, tour, PA, PM, cellule du joueur, ennemis, grille et scores de confiance. L'overlay reste dans l'aperçu DofBot2.
+6. Si la cellule du joueur reste inconnue, cliquez sur **Voici mon personnage**, puis cliquez sur le marqueur coloré du personnage dans l'aperçu DofBot2. La signature et la grille observée sont conservées avec le profil.
 7. Cliquez volontairement sur **Enregistrer cette observation** pour produire une image originale, une image annotée et un JSON dans `data\debug\`. Aucune frame n'est enregistrée automatiquement.
 8. Cliquez sur **Arrêter l'observation** avant de fermer ou de changer de fenêtre.
 
@@ -215,7 +218,7 @@ Les observations de debug restent intactes dans `data\debug\`. Leur entrée dans
 1. Connectez DOFUS et effectuez la recette d'observation ci-dessus.
 2. Pendant un combat, enregistrez plusieurs frames successives avec **Enregistrer cette observation**. La sauvegarde contient la zone combat, l'overlay, la prédiction JSON et, quand les zones sont calibrées, `hud/ap_original.png` et `hud/mp_original.png`.
 3. Ouvrez **Corpus / Annotation** dans la barre latérale.
-4. Cliquez **Importer un debug** et sélectionnez son fichier `*-observation.json`. PythonBot copie seulement les fichiers utiles vers le corpus et ne modifie pas le debug source.
+4. Cliquez **Importer un debug** et sélectionnez son fichier `*-observation.json`. DofBot2 copie seulement les fichiers utiles vers le corpus et ne modifie pas le debug source.
 5. Sélectionnez l'observation et ouvrez l'annotation. Vous pouvez alterner capture originale et overlay.
 6. Indiquez seulement les vérités que vous connaissez : combat, tour, PA et PM. Une valeur laissée sur **Non annoté** reste absente du JSON.
 7. Choisissez un type de clic, puis cliquez le centre pixel réel du joueur, des ennemis, des cellules visibles ou des ancres. La coordonnée logique actuelle est affichée et conservée comme suggestion si elle existe ; le centre pixel humain reste la donnée principale.
@@ -323,7 +326,7 @@ explicitement à une sauvegarde, reprendre le chemin affiché lors de l'installa
 .\.venv\Scripts\python.exe -m combatbot.benchmark --restore-runtime-profiles "CHEMIN_DE_LA_SAUVEGARDE"
 ```
 
-Après `./build_exe.ps1`, lancer `dist/PythonBot/PythonBot.exe`, puis **Corpus / Annotation →
+Après `./build_exe.ps1`, lancer `dist/DofBot2/DofBot2.exe`, puis **Corpus / Annotation →
 Annoter les entités**. Le sélecteur en haut permet de choisir une séquence. Parcourir ses frames,
 vérifier que chaque identifiant E1/E2/E3 désigne le même ennemi, cocher la confirmation et cliquer
 **Enregistrer la confirmation de la séquence**. Répéter pour la seconde séquence existante.

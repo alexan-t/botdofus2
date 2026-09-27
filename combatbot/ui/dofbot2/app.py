@@ -20,7 +20,7 @@ from combatbot.ui.dofbot2.pages import (
 from combatbot.ui.dofbot2.profiles import ProfileEntry, profile_entry
 from combatbot.ui.dofbot2.widgets import Avatar, HoverButton
 from combatbot.ui.dofbot2.settings import (
-    TOAST_DURATIONS, SpellConfig, app_settings, current_plan, profile_settings,
+    TOAST_DURATIONS, SpellConfig, app_settings, current_plan, profile_settings, remember_recent_dungeon,
 )
 from combatbot.ui.dofbot2.system import (
     foreground_window, play_alert_sound, send_discord, set_autostart, webhook_problem,
@@ -247,6 +247,11 @@ class AppView(QWidget):
         if self.running or self.profile_id is None:
             return
         plan = current_plan(self.settings)
+        if plan.mode == "donjon":
+            remember_recent_dungeon(self.settings, plan.place)
+            dungeon_page = self.pages.get("donjon")
+            if isinstance(dungeon_page, PlacesPage):
+                dungeon_page.refresh_recent()
         self.running = True
         self._set_running_ui()
         self.log(f"Session démarrée · {plan.place.name}", "green")

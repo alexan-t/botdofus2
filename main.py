@@ -1,4 +1,4 @@
-"""Lancer l'application Windows de combat simulé."""
+"""Lancer l'application Windows DofBot2."""
 
 from __future__ import annotations
 
@@ -21,8 +21,8 @@ except Exception as bootstrap_error:
         import ctypes
         ctypes.windll.user32.MessageBoxW(
             0,
-            f"PythonBot ne peut pas démarrer : {bootstrap_error}\n\nConsultez :\n{log_directory() / 'pythonbot.log'}",
-            "Erreur PythonBot",
+            f"DofBot2 ne peut pas démarrer : {bootstrap_error}\n\nConsultez :\n{log_directory() / 'pythonbot.log'}",
+            "Erreur DofBot2",
             0x10,
         )
     raise SystemExit(1) from bootstrap_error
@@ -40,6 +40,8 @@ def _start_screen(argv: list[str]) -> str:
 
 def main() -> int:
     app = QApplication(sys.argv)
+    app.setApplicationName("DofBot2")
+    app.setApplicationDisplayName("DofBot2")
     install_exception_hooks(lambda message: QMessageBox.critical(None, "Erreur DofBot2", message))
     app.setStyle("Fusion")
     app.setStyleSheet(STYLE)  # dialogues sans parent de l'interface historique

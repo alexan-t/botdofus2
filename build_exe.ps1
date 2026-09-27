@@ -28,7 +28,7 @@ $Requirements = Join-Path $ProjectRoot "requirements-dev.txt"
 $Spec = Join-Path $ProjectRoot "PythonBot.spec"
 $BuildDirectory = Join-Path $ProjectRoot "build"
 $DistDirectory = Join-Path $ProjectRoot "dist"
-$Executable = Join-Path $DistDirectory "PythonBot\PythonBot.exe"
+$Executable = Join-Path $DistDirectory "DofBot2\DofBot2.exe"
 
 if ($null -eq $Python) {
     throw "Aucun interpréteur valide : ni .venv\Scripts\python.exe ni .venv\validation\Scripts\python.exe. Créez un environnement avec python -m venv .venv puis installez requirements-dev.txt."
@@ -56,7 +56,7 @@ foreach ($Directory in @($BuildDirectory, $DistDirectory)) {
     }
 }
 
-Write-Host "Construction ONEDIR de PythonBot..."
+Write-Host "Construction ONEDIR de DofBot2..."
 $OriginalPath = $env:PATH
 $PythonBase = (& $Python -c "import sys; print(sys.base_prefix)").Trim()
 $VenvScripts = Split-Path -Parent $Python

@@ -194,10 +194,22 @@ def test_dungeon_options_change_the_home_summary(window) -> None:
     runs.control.setValue(1)
     runs.control.minus.click()
     assert view.settings.get("runs") == 0
-    dungeons.cards[3].click()
+    # Le panneau principal ne montre que l'historique ; la sélection complète vient du catalogue.
+    dungeons.select(3)
     view.go_tab("home")
     assert view.pages["home"].plan_name.text() == DUNGEONS[3].name
     assert "∞ runs" in view.pages["home"].plan_sub.text()
+
+
+def test_started_dungeon_is_added_to_recent_list(window) -> None:
+    view = window.app_view
+    dungeons = view.pages["donjon"]
+    assert dungeons.cards == []
+    dungeons.select(2)
+    assert dungeons.cards == []  # choisir ne compte pas encore comme un farm
+    dungeons.schedule()
+    view.start()
+    assert [card.place.place_id for card in dungeons.cards] == [DUNGEONS[2].place_id]
 
 
 def test_alert_filters_badge_and_discord(window, monkeypatch) -> None:

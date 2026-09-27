@@ -2,7 +2,7 @@
 
 La frame d'origine et la grille GameData projetée enregistrée avec l'observation sont affichées ;
 le survol donne le cell ID, un zoom local aide à voir le marqueur au sol. Un clic sur une cellule
-choisit JOUEUR, ENNEMI (E1…E8), VIDE confirmé ou INCONNU. Tout se passe dans PythonBot : rien
+choisit JOUEUR, ENNEMI (E1…E8), VIDE confirmé ou INCONNU. Tout se passe dans DofBot2 : rien
 n'est cliqué dans DOFUS. La frame précédente n'est jamais recopiée dans la vérité.
 
 LOT 3B-5D : quelques cellules (contour jaune « ? ») sont tirées par ``empty_sampling`` sans

@@ -75,7 +75,7 @@ class MainWindow(QMainWindow):
         self._allow_legacy_fallback = False
         self._fullscreen_restore_maximized = False
         self._fullscreen_restore_geometry: QRect | None = None
-        self.setWindowTitle("PythonBot • Simulation et observation")
+        self.setWindowTitle("DofBot2 • Simulation et observation")
         self.resize(1270, 780)
         self.setMinimumSize(1050, 650)
 
