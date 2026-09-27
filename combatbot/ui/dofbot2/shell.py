@@ -6,17 +6,20 @@ import ctypes
 import sys
 
 from PySide6.QtCore import QEvent, QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QFontMetrics, QKeySequence, QPainter, QPainterPath, QPen, QRegion, QShortcut
+from PySide6.QtGui import QColor, QIcon, QKeySequence, QPainter, QPainterPath, QPen, QPixmap, QRegion, QShortcut
 from PySide6.QtWidgets import (
-    QHBoxLayout, QSizeGrip, QStackedWidget, QVBoxLayout, QWidget,
+    QHBoxLayout, QMenu, QSizeGrip, QStackedWidget, QSystemTrayIcon, QVBoxLayout, QWidget,
 )
 
 from combatbot.storage import Storage
 from combatbot.ui.dofbot2 import theme as t
+from combatbot.ui.dofbot2.app import TAB_LABELS, AppView
+from combatbot.ui.dofbot2.controls import button, label
 from combatbot.ui.dofbot2.game_windows import GameWindow
-from combatbot.ui.dofbot2.profiles import ProfileEntry, last_profile_id, profile_entry, remember_profile
+from combatbot.ui.dofbot2.profiles import last_profile_id, remember_profile
 from combatbot.ui.dofbot2.screens import ConnectScreen, CreateProfileScreen, ProfileScreen, SplashScreen
-from combatbot.ui.dofbot2.widgets import Avatar, HoverButton, StepIndicator, TitleBar
+from combatbot.ui.dofbot2.system import hotkey_from_message, register_hotkeys, unregister_hotkeys
+from combatbot.ui.dofbot2.widgets import LogoBadge, StepIndicator, TitleBar
 from combatbot.ui.jobs import JobRunner
 from combatbot.ui.theme import STYLE as LEGACY_STYLE
 
@@ -25,44 +28,11 @@ RESIZE_BORDER = 6
 SCREENS = ("splash", "connect", "profile", "create", "app")
 
 
-class ProfileChip(HoverButton):
-    """Puce profil de la barre haute (avatar 32px, nom, méta) ; renvoie au choix du profil."""
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setFixedHeight(44)
-        self.avatar = Avatar(32, self)
-        self.avatar.move(6, 6)
-        self.name = ""
-        self.meta = ""
-        self.setToolTip("Changer de profil")
-
-    def set_profile(self, entry: ProfileEntry, window: GameWindow | None) -> None:
-        self.name = entry.name
-        parts = [entry.character_class] if entry.character_class else []
-        parts.append(window.title if window else "Aucune fenêtre")
-        self.meta = " · ".join(parts)
-        self.avatar.set_avatar(entry.color, entry.initial, entry.image_png)
-        width = max(QFontMetrics(t.font(13, 700)).horizontalAdvance(self.name),
-                    QFontMetrics(t.font(11)).horizontalAdvance(self.meta))
-        self.setFixedWidth(6 + 32 + 10 + width + 12)
-        self.update()
-
-    def paintEvent(self, _event) -> None:  # noqa: N802 - API Qt
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        rect = QRectF(self.rect())
-        if self.hovered:
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(t.SURFACE))
-            painter.drawRoundedRect(rect, 22, 22)
-        painter.setPen(QColor(t.TEXT))
-        painter.setFont(t.font(13, 700))
-        painter.drawText(QRectF(48, 5, rect.width() - 48, 18), Qt.AlignmentFlag.AlignVCenter, self.name)
-        painter.setPen(QColor(t.TEXT_2))
-        painter.setFont(t.font(11))
-        painter.drawText(QRectF(48, 23, rect.width() - 48, 15), Qt.AlignmentFlag.AlignVCenter, self.meta)
-        self._focus_ring(painter, rect.adjusted(0.5, 0.5, -0.5, -0.5), 22)
+def logo_icon() -> QIcon:
+    pixmap = QPixmap(64, 64)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    LogoBadge(64, 18, 26).render(pixmap)
+    return QIcon(pixmap)
 
 
 class RoundedFrame(QWidget):
@@ -83,8 +53,8 @@ class RoundedFrame(QWidget):
 
 
 class DofBot2Window(QWidget):
-    """Fenêtre principale. L'application historique est intégrée dans l'écran « app » en attendant
-    la migration des onglets (Accueil, Donjons, Zones, Sorts, Alertes, Réglages)."""
+    """Fenêtre principale. L'interface historique (calibration, scan, observation, corpus) reste
+    disponible dans « Outils avancés » et sert à vérifier la fenêtre et à scanner les sorts."""
 
     def __init__(self, storage: Storage, start_screen: str = "splash") -> None:
         super().__init__()
@@ -144,27 +114,36 @@ class DofBot2Window(QWidget):
         self.screens.addWidget(onboarding)
         self.onboarding = onboarding
 
-        self.app_page = QWidget()
-        self.app_page.setObjectName("d2Screen")
-        app_layout = QVBoxLayout(self.app_page)
-        app_layout.setContentsMargins(0, 0, 0, 0)
-        app_layout.setSpacing(0)
-        app_bar = QWidget()
-        app_bar.setObjectName("d2AppBar")
-        app_bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
-        app_bar.setFixedHeight(64)
-        bar_layout = QHBoxLayout(app_bar)
-        bar_layout.setContentsMargins(22, 0, 28, 0)
-        bar_layout.setSpacing(14)
-        self.profile_chip = ProfileChip()
-        self.profile_chip.clicked.connect(lambda: self.show_screen("profile"))
-        bar_layout.addWidget(self.profile_chip)
-        bar_layout.addStretch(1)
-        app_layout.addWidget(app_bar)
+        self.app_view = AppView(storage, self.jobs)
+        self.app_view.request_screen.connect(self.show_screen)
+        self.app_view.open_advanced.connect(self.open_advanced)
+        self.app_view.tab_changed.connect(lambda _key: self._update_crumb())
+        self.app_view.redetect_handler = self._redetect_spells
+        self.screens.addWidget(self.app_view)
+        self.app_page = self.app_view
+
+        self.advanced_page = QWidget()
+        self.advanced_page.setObjectName("d2Screen")
+        advanced_layout = QVBoxLayout(self.advanced_page)
+        advanced_layout.setContentsMargins(0, 0, 0, 0)
+        advanced_layout.setSpacing(0)
+        advanced_bar = QWidget()
+        advanced_bar.setObjectName("d2AppBar")
+        advanced_bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+        advanced_bar.setFixedHeight(64)
+        advanced_bar_layout = QHBoxLayout(advanced_bar)
+        advanced_bar_layout.setContentsMargins(28, 0, 28, 0)
+        advanced_bar_layout.setSpacing(14)
+        back = button("← Retour à DofBot2", "d2Back")
+        back.clicked.connect(lambda: self.show_screen("app"))
+        advanced_bar_layout.addWidget(back)
+        advanced_bar_layout.addWidget(label("Calibration, scan des sorts, observation et corpus", "d2Hint"))
+        advanced_bar_layout.addStretch(1)
+        advanced_layout.addWidget(advanced_bar)
         self.legacy_host = QVBoxLayout()
         self.legacy_host.setContentsMargins(0, 0, 0, 0)
-        app_layout.addLayout(self.legacy_host, 1)
-        self.screens.addWidget(self.app_page)
+        advanced_layout.addLayout(self.legacy_host, 1)
+        self.screens.addWidget(self.advanced_page)
 
         self.connect_screen.window_chosen.connect(self._window_chosen)
         self.profile_screen.profile_chosen.connect(self.enter_app)
@@ -179,6 +158,16 @@ class DofBot2Window(QWidget):
             self.size_grip = None
         self.fullscreen_shortcut = QShortcut(QKeySequence(Qt.Key.Key_F11), self)
         self.fullscreen_shortcut.activated.connect(self.toggle_fullscreen)
+        # F8 / F9 : raccourcis globaux sous Windows (RegisterHotKey), raccourcis de fenêtre sinon.
+        self._hotkeys_registered = False
+        self.local_shortcuts = []
+        if sys.platform != "win32":
+            for key, action in ((Qt.Key.Key_F8, self._hotkey_start_pause), (Qt.Key.Key_F9, self._hotkey_stop)):
+                shortcut = QShortcut(QKeySequence(key), self)
+                shortcut.activated.connect(action)
+                self.local_shortcuts.append(shortcut)
+        self.tray: QSystemTrayIcon | None = None
+        self.setWindowIcon(logo_icon())
         last = last_profile_id(storage)
         if start_screen == "app" and last is not None and any(p.id == last for p in storage.list_profiles()):
             self.enter_app(last)
@@ -191,8 +180,10 @@ class DofBot2Window(QWidget):
         page = self.screens.currentWidget()
         if page is self.splash:
             return "splash"
-        if page is self.app_page:
+        if page is self.app_view:
             return "app"
+        if page is self.advanced_page:
+            return "advanced"
         return {self.connect_screen: "connect", self.profile_screen: "profile",
                 self.create_screen: "create"}[self.onboarding_stack.currentWidget()]
 
@@ -204,7 +195,8 @@ class DofBot2Window(QWidget):
             if self.profile_id is None:
                 name = "profile"
             else:
-                self.screens.setCurrentWidget(self.app_page)
+                self.screens.setCurrentWidget(self.app_view)
+                self.app_view.go_tab(self.app_view.current_tab, animate=False)
         if name in ("connect", "profile", "create"):
             screen = {"connect": self.connect_screen, "profile": self.profile_screen,
                       "create": self.create_screen}[name]
@@ -219,29 +211,47 @@ class DofBot2Window(QWidget):
 
     def _window_chosen(self, window: GameWindow | None) -> None:
         self.game_window = window
-        self.show_screen("profile")
+        if self.profile_id is not None:   # « Changer » depuis Réglages : on garde le profil en cours
+            self.enter_app(self.profile_id)
+        else:
+            self.show_screen("profile")
 
     def enter_app(self, profile_id: int) -> None:
         self.profile_id = profile_id
         remember_profile(self.storage, profile_id)
-        entry = profile_entry(self.storage, self.storage.get_profile(profile_id))
-        self.profile_chip.set_profile(entry, self.game_window)
         legacy = self._ensure_legacy()
         panel = legacy.client_panel
         if panel.profile_id != profile_id or panel.profiles.findData(profile_id) < 0:
             panel.refresh_profiles(profile_id)
-        self.screens.setCurrentWidget(self.app_page)
+        self.app_view.set_profile(profile_id, self.game_window)
+        self.screens.setCurrentWidget(self.app_view)
         self._update_crumb()
         if self.game_window is not None:
             hwnd = self.game_window.hwnd
             # Laisse l'écran s'afficher avant la capture de vérification (qui masque la fenêtre).
             QTimer.singleShot(250, lambda: self._connect_legacy(hwnd))
 
+    def open_advanced(self) -> None:
+        self._ensure_legacy()
+        self.screens.setCurrentWidget(self.advanced_page)
+        self._update_crumb()
+
     def _connect_legacy(self, hwnd: int) -> None:
         if self.legacy is None or self._closing:
             return
         if not self.legacy.client_panel.connect_to(hwnd):
-            self.legacy.client_panel.show_error("La fenêtre choisie n'est plus ouverte : reconnectez-la dans Paramètres")
+            self.app_view.log("La fenêtre choisie n'est plus ouverte", "alert")
+            self.app_view.notify("Fenêtre introuvable", "Choisissez de nouveau la fenêtre du jeu dans Réglages.",
+                                 t.ALERT)
+
+    def _redetect_spells(self) -> None:
+        legacy = self._ensure_legacy()
+        if legacy.client_panel.connected_hwnd is None:
+            self.app_view.notify("Fenêtre non connectée",
+                                 "Connectez la fenêtre du jeu (Réglages → Connexion), puis relancez la détection.",
+                                 t.ALERT)
+            return
+        legacy.scan_panel.request_scan()
 
     def _ensure_legacy(self):
         if self.legacy is None:
@@ -251,6 +261,7 @@ class DofBot2Window(QWidget):
             legacy.setStyleSheet(LEGACY_STYLE)   # plus proche dans la cascade : garde son apparence
             legacy.stack.currentChanged.connect(lambda _index: self._update_crumb())
             legacy.fullscreen_shortcut.setEnabled(False)   # un seul F11 par fenêtre, sinon Qt l'ignore
+            legacy.scan_panel.scan_finished.connect(self.app_view.spells_detected)
             self.legacy_host.addWidget(legacy)
             legacy.installEventFilter(self)
             legacy.show()
@@ -259,10 +270,62 @@ class DofBot2Window(QWidget):
 
     def _update_crumb(self) -> None:
         crumb = ""
-        if self.screens.currentWidget() is self.app_page and self.legacy is not None:
+        page = self.screens.currentWidget()
+        if page is self.app_view:
+            crumb = TAB_LABELS.get(self.app_view.current_tab, "")
+        elif page is self.advanced_page and self.legacy is not None:
             index = self.legacy.stack.currentIndex()
-            crumb = self.legacy.nav_buttons[index].text() if 0 <= index < len(self.legacy.nav_buttons) else ""
+            name = self.legacy.nav_buttons[index].text() if 0 <= index < len(self.legacy.nav_buttons) else ""
+            crumb = f"Outils avancés · {name}" if name else "Outils avancés"
         self.title_bar.set_crumb(crumb)
+
+    # --- Raccourcis F8 / F9 ---------------------------------------------------------------------
+    def _hotkey_start_pause(self) -> None:
+        if self.profile_id is not None:
+            self.app_view.toggle_run()
+
+    def _hotkey_stop(self) -> None:
+        if self.profile_id is not None:
+            self.app_view.emergency_stop()
+
+    def showEvent(self, event) -> None:  # noqa: N802 - API Qt
+        super().showEvent(event)
+        if sys.platform == "win32" and not self._hotkeys_registered:
+            self._hotkeys_registered = True
+            refused = register_hotkeys(int(self.winId()))
+            if refused:   # touche déjà prise ailleurs : raccourci limité à la fenêtre DofBot2
+                actions = {"start_pause": (Qt.Key.Key_F8, self._hotkey_start_pause),
+                           "emergency_stop": (Qt.Key.Key_F9, self._hotkey_stop)}
+                for name in refused:
+                    key, action = actions[name]
+                    shortcut = QShortcut(QKeySequence(key), self)
+                    shortcut.activated.connect(action)
+                    self.local_shortcuts.append(shortcut)
+
+    # --- Barre des tâches ------------------------------------------------------------------------
+    def _minimize_to_tray(self) -> None:
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        if self.tray is None:
+            self.tray = QSystemTrayIcon(logo_icon(), self)
+            self.tray.setToolTip("DofBot2")
+            menu = QMenu(self)
+            menu.addAction("Ouvrir DofBot2", self._restore_from_tray)
+            menu.addAction("Quitter", self.close)
+            self.tray.setContextMenu(menu)
+            self.tray.activated.connect(
+                lambda reason: self._restore_from_tray()
+                if reason in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick)
+                else None)
+        self.tray.show()
+        self.hide()
+
+    def _restore_from_tray(self) -> None:
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+        if self.tray is not None:
+            self.tray.hide()
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802 - API Qt
         if watched is self.legacy and event.type() == QEvent.Type.Resize:
@@ -280,8 +343,8 @@ class DofBot2Window(QWidget):
         radius = 13
         path = QPainterPath()
         path.addRoundedRect(QRectF(rect), radius, radius)
-        path.addRect(QRectF(0, 0, rect.width(), radius))
-        self.legacy.setMask(QRegion(path.simplified().toFillPolygon().toPolygon()))
+        rounded = QRegion(path.toFillPolygon().toPolygon())
+        self.legacy.setMask(rounded.united(QRegion(0, 0, rect.width(), radius)))   # seuls les coins bas s'arrondissent
 
     # --- Fenêtre sans cadre --------------------------------------------------------------------
     def _toggle_maximized(self) -> None:
@@ -303,6 +366,8 @@ class DofBot2Window(QWidget):
     def changeEvent(self, event: QEvent) -> None:  # noqa: N802 - API Qt
         super().changeEvent(event)
         if event.type() == QEvent.Type.WindowStateChange:
+            if self.isMinimized() and self.app_view.app_settings.get("tray", True):
+                QTimer.singleShot(0, self._minimize_to_tray)
             full = self.isMaximized() or self.isFullScreen()
             self.frame.maximized = full
             self.frame.update()
@@ -316,6 +381,11 @@ class DofBot2Window(QWidget):
             self.size_grip.raise_()
 
     def nativeEvent(self, event_type, message):  # noqa: N802 - API Qt
+        if sys.platform == "win32" and bytes(event_type) == b"windows_generic_MSG":
+            hotkey = hotkey_from_message(int(message))
+            if hotkey is not None:
+                (self._hotkey_start_pause if hotkey == "start_pause" else self._hotkey_stop)()
+                return True, 0
         if sys.platform == "win32" and bytes(event_type) == b"windows_generic_MSG" \
                 and not (self.isMaximized() or self.isFullScreen()):
             hit = _hit_test(int(message), round(RESIZE_BORDER * self.devicePixelRatioF()))
@@ -334,6 +404,11 @@ class DofBot2Window(QWidget):
                 self.jobs.all_done.connect(self.close)
             event.ignore()
             return
+        if self._hotkeys_registered:
+            unregister_hotkeys(int(self.winId()))
+        if self.tray is not None:
+            self.tray.hide()
+        self.app_view.close_desktop_toasts()
         self.storage.close()
         super().closeEvent(event)
 

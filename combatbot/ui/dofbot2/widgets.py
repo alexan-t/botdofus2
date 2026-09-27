@@ -153,7 +153,12 @@ class Placeholder(QWidget):
     def __init__(self, text: str, radius: int = 18, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.text, self.radius = text, radius
+        self.font_size = 12
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def set_font_size(self, size: int) -> None:
+        self.font_size = size
+        self.update()
 
     def paintEvent(self, _event) -> None:  # noqa: N802 - API Qt
         painter = _antialiased(self)
@@ -172,8 +177,9 @@ class Placeholder(QWidget):
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawPath(path)
         painter.setPen(QColor(t.TEXT_3))
-        painter.setFont(t.font(12, 500, mono=True))
-        painter.drawText(rect.adjusted(24, 24, -24, -24), Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap,
+        painter.setFont(t.font(self.font_size, 500, mono=True))
+        margin = 24 if self.width() > 240 else 12
+        painter.drawText(rect.adjusted(margin, margin, -margin, -margin), Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap,
                          self.text)
 
 

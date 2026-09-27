@@ -183,11 +183,11 @@ def test_onboarding_flow_reaches_the_application(app, storage, monkeypatch) -> N
     kira = next(entry for entry in list_profile_entries(storage) if entry.name == "Kira")
     assert window.legacy.client_panel.profile_id == kira.id
     assert profiles.last_profile_id(storage) == kira.id
-    assert window.profile_chip.name == "Kira" and "Dofus · Kira" in window.profile_chip.meta
-    assert window.title_bar.crumb.text() == "· Tableau de bord"
+    assert window.app_view.profile_chip.name == "Kira" and "Dofus · Kira" in window.app_view.profile_chip.meta
+    assert window.title_bar.crumb.text() == "· Accueil"
     assert _wait_for(lambda: connected == [101])
     # La puce profil ramène au choix du profil ; les cartes reflètent le nouveau profil.
-    window.profile_chip.click()
+    window.app_view.profile_chip.click()
     assert window.current_screen == "profile"
     assert "Kira" in [card.name for card in window.profile_screen.cards]
     window.close()

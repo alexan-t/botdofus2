@@ -123,6 +123,70 @@ QLabel#d2PreviewClass {{ font-size: 13px; color: {TEXT_2}; }}
 
 QWidget#d2AppBar {{ border-bottom: 1px solid rgba(255,255,255,13); }}
 
+QWidget#d2Card {{ background: {SURFACE}; border: 1px solid rgba(255,255,255,15); border-radius: 18px; }}
+QWidget#d2Acc {{ background: {SURFACE}; border: 1px solid rgba(255,255,255,15); border-radius: 16px; }}
+QWidget#d2Acc[open="true"] {{ border-color: rgba(143,209,79,56); }}
+QWidget#d2Row {{ border-top: 1px solid rgba(255,255,255,13); }}
+QLabel#d2RowTitle {{ font-size: 14px; font-weight: 600; }}
+QLabel#d2RowDesc {{ font-size: 12px; color: {TEXT_2}; }}
+QLabel#d2RowError {{ font-size: 12px; color: {ALERT}; }}
+QWidget#d2Stepper {{ background: {WINDOW}; border: 1px solid rgba(255,255,255,20); border-radius: 17px; }}
+QPushButton#d2StepButton {{ background: transparent; border: none; color: {TEXT_2}; font-size: 16px;
+    min-width: 34px; max-width: 34px; min-height: 32px; max-height: 32px; padding: 0; }}
+QPushButton#d2StepButton:hover {{ color: {GREEN}; }}
+QPushButton#d2StepButton:disabled {{ color: #3a453c; }}
+QLabel#d2StepValue {{ font-family: '{MONO_FONT}'; font-size: 13px; font-weight: 600; }}
+QPushButton#d2Choice {{ background: transparent; border: 1px solid rgba(255,255,255,23); border-radius: 15px;
+    min-height: 28px; max-height: 28px; padding: 0 12px; font-size: 12px; font-weight: 700; color: {TEXT_2}; }}
+QPushButton#d2Choice:hover {{ color: {TEXT}; }}
+QPushButton#d2Choice:checked {{ background: rgba(143,209,79,41); border-color: rgba(143,209,79,140); color: {GREEN_LIGHT}; }}
+QPushButton#d2Choice:disabled {{ color: #3a453c; border-color: rgba(255,255,255,13); }}
+QLineEdit#d2Field {{ background: {WINDOW}; border: 1px solid rgba(255,255,255,20); border-radius: 10px;
+    padding: 0 12px; font-family: '{MONO_FONT}'; font-size: 12px; font-weight: 500; color: {TEXT};
+    selection-background-color: rgba(143,209,79,90); }}
+QLineEdit#d2Field:focus {{ border-color: {GREEN}; }}
+QLabel#d2InfoValue {{ font-family: '{MONO_FONT}'; font-size: 12px; font-weight: 600; color: {GREEN_LIGHT};
+    background: {WINDOW}; border-radius: 8px; padding: 4px 10px; }}
+QPushButton#d2InfoAction {{ background: transparent; border: none; color: {TEXT_2}; font-size: 12px;
+    font-weight: 700; padding: 2px; }}
+QPushButton#d2InfoAction:hover {{ color: {GREEN}; }}
+
+QLabel#d2PageTitle {{ font-size: 28px; font-weight: 800; letter-spacing: -0.84px; }}
+QLabel#d2PageText {{ font-size: 14px; color: {TEXT_2}; }}
+QLabel#d2PlanName {{ font-size: 20px; font-weight: 800; }}
+QLabel#d2PlanSub {{ font-size: 13px; color: {TEXT_2}; }}
+QLabel#d2LogTime {{ font-family: '{MONO_FONT}'; font-size: 12px; font-weight: 500; color: {TEXT_MUTED}; }}
+QLabel#d2LogText {{ font-size: 13px; }}
+QWidget#d2LogRow {{ border-top: 1px solid rgba(255,255,255,10); }}
+QLabel#d2Note {{ font-size: 12px; color: {TEXT_MUTED}; }}
+QLabel#d2Banner {{ font-size: 13px; color: {TEXT_2}; }}
+QLabel#d2SpellName {{ font-size: 18px; font-weight: 800; }}
+QLabel#d2UseLabel {{ font-size: 13px; font-weight: 600; color: {TEXT_2}; }}
+
+QWidget#d2StatusPill {{ background: {SURFACE}; border-radius: 16px; }}
+QLabel#d2StatusText {{ font-size: 12px; font-weight: 600; }}
+QPushButton#d2Run {{ background: {GREEN}; color: {ON_GREEN}; border: none; border-radius: 19px;
+    min-height: 38px; max-height: 38px; padding: 0 20px; font-size: 13px; font-weight: 800; }}
+QPushButton#d2Run:hover {{ background: {GREEN_HOVER}; }}
+QPushButton#d2Run[running="true"] {{ background: transparent; color: {TEXT}; border: 1px solid rgba(255,255,255,46); }}
+QPushButton#d2Run[running="true"]:hover {{ border-color: {TEXT_2}; }}
+QPushButton#d2Schedule {{ background: {GREEN}; color: {ON_GREEN}; border: none; border-radius: 22px;
+    min-height: 44px; max-height: 44px; padding: 0 24px; font-size: 14px; font-weight: 800; }}
+QPushButton#d2Schedule:hover {{ background: {GREEN_HOVER}; }}
+QPushButton#d2SmallOutline {{ background: transparent; border: 1px solid rgba(255,255,255,31); border-radius: 16px;
+    min-height: 32px; max-height: 32px; padding: 0 14px; font-size: 12px; font-weight: 700; color: {TEXT}; }}
+QPushButton#d2SmallOutline:hover {{ border-color: {GREEN}; }}
+QPushButton#d2GreenOutline {{ background: transparent; border: 1px solid rgba(143,209,79,102); border-radius: 18px;
+    min-height: 36px; max-height: 36px; padding: 0 16px; font-size: 12px; font-weight: 700; color: {GREEN_LIGHT}; }}
+QPushButton#d2GreenOutline:hover {{ background: rgba(143,209,79,20); }}
+QPushButton#d2Back {{ background: transparent; border: 1px solid rgba(255,255,255,31); border-radius: 16px;
+    min-height: 32px; max-height: 32px; padding: 0 14px; font-size: 12px; font-weight: 700; color: {TEXT}; }}
+QPushButton#d2Back:hover {{ border-color: {GREEN}; }}
+
+QWidget#d2Toast {{ background: {TOAST}; border: 1px solid rgba(255,255,255,20); border-radius: 14px; }}
+QLabel#d2ToastTitle {{ font-size: 13px; font-weight: 700; }}
+QLabel#d2ToastBody {{ font-size: 12px; color: {TEXT_2}; }}
+
 QScrollArea {{ background: transparent; border: none; }}
 QScrollArea > QWidget > QWidget {{ background: transparent; }}
 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
