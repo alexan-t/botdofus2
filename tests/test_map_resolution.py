@@ -393,7 +393,6 @@ def test_frame_never_saved_with_ambiguous_map() -> None:
 def test_frame_never_saved_with_unaligned_grid() -> None:
     from combatbot.corpus.recording_guard import recording_block_reason
     assert "projection de grille à vérifier" in recording_block_reason(_packet(alignment="MISALIGNED"))
-    assert recording_block_reason(_packet(visibility="UNKNOWN", alignment="INSUFFICIENT_EVIDENCE")) is not None
 
 
 def test_alignment_failure_blocks_corpus_recording() -> None:
@@ -404,8 +403,15 @@ def test_alignment_failure_blocks_corpus_recording() -> None:
 def test_resolved_map_and_aligned_grid_allow_recording() -> None:
     from combatbot.corpus.recording_guard import recording_block_reason
     assert recording_block_reason(_packet()) is None
-    # Hors combat / résultats : grille clairement non affichée, map résolue → gardée pour la phase/tour.
-    assert recording_block_reason(_packet(visibility="NOT_VISIBLE", alignment="INSUFFICIENT_EVIDENCE")) is None
+    # Hors combat / fenêtre de résultats : grille non visible ou incertaine, map résolue → gardée pour la
+    # phase/tour, mais marquée et exclue des entités (retour utilisateur : résultats jamais enregistrés).
+    from combatbot.corpus.recording_guard import recording_tags
+    for visibility in ("NOT_VISIBLE", "UNKNOWN"):
+        packet = _packet(visibility=visibility, alignment="INSUFFICIENT_EVIDENCE")
+        assert recording_block_reason(packet) is None and recording_tags(packet) == ("grid-not-aligned",)
+    assert recording_tags(_packet()) == ()
+    # Map toujours exigée, même sans grille.
+    assert recording_block_reason(_packet(status="TRANSITION", visibility="UNKNOWN")) is not None
     # Secours manuel (/mapid) : autorisé, comme avant 3B-6C, si la grille est alignée.
     assert recording_block_reason(_packet(status="UNKNOWN", source="user_verified_mapid")) is None
 
@@ -452,3 +458,21 @@ def test_named_format_rejects_partial_or_mixed_lines() -> None:
     masked = parse_map_info([("Amakna (Port de Madrestam)", 0.99), ("7,-4", 0.99)])
     assert masked.complete is False and masked.reason == "LEVEL_MISSING"
     assert parse_map_info([("Cour du Bouftou Royal", 0.6), ("2,-34", 0.99)]).complete is False
+
+
+def test_grid_not_aligned_frames_are_excluded_from_entity_annotation(tmp_path: Path) -> None:
+    from combatbot.corpus.repository import CorpusRepository
+    from combatbot.ui.entity_annotation_dialog import entity_entries
+    from combatbot.vision.combat_models import CombatGridObservation, CombatObservation, ObservationPacket
+    from combatbot.vision.grid_projection import GridScreenTransform
+    repository = CorpusRepository(tmp_path / "corpus")
+    grid = CombatGridObservation(grid_source="GAMEDATA_PROJECTED", map_id_declared=1,
+                                 transform=GridScreenTransform.from_cell_size((40, 20), 80, 40).to_dict())
+    observation = CombatObservation(True, 1.0, None, 0.0, None, 0.0, (), grid, None, None, 0.0, 0.0, 0.0)
+    image = np.zeros((60, 80, 3), np.uint8)
+    kept = repository.import_packet(ObservationPacket(observation, image, image, 1.0, {"session_id": "s", "frame_index": 0}))
+    tagged = repository.import_packet(ObservationPacket(observation, image, image, 1.0, {"session_id": "s", "frame_index": 1}),
+                                      tags=("entity-sequence", "grid-not-aligned"))
+    ids = {entry.observation_id for entry in entity_entries(repository)}
+    assert tagged.observation_id not in ids
+    assert kept.observation_id in ids or not ids          # sans cellules projetées, aucune n'est listée

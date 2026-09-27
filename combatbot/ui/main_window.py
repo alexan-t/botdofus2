@@ -1034,7 +1034,8 @@ class MainWindow(QMainWindow):
                 return
         self._sequence_last = (now, image, button)
         try:
-            entry = self.corpus.repository.import_packet(packet)
+            from combatbot.corpus.recording_guard import recording_tags
+            entry = self.corpus.repository.import_packet(packet, tags=("entity-sequence", *recording_tags(packet)))
         except (OSError, ValueError) as exc:
             self.combat.observation_help.setText(f"Séquence : enregistrement impossible ({exc})")
             return

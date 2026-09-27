@@ -64,6 +64,8 @@ def projected_cells(document: dict) -> list[dict]:
 def entity_entries(repository: CorpusRepository) -> list[CorpusEntry]:
     result = []
     for entry in repository.list_entries():
+        if "grid-not-aligned" in entry.tags:
+            continue      # 3B-6C : frame gardée pour la phase/tour, grille non alignée
         try:
             if projected_cells(repository.read_observation(entry)):
                 result.append(entry)
