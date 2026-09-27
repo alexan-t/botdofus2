@@ -238,3 +238,35 @@ def test_bindings_and_colors() -> None:
     assert value_color("Oui") == theme.GREEN_LIGHT
     assert value_color("Inconnu") == theme.TEXT_2
     assert value_color("153880322") == theme.TEXT
+
+
+def test_notifications_follow_the_visible_screen(window, monkeypatch) -> None:
+    monkeypatch.setattr(window, "isActiveWindow", lambda: True)
+    window.app_view.spells_detected(12)   # la détection se lance depuis les Outils avancés
+    assert [toast.title.text() for toast in window.advanced_view.toasts.toasts] == ["Détection terminée"]
+    assert window.app_view.toasts.toasts == []
+
+
+def test_legacy_features_stay_reachable(window, monkeypatch) -> None:
+    """Masquer l'interface historique ne doit rendre aucune de ses fonctions inaccessible."""
+    view = window.advanced_view
+    shown = []
+    monkeypatch.setattr("combatbot.ui.dofbot2.tool_frame.show_legacy_page",
+                        lambda host, page, title, subtitle: shown.append(
+                            (window.legacy.combat.mode.currentText(), title)))
+    view.go_tab("observation")
+    details = view.pages["observation"].accordions["details"].rows()
+    captions = [row.findChild(QLabel, "d2RowTitle").text() for row in details[:-1]]
+    assert "Qualité observation" in captions and "Sûre pour décision" in captions
+    window.legacy.combat.real_values["quality"].setText("Bonne")
+    view.pages["observation"].live_update()
+    assert view.pages["observation"].detail_values["quality"].text() == "Bonne"
+    view.open_scan_editor()
+    view.open_statistics()
+    view.open_simulated_combat()
+    view.open_gamedata_tools()
+    assert [title for _page, title in shown] == [
+        "Éditeur des sorts scannés", "Historique des combats", "Combat simulé", "Données du client DOFUS"]
+    assert shown[2][0] == "Simulation"   # la vue simulée s'ouvre en mode simulation
+    view.go_tab("observation")
+    assert window.legacy.combat.mode.currentText() == "Vision réelle"

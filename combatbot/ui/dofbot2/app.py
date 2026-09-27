@@ -119,6 +119,8 @@ class AppView(QWidget):
         self.current_tab = "home"
         self.redetect_handler: Callable[[], None] | None = None
         self.desktop_toasts: ToastStack | None = None
+        # Écran qui affiche les toasts quand cette vue est masquée (fourni par la fenêtre DofBot2).
+        self.toast_sink: Callable[[str, str, str, int], None] | None = None
         self.app_settings = app_settings(storage)
 
         layout = QVBoxLayout(self)
@@ -316,7 +318,9 @@ class AppView(QWidget):
         duration = TOAST_DURATIONS.get(str(settings.get("nfDur", "4 s")), 4000)
         window = self.window()
         in_front = window.isVisible() and window.isActiveWindow() and not window.isMinimized()
-        if in_front:
+        if in_front and not self.isVisible() and self.toast_sink is not None:
+            self.toast_sink(title, body, color, duration)   # autre écran affiché (Outils avancés)
+        elif in_front:
             self.toasts.push(title, body, color, duration)
             self._place_overlays()
         else:

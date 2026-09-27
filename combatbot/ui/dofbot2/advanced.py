@@ -415,6 +415,8 @@ class ConnexionPage(AdvancedPage):
                          outlined=True),
                 info_row("Analyser les fichiers", "", data._analyze, "Analyser", "Lecture seule, rien n'est modifié",
                          outlined=True),
+                info_row("Outils GameData", "", self.view.open_gamedata_tools, "Ouvrir",
+                         "Valider toutes les maps, inspecter ou exporter une map", outlined=True),
             ], False, True),
         ])
 
@@ -549,6 +551,32 @@ class ObservationPage(AdvancedPage):
         self.hover.move(12, self.canvas.height() - self.hover.height() - 12)
         self.hover.raise_()
         super().live_update()
+        self._update_details()
+
+    def _detail_rows(self) -> list[QWidget]:
+        combat = self.legacy.combat
+        self.detail_values = {}
+        rows = []
+        for key, value in combat.real_values.items():
+            row = info_row(_form_caption(value) or key, value.text() or "Inconnu")
+            self.detail_values[key] = row.control.layout().itemAt(0).widget()
+            rows.append(row)
+        self.signals_label = label(combat.real_signals.toPlainText() or "Aucun signal visuel pour l'instant.",
+                                   "d2RowDesc", wrap=True)
+        self.signals_label.setContentsMargins(0, 10, 0, 10)
+        rows.append(self.signals_label)
+        return rows
+
+    def _update_details(self) -> None:
+        combat = self.legacy.combat
+        for key, pill in getattr(self, "detail_values", {}).items():
+            text = combat.real_values[key].text() or "Inconnu"
+            pill.setText(text if len(text) < 60 else text[:57] + "…")
+            pill.setToolTip(text)
+            pill.setStyleSheet(f"color: {value_color(text)};")
+            pill.setVisible(True)
+        if hasattr(self, "signals_label"):
+            self.signals_label.setText(combat.real_signals.toPlainText() or "Aucun signal visuel pour l'instant.")
 
     def accordion_signature(self) -> object:
         combat = self.legacy.combat
@@ -591,6 +619,8 @@ class ObservationPage(AdvancedPage):
                 switch_row(switches, "legacy", "Autoriser la grille historique en secours",
                            "Utilisée uniquement si GameData est indisponible", False),
             ], False, True),
+            ("details", "Détails de l'observation", "Toutes les valeurs lues à chaque image", self._detail_rows(),
+             False, True),
             ("ent", "Entités", "Suivi des personnages sur la grille", [
                 _choices_row("Afficher", overlay_choices(combat, ENTITY_OVERLAYS)),
                 switch_row(switches, "sequence", "Enregistrer la séquence dans le corpus",
@@ -598,6 +628,24 @@ class ObservationPage(AdvancedPage):
                 split_row,
             ], False, True),
         ])
+
+
+def _form_caption(widget: QWidget) -> str | None:
+    """Libellé d'un champ de formulaire historique (QFormLayout imbriqué dans la carte)."""
+    from PySide6.QtWidgets import QFormLayout
+    parent = widget.parentWidget()
+    pending = [parent.layout()] if parent is not None and parent.layout() is not None else []
+    while pending:
+        layout = pending.pop()
+        if isinstance(layout, QFormLayout):
+            caption = layout.labelForField(widget)
+            if caption is not None:
+                return caption.text()
+        for index in range(layout.count()):
+            child = layout.itemAt(index).layout()
+            if child is not None:
+                pending.append(child)
+    return None
 
 
 def _choices_row(title: str, control: QWidget) -> QWidget:
@@ -792,10 +840,12 @@ class SpellScanPage(AdvancedPage):
                      for spell in self.view.storage.list_spells()]
         simulated.append(info_row("Nouveau sort simulé", "", self.view.open_simulated_spells, "Ajouter",
                                   outlined=True))
+        editor = info_row("Éditeur complet", "", self.view.open_scan_editor, "Ouvrir",
+                          "Nom, effets, dégâts, texte OCR, validation de plusieurs sorts", outlined=True)
         specs = []
-        if selected:
-            specs.append(("selected", "Sort sélectionné", "Vérifiez la lecture avant de la valider", selected, True,
-                          False))
+        selected.append(editor)
+        specs.append(("selected", "Sort sélectionné" if scan.current_spell_id is not None else "Sorts scannés",
+                      "Vérifiez la lecture avant de la valider", selected, scan.current_spell_id is not None, False))
         specs += [
             ("simSpells", "Sorts simulés", "Utilisés par la simulation, indépendants du scan", simulated, False, True),
             ("scanOpt", "Options du scan", "", [
@@ -942,6 +992,12 @@ class SimulationPage(AdvancedPage):
             ("simSet", "Paramètres", "Pris en compte au prochain combat simulé", [
                 player,
                 step_row(settings, "tick_ms", "Délai entre étapes", "", 350, 50, 2000, 50, "ms"),
+            ], False, True),
+            ("simMore", "Détails", "Historique et déroulé du combat simulé", [
+                info_row("Historique des combats", "", self.view.open_statistics, "Ouvrir",
+                         "Date, résultat, tours, XP et kamas", outlined=True),
+                info_row("Combat simulé", "", self.view.open_simulated_combat, "Ouvrir",
+                         "Grille, acteurs et historique des actions", outlined=True),
             ], False, True),
         ])
 
@@ -1369,8 +1425,8 @@ class AdvancedView(QWidget):
         self.pages[self.current_tab].live_update()
 
     # --- Services pour les pages --------------------------------------------------------------------
-    def notify(self, title: str, body: str = "", color: str = t.TEXT) -> None:
-        self.toasts.push(title, body, color, 3800)
+    def notify(self, title: str, body: str = "", color: str = t.TEXT, duration_ms: int = 3800) -> None:
+        self.toasts.push(title, body, color, duration_ms)
         self._place_overlays()
 
     def set_recheck(self, enabled: bool, persist: bool = True) -> None:
@@ -1396,10 +1452,35 @@ class AdvancedView(QWidget):
         except (RuntimeError, OSError, AttributeError):
             return None
 
-    def open_simulated_spells(self) -> None:
-        """Éditeur des sorts simulés de l'interface historique, présenté comme un outil."""
+    def open_legacy(self, page: QWidget, title: str, subtitle: str, tab: int | None = None) -> None:
+        """Page de l'interface historique présentée comme un outil (écran A7), puis rendue."""
+        from PySide6.QtWidgets import QTabWidget
         from combatbot.ui.dofbot2.tool_frame import show_legacy_page
-        show_legacy_page(self.window(), self.legacy.spells, "Sorts simulés",
-                         "Sorts utilisés par la simulation, indépendants du scan")
+        tabs = page.findChild(QTabWidget)
+        if tab is not None and tabs is not None:
+            tabs.setCurrentIndex(tab)
+        show_legacy_page(self.window(), page, title, subtitle)
         self.refresh_current()
 
+    def open_simulated_spells(self) -> None:
+        self.open_legacy(self.legacy.spells, "Sorts simulés", "Sorts utilisés par la simulation, indépendants du scan", 0)
+
+    def open_scan_editor(self) -> None:
+        self.open_legacy(self.legacy.spells, "Éditeur des sorts scannés",
+                         "Nom, caractéristiques, effets et texte OCR ; validation d'un ou plusieurs sorts", 1)
+
+    def open_statistics(self) -> None:
+        self.legacy.statistics.refresh()
+        self.open_legacy(self.legacy.statistics, "Historique des combats", "Combats simulés enregistrés")
+
+    def open_simulated_combat(self) -> None:
+        combat = self.legacy.combat
+        if combat.observation_stop.isEnabled():
+            self.notify("Observation en cours", "Arrêtez l'observation avant d'afficher le combat simulé.", t.ALERT)
+            return
+        combat.mode.setCurrentIndex(0)   # vue simulation : grille, acteurs et historique des actions
+        self.open_legacy(combat, "Combat simulé", "Grille, acteurs et historique des actions du dernier combat")
+
+    def open_gamedata_tools(self) -> None:
+        self.open_legacy(self.legacy.settings.gamedata_panel, "Données du client DOFUS",
+                         "Analyse, validation de toutes les maps, inspection et export d'une map")

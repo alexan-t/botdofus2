@@ -223,6 +223,7 @@ class DofBot2Window(QWidget):
             view.tab_changed.connect(lambda _key: self._update_crumb())
             self.screens.addWidget(view)
             self.advanced_view = view
+            self.app_view.toast_sink = view.notify
         self.screens.setCurrentWidget(self.advanced_view)
         self._update_crumb()
 
