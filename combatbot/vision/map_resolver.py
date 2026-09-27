@@ -168,6 +168,9 @@ class MapContextResolver:
         self.knowledge = knowledge or MapKnowledge()
 
     def _names_match(self, record: MapRecord, observation: MapInfoObservation) -> bool:
+        if observation.map_name is not None:
+            # Nom propre de salle : égalité exacte après normalisation (« Première » ≠ « Dernière »).
+            return bool(record.map_name) and normalize_name(record.map_name) == normalize_name(observation.map_name)
         return (name_similarity(record.sub_area_name, observation.sub_area_name) >= NAME_THRESHOLD
                 and name_similarity(record.area_name, observation.area_name) >= NAME_THRESHOLD
                 and (record.level is None or observation.level is None or record.level == observation.level))
@@ -210,7 +213,7 @@ class MapContextResolver:
             return MapResolution(None, MapResolutionStatus.INCONSISTENT, coords, candidates=tuple(r.map_id for r in initial),
                                  candidate_count=len(initial), initial_candidates=len(initial),
                                  reason="NAMES_OR_LEVEL_CONTRADICT_GAMEDATA", contributions=contributions, **base)
-        sources = ["OCR_COORDS", "AREA_NAMES"]
+        sources = ["OCR_COORDS", "MAP_NAME" if observation.map_name is not None else "AREA_NAMES"]
 
         def resolved(record: MapRecord, confidence: float, reason: str) -> MapResolution:
             return MapResolution(record.map_id, MapResolutionStatus.RESOLVED, coords, confidence, " + ".join(sources),
@@ -219,7 +222,7 @@ class MapContextResolver:
 
         if len(named) == 1:
             if len(initial) == 1:
-                sources[:] = ["OCR_COORDS_UNIQUE", "AREA_NAMES"]
+                sources[0] = "OCR_COORDS_UNIQUE"
             return resolved(named[0], 0.99, "UNIQUE_AFTER_NAMES")
         # Plusieurs maps partagent coordonnées + noms (extérieur / intérieur, donjons…).
         if previous_map_id is not None:

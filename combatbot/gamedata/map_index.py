@@ -15,7 +15,8 @@ from pathlib import Path
 import time
 import unicodedata
 
-INDEX_SCHEMA = "map-spatial-index-v1"
+INDEX_SCHEMA = "map-spatial-index-v2"
+PREVIOUS_SCHEMAS = ("map-spatial-index-v1",)
 SOURCE_TABLES = ("common/MapPositions.d2o", "common/SubAreas.d2o", "common/Areas.d2o",
                  "common/MapScrollActions.d2o", "i18n/i18n_fr.d2i")
 
@@ -34,13 +35,16 @@ class MapRecord:
     sub_area_name: str | None
     area_name: str | None
     neighbours: tuple[int, ...] = ()
+    # Nom propre de la map (salles de donjon, temples…) affiché à la place de « Zone (Sous-zone) ».
+    map_name: str | None = None
 
 
 def normalize_name(text: str | None) -> str:
     """Casse, accents, apostrophes typographiques et espaces normalisés (comparaison OCR)."""
     if not text:
         return ""
-    text = unicodedata.normalize("NFKD", text.replace("’", "'").replace("`", "'"))
+    text = unicodedata.normalize("NFKD", text.replace("’", "'").replace("`", "'")
+                                 .replace("–", "-").replace("—", "-"))
     text = "".join(char for char in text if not unicodedata.combining(char))
     return " ".join(text.lower().replace("(", " ").replace(")", " ").split())
 
@@ -129,7 +133,8 @@ def source_fingerprint(client_root: Path) -> str:
     return hashlib.sha256(json.dumps(parts).encode()).hexdigest()
 
 
-def build_index(client_root: Path, *, with_neighbours: bool = True, progress=None) -> MapSpatialIndex:
+def build_index(client_root: Path, *, with_neighbours: bool = True, progress=None,
+                known_neighbours: dict[int, tuple[int, ...]] | None = None) -> MapSpatialIndex:
     """Construit l'index depuis les fichiers du client (≈ 1 min avec les voisins DLM)."""
     from combatbot.gamedata.formats.d2i import D2IFile
     from combatbot.gamedata.formats.d2o import D2OFile
@@ -140,7 +145,10 @@ def build_index(client_root: Path, *, with_neighbours: bool = True, progress=Non
     sub_areas = {int(o["id"]): o for _key, o in D2OFile(data / "common" / "SubAreas.d2o").objects()}
     areas = {int(o["id"]): o for _key, o in D2OFile(data / "common" / "Areas.d2o").objects()}
     neighbours: dict[int, set[int]] = defaultdict(set)
-    if with_neighbours:
+    if known_neighbours is not None:
+        # Mise à niveau d'un ancien index de même empreinte : les voisins DLM (lents) sont repris.
+        neighbours.update({key: set(value) for key, value in known_neighbours.items()})
+    elif with_neighbours:
         from combatbot.gamedata.provider import LocalGameDataProvider
         provider = LocalGameDataProvider(client_root)
         provider.scan_client()
@@ -172,7 +180,8 @@ def build_index(client_root: Path, *, with_neighbours: bool = True, progress=Non
             int(sub_area["areaId"]) if sub_area else None, int(sub_area["level"]) if sub_area else None,
             bool(obj["outdoor"]), bool(obj["isTransition"]),
             i18n.text(sub_area["nameId"]) if sub_area else None, i18n.text(area["nameId"]) if area else None,
-            tuple(sorted(neighbours.get(map_id, ())))))
+            tuple(sorted(neighbours.get(map_id, ()))),
+            i18n.text(obj["nameId"]) if obj.get("nameId") else None))
     return MapSpatialIndex(records, fingerprint=fingerprint,
                            built_at=time.strftime("%Y-%m-%dT%H:%M:%S%z"))
 
@@ -182,13 +191,18 @@ def load_or_build(client_root: Path, cache_dir: Path, *, progress=None) -> MapSp
     cache_dir = Path(cache_dir)
     path = cache_dir / "map_spatial_index.json"
     fingerprint = source_fingerprint(client_root)
+    known_neighbours = None
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
         if raw.get("fingerprint") == fingerprint:
-            return MapSpatialIndex.from_dict(raw)
+            if raw.get("schema") == INDEX_SCHEMA:
+                return MapSpatialIndex.from_dict(raw)
+            if raw.get("schema") in PREVIOUS_SCHEMAS:
+                known_neighbours = {int(item["map_id"]): tuple(item.get("neighbours") or ())
+                                    for item in raw["maps"]}
     except (OSError, ValueError, KeyError, TypeError):
         pass
-    index = build_index(client_root, progress=progress)
+    index = build_index(client_root, progress=progress, known_neighbours=known_neighbours)
     cache_dir.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(index.to_dict(), ensure_ascii=False), encoding="utf-8")

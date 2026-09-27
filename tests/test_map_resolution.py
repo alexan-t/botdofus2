@@ -82,7 +82,7 @@ def test_gamedata_index_invalidates_when_source_changes(tmp_path: Path, monkeypa
     from combatbot.gamedata import map_index
     calls = []
     monkeypatch.setattr(map_index, "source_fingerprint", lambda root: "v1")
-    monkeypatch.setattr(map_index, "build_index", lambda root, progress=None: (calls.append(1), MapSpatialIndex(
+    monkeypatch.setattr(map_index, "build_index", lambda root, progress=None, **kwargs: (calls.append(1), MapSpatialIndex(
         [_record(1, 0, 0)], fingerprint=map_index.source_fingerprint(root)))[1])
     first = map_index.load_or_build(tmp_path, tmp_path / "cache")
     assert first.fingerprint == "v1" and len(calls) == 1
@@ -408,3 +408,47 @@ def test_resolved_map_and_aligned_grid_allow_recording() -> None:
     assert recording_block_reason(_packet(visibility="NOT_VISIBLE", alignment="INSUFFICIENT_EVIDENCE")) is None
     # Secours manuel (/mapid) : autorisé, comme avant 3B-6C, si la grille est alignée.
     assert recording_block_reason(_packet(status="UNKNOWN", source="user_verified_mapid")) is None
+
+
+# ------------------------------------------------------------------ donjons (format « nom de la map »)
+DUNGEON = [MapRecord(120063489, 2, -34, 1, 30, 1, 20, True, False, "Tainéla", "Astrub", (), None)] + [
+    MapRecord(map_id, 2, -34, -1, 82, 2, 30, False, False, "Cour du Bouftou", "Amakna", (), name)
+    for map_id, name in ((121373185, "Cour du Bouftou Royal - Première salle"),
+                         (121374209, "Cour du Bouftou Royal - Deuxième salle"),
+                         (121374211, "Cour du Bouftou Royal - Dernière salle"),
+                         (205784064, "Cour du Bouftou Royal"))]
+
+
+def test_dungeon_room_name_format_is_parsed() -> None:
+    """Cas réel (donjon Bouftou) : « Cour du Bouftou Royal - Première salle » puis « 2,-34 »."""
+    info = parse_map_info([("Cour du Bouftou Royal - Première salle", 0.99213), ("2,-34", 0.9999)])
+    assert info.complete and info.map_name == "Cour du Bouftou Royal - Première salle"
+    assert (info.coordinates.x, info.coordinates.y) == (2, -34) and info.level is None
+
+
+def test_dungeon_rooms_resolve_by_exact_room_name() -> None:
+    resolver = MapContextResolver(MapSpatialIndex(DUNGEON))
+    for name, expected in (("Cour du Bouftou Royal - Première salle", 121373185),
+                           ("Cour du Bouftou Royal - Deuxième salle", 121374209),
+                           ("COUR DU BOUFTOU ROYAL – DERNIERE SALLE", 121374211)):
+        info = parse_map_info([(name, 0.99), ("2,-34", 0.99)])
+        result = resolver.resolve(info, previous_map_id=120063489, scene_changed=True)
+        assert result.status is MapResolutionStatus.RESOLVED and result.map_id == expected, name
+        assert "MAP_NAME" in result.source
+
+
+def test_dungeon_room_name_is_never_fuzzy_matched() -> None:
+    """« Premiere » mal lu en « Premierc » : proche de plusieurs salles → jamais de choix approximatif."""
+    resolver = MapContextResolver(MapSpatialIndex(DUNGEON))
+    info = parse_map_info([("Cour du Bouftou Royal - Premierc salle", 0.99), ("2,-34", 0.99)])
+    result = resolver.resolve(info)
+    assert result.status is MapResolutionStatus.INCONSISTENT and result.map_id is None
+
+
+def test_named_format_rejects_partial_or_mixed_lines() -> None:
+    assert parse_map_info([("Cour du Bouftou Royal - Première salle", 0.99), ("2,-3?", 0.99)]).complete is False
+    assert parse_map_info([("2,-34", 0.99)]).complete is False                      # nom absent
+    # « Zone (Sous-zone) » avec « x,y » seul : niveau masqué → incomplet, jamais un nom de map.
+    masked = parse_map_info([("Amakna (Port de Madrestam)", 0.99), ("7,-4", 0.99)])
+    assert masked.complete is False and masked.reason == "LEVEL_MISSING"
+    assert parse_map_info([("Cour du Bouftou Royal", 0.6), ("2,-34", 0.99)]).complete is False

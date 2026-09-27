@@ -1,6 +1,8 @@
 """LOT 3B-6C : lecture des informations de map affichées en haut à gauche du client.
 
-Le client affiche « Zone (Sous-zone) » puis « x,y, Niveau N ». Une lecture n'est COMPLÈTE que si
+Le client affiche « Zone (Sous-zone) » puis « x,y, Niveau N » ; dans les donjons et lieux nommés
+il affiche le nom de la map (« Cour du Bouftou Royal - Première salle ») puis « x,y » seul.
+Une lecture n'est COMPLÈTE que si
 les deux lignes sont entières : un sprite qui masque une partie du texte peut faire lire un autre
 chiffre avec une forte confiance OCR (cas réel : « 7,-2 » lu « 7,-4 » derrière un personnage).
 Une lecture incomplète n'est jamais utilisée pour résoudre la map. Aucun chiffre n'est corrigé.
@@ -43,11 +45,15 @@ class MapInfoObservation:
     reason: str
     raw_lines: tuple[str, ...] = ()
     timestamp: float = 0.0
+    # Format « lieu nommé » (donjon, temple…) : nom de la map au lieu de « Zone (Sous-zone) ».
+    map_name: str | None = None
 
     @property
     def key(self) -> tuple | None:
         if not self.complete or self.coordinates is None:
             return None
+        if self.map_name is not None:
+            return (self.coordinates.x, self.coordinates.y, "map_name", normalize_name(self.map_name))
         return (self.coordinates.x, self.coordinates.y, normalize_name(self.area_name),
                 normalize_name(self.sub_area_name), self.level)
 
@@ -56,6 +62,7 @@ class MapInfoObservation:
         return {"x": coords.x if coords else None, "y": coords.y if coords else None,
                 "confidence": coords.confidence if coords else 0.0, "source": coords.source if coords else None,
                 "level": self.level, "area_name": self.area_name, "sub_area_name": self.sub_area_name,
+                "map_name": self.map_name,
                 "complete": self.complete, "reason": self.reason, "raw_lines": list(self.raw_lines)}
 
 
@@ -83,7 +90,7 @@ def parse_map_info(lines: list[tuple[str, float]], *, source: str = "RAPIDOCR",
                 return MapInfoObservation(None, None, None, None, False, "SEVERAL_COORDINATE_LINES", raw, timestamp)
             info_index, info_match = index, match
     if info_match is None:
-        return MapInfoObservation(None, None, None, None, False, "NO_COMPLETE_COORDINATE_LINE", raw, timestamp)
+        return _parse_named_map(lines, raw, source, timestamp)
     x, y, level = (int(info_match.group(i)) for i in (1, 2, 3))
     if abs(x) > COORDINATE_LIMIT or abs(y) > COORDINATE_LIMIT:
         return MapInfoObservation(None, None, None, None, False, "COORDINATES_OUT_OF_RANGE", raw, timestamp)
@@ -99,6 +106,35 @@ def parse_map_info(lines: list[tuple[str, float]], *, source: str = "RAPIDOCR",
                                   "LOW_OCR_SCORE", raw, timestamp)
     return MapInfoObservation(coordinates, level, name_match.group(1).strip(), name_match.group(2).strip(), True,
                               "COMPLETE", raw, timestamp)
+
+
+def _parse_named_map(lines: list[tuple[str, float]], raw: tuple[str, ...], source: str,
+                     timestamp: float) -> MapInfoObservation:
+    """Lieu nommé : lignes de nom puis une ligne contenant UNIQUEMENT « x,y ».
+
+    Une ligne « x,y, » tronquée (sprite devant « Niveau ») n'est pas une ligne de coordonnées seule ;
+    un nom « Zone (Sous-zone) » sans niveau est une lecture incomplète, jamais un nom de map.
+    """
+    coordinate_lines = [(index, parse_coordinates(text, source=source, confidence=float(score)))
+                        for index, (text, score) in enumerate(lines)]
+    coordinate_lines = [(index, value) for index, value in coordinate_lines if value is not None]
+    if len(coordinate_lines) != 1:
+        reason = "SEVERAL_COORDINATE_LINES" if coordinate_lines else "NO_COMPLETE_COORDINATE_LINE"
+        return MapInfoObservation(None, None, None, None, False, reason, raw, timestamp)
+    index, coordinates = coordinate_lines[0]
+    if index != len(lines) - 1:
+        return MapInfoObservation(coordinates, None, None, None, False, "TEXT_AFTER_COORDINATES", raw, timestamp)
+    name = " ".join(text for text, _score in lines[:index]).strip()
+    if not name:
+        return MapInfoObservation(coordinates, None, None, None, False, "MAP_NAME_MISSING", raw, timestamp)
+    if "(" in name or ")" in name:
+        return MapInfoObservation(coordinates, None, None, None, False, "LEVEL_MISSING", raw, timestamp)
+    score = min([coordinates.confidence] + [float(value) for _text, value in lines[:index]])
+    if score < 0.9:
+        return MapInfoObservation(coordinates, None, None, None, False, "LOW_OCR_SCORE", raw, timestamp,
+                                  map_name=name)
+    return MapInfoObservation(coordinates, None, None, None, True, "COMPLETE_NAMED_MAP", raw, timestamp,
+                              map_name=name)
 
 
 def extract_map_info_roi(client_image: np.ndarray, roi: tuple[float, float, float, float] = DEFAULT_MAP_INFO_ROI):

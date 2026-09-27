@@ -176,7 +176,29 @@ ACTIONS:                         NONE
   sert qu'au départage et s'abstient en cas de doute.
 - Aucun test live encore : voir § 9.
 
-## 9. Test live demandé (STOP)
+## 9. Test live — premier retour (27/09) et correction donjons
+
+Retour utilisateur : « ça détecte bien les maps sauf celles des donjons ». Journal : Astrub résolu à
+pied, y compris par le graphe (191105024 via 191105026, 120063489 via 120063490). Deux observations
+dans le donjon Bouftou restaient bloquées en TRANSITION / AWAITING_CONSENSUS.
+
+Cause : dans un donjon, le client n'affiche pas « Zone (Sous-zone) / x,y, Niveau N » mais le **nom
+de la salle** puis « x,y » seul : « Cour du Bouftou Royal - Première salle / 2,-34 ». Le parseur
+strict ne connaissait que le premier format et refusait toutes les lectures.
+
+Correction :
+- l'index lit le nom propre de chaque map (`MapPositions.nameId` → i18n) : 2 217 maps nommées ;
+  à (2,-34), chaque salle a un nom distinct (Première, Deuxième, Troisième, Quatrième, Dernière,
+  Sortie) ; l'ancien index en cache est mis à niveau en 0,9 s sans relire les DLM ;
+- second format de lecture « nom de la map » + ligne contenant uniquement « x,y » ; un
+  « Zone (Sous-zone) » sans niveau reste une lecture incomplète (texte masqué) ;
+- résolution par **égalité exacte** du nom normalisé (casse, accents, tirets) : « Première salle »
+  et « Dernière salle » ne diffèrent que de 3 lettres, un rapprochement approximatif serait dangereux.
+
+Rejeu des deux observations réelles : Première salle → **121373185**, Deuxième salle →
+**121374209** (RESOLVED, source `OCR_COORDS + MAP_NAME`). Benchmark corpus inchangé (0 mauvaise map).
+
+## 10. Test live demandé (STOP)
 
 1. Lancer PythonBot, démarrer la Vision réelle **sans** saisir /mapid.
 2. Rester sur une map : le bloc Map doit passer de « Détection de la map… » à l'ID détecté.
