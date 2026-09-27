@@ -31,6 +31,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="3B-5D : re-mesure TEST déjà vus, enregistrée comme diagnostic (pas un TEST)")
     parser.add_argument("--hud-split", action="store_true",
                         help="LOT 3B-4R2 : reconstruit explicitement le split HUD (TEST gelé) et affiche la distribution")
+    parser.add_argument("--combat-state", action="store_true",
+                        help="3B-6B : mesurer le détecteur phase/tour (TRAIN un combat laissé de côté, VALIDATION)")
+    parser.add_argument("--install-combat-state-model", action="store_true",
+                        help="3B-6B : installer le modèle phase/tour appris sur les vérités humaines TRAIN")
     parser.add_argument("--map-resolution", action="store_true",
                         help="3B-6C : rejouer le corpus pour mesurer la résolution automatique de map")
     parser.add_argument("--limit", type=int, help="Nombre maximal de frames (diagnostic)")
@@ -52,6 +56,8 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("--install-runtime-profiles exige --entities")
         return _install_entities(args)
     repository = CorpusRepository(args.corpus_root)
+    if args.combat_state or args.install_combat_state_model:
+        return _combat_state(repository, args)
     if args.map_resolution:
         return _map_resolution(repository, args)
     if args.grid_validation:
@@ -176,6 +182,25 @@ def _client_directory(args):
         return Path(client) if client else None
     except Exception:  # noqa: BLE001 - réglage absent : dossier inconnu
         return None
+
+
+def _combat_state(repository: CorpusRepository, args) -> int:
+    import json
+    from combatbot.corpus.combat_state_benchmark import (
+        build_runtime_model, markdown_summary, run_combat_state_benchmark,
+    )
+    root = args.runtime_data or (app_data_root() / "data")
+    if args.install_combat_state_model:
+        print(json.dumps(build_runtime_model(repository, root), ensure_ascii=False, indent=2), flush=True)
+    if args.combat_state:
+        report = run_combat_state_benchmark(repository)
+        output = args.output_dir or (root / "benchmarks")
+        output.mkdir(parents=True, exist_ok=True)
+        (output / "combat-state.json").write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str),
+                                                  encoding="utf-8")
+        (output / "combat-state.md").write_text(markdown_summary(report), encoding="utf-8")
+        print(markdown_summary(report), flush=True)
+    return 0
 
 
 def _map_resolution(repository: CorpusRepository, args) -> int:

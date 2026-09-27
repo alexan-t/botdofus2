@@ -104,7 +104,7 @@ class RealCombatObserver:
                  entity_tracker: EntityTracker | None = None,
                  entity_profiles: VisualProfiles | None = None,
                  background_model: CellBackgroundModel | None = None,
-                 map_context=None) -> None:
+                 map_context=None, combat_state_model=None) -> None:
         self.hwnd = hwnd
         self.calibration = calibration
         self.frame_provider = frame_provider or (lambda: capture_client(hwnd, activate=False))
@@ -146,6 +146,11 @@ class RealCombatObserver:
         self.capture_context = dict(capture_context or {})
         # LOT 3B-6C : MapContextService (détection automatique de map) ; None = map déclarée à la main.
         self.map_context = map_context
+        # LOT 3B-6B : phase/tour appris sur TRAIN humain ; absent → ancienne heuristique de tour.
+        from combatbot.vision.combat_state_detector import CombatStateModel, SemanticCombatStateTracker
+        self.combat_state_model = combat_state_model if combat_state_model is not None else \
+            CombatStateModel.load(app_data_root() / "data" / "combat_state_model")
+        self.combat_state_tracker = SemanticCombatStateTracker()
         self.session_id = str(self.capture_context.get("session_id") or f"session_{uuid4().hex[:12]}")
         self._frame_index = 0
         self._last_numbers: tuple[float, tuple[int | None, float], tuple[int | None, float]] | None = None
@@ -246,6 +251,15 @@ class RealCombatObserver:
             player_turn = False
         else:
             player_turn = None
+        semantic = None
+        if self.combat_state_model is not None:
+            # LOT 3B-6B : le tour vient uniquement de la couleur du bouton fin de tour ; jamais de mémoire.
+            from combatbot.vision.combat_state_detector import extract_features
+            semantic = self.combat_state_tracker.update(
+                self.combat_state_model.predict(extract_features(end_turn_image, frame.image)), now)
+            fighting = semantic.phase.value == "FIGHTING"
+            player_turn = {"PLAYER": True, "OTHER": False}.get(semantic.turn_owner.value) if fighting else None
+            turn_score = semantic.confidence
         essential = [grid.confidence, combat_confidence]
         essential.extend(score for value, score in ((ap, confidence_ap), (mp, confidence_mp)) if value is not None)
         if player_cell is not None:
@@ -266,7 +280,9 @@ class RealCombatObserver:
                                             validation=self._validation_debug)
         elapsed_ms = (time.perf_counter() - started) * 1000
         phase = "inconnue"
-        if observation.result is not None:
+        if semantic is not None:
+            phase = semantic.label
+        elif observation.result is not None:
             phase = "fin de combat"
         elif observation.combat_detected and observation.player_turn is True:
             phase = "mon tour"
@@ -312,6 +328,7 @@ class RealCombatObserver:
             "combat_state": observation.combat_state,
             "requires_recalibration": bool(resolution and resolution.requires_recalibration),
             "phase": phase,
+            "semantic_combat_state": semantic.to_dict() if semantic is not None else None,
             "analysis_ms": elapsed_ms,
             "global_confidence": observation.observation_confidence,
             "entities": {"pipeline": "CELL_ENTITY_DETECTOR" if entity_timings else "LEGACY_CLASSIFY",

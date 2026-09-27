@@ -219,3 +219,120 @@ def test_combat_state_tooling_never_imports_action_executor() -> None:
     for module in (metrics, dialog, state):
         source = Path(module.__file__).read_text(encoding="utf-8")
         assert "ActionExecutor" not in source and "pyautogui" not in source and ".execute(" not in source
+
+
+# ------------------------------------------------------------------ détecteur (3B-6B)
+from combatbot.vision.combat_state_detector import (
+    CombatStateModel, SemanticCombatStateTracker, button_colours, extract_features, fit_model, turn_from_button,
+)
+from combatbot.vision.combat_state import SemanticCombatState
+
+
+def _button(kind: str, two_lines: bool = True) -> np.ndarray:
+    image = np.full((60, 160, 3), 30, np.uint8)
+    if kind == "bright":
+        image[8:52, 10:150] = (0, 235, 235)
+    elif kind == "dim":
+        image[8:52, 10:150] = (0, 120, 120)
+    elif kind == "menu":
+        image[:] = (40, 90, 160)
+        return image
+    rows = ((18, 26), (34, 42)) if two_lines else ((26, 34),)
+    for top, bottom in rows:
+        image[top:bottom, 40:120] = (20, 20, 20)
+    return image
+
+
+def _client(value: int) -> np.ndarray:
+    image = np.full((90, 160, 3), value, np.uint8)
+    image[10:30, 10:60] = 255 - value
+    return image
+
+
+def test_turn_comes_only_from_button_colour() -> None:
+    assert turn_from_button(*button_colours(_button("bright"))) is TurnOwner.PLAYER
+    assert turn_from_button(*button_colours(_button("dim"))) is TurnOwner.OTHER
+    assert turn_from_button(*button_colours(_button("menu"))) is TurnOwner.UNKNOWN      # bouton masqué
+
+
+def _model():
+    samples = []
+    for index in range(4):
+        samples.append((extract_features(_button("bright", two_lines=False), _client(80)), "PLACEMENT", "a"))
+        samples.append((extract_features(_button("bright"), _client(120)), "FIGHTING:PLAYER", "a"))
+        samples.append((extract_features(_button("dim"), _client(120)), "FIGHTING:OTHER", "b"))
+        samples.append((extract_features(_button("menu"), _client(200)), "OUT_OF_COMBAT", "b"))
+    return fit_model(samples, provenance={"truth_source": "human_confirmed", "training_split": "train"})
+
+
+def test_detector_phase_and_turn() -> None:
+    model = _model()
+    fighting = model.predict(extract_features(_button("bright"), _client(120)))
+    assert (fighting.phase, fighting.turn_owner) == (CombatPhase.FIGHTING, TurnOwner.PLAYER)
+    placement = model.predict(extract_features(_button("bright", two_lines=False), _client(80)))
+    assert placement.phase is CombatPhase.PLACEMENT and placement.turn_owner is TurnOwner.UNKNOWN
+    other = model.predict(extract_features(_button("dim"), _client(120)))
+    assert other.turn_owner is TurnOwner.OTHER
+    hidden = model.predict(extract_features(_button("menu"), _client(120)))
+    assert hidden.turn_owner is not TurnOwner.PLAYER                      # jamais « mon tour » sans bouton
+
+
+def test_detector_abstains_on_unseen_scene() -> None:
+    model = _model()
+    rng = np.random.default_rng(3)
+    strange = model.predict(extract_features(rng.integers(0, 255, (60, 160, 3), dtype=np.uint8),
+                                             rng.integers(0, 255, (90, 160, 3), dtype=np.uint8)))
+    assert strange.phase is CombatPhase.UNKNOWN
+
+
+def test_tracker_holds_phase_but_never_the_turn() -> None:
+    tracker = SemanticCombatStateTracker(ttl=2.0)
+    sure = SemanticCombatState(CombatPhase.FIGHTING, TurnOwner.PLAYER, 1.0)
+    assert tracker.update(sure, 0.0).turn_owner is TurnOwner.PLAYER
+    held = tracker.update(SemanticCombatState(), 1.0)
+    assert held.phase is CombatPhase.FIGHTING and held.turn_owner is TurnOwner.UNKNOWN
+    assert tracker.update(SemanticCombatState(), 5.0).phase is CombatPhase.UNKNOWN      # TTL dépassé
+
+
+def test_tracker_needs_confirmation_for_low_confidence_phase_change() -> None:
+    tracker = SemanticCombatStateTracker(confirm_frames=2, immediate_confidence=0.9)
+    tracker.update(SemanticCombatState(CombatPhase.FIGHTING, TurnOwner.OTHER, 1.0), 0.0)
+    once = tracker.update(SemanticCombatState(CombatPhase.RESULTS, TurnOwner.UNKNOWN, 0.5), 0.5)
+    assert once.phase is CombatPhase.FIGHTING
+    assert tracker.update(SemanticCombatState(CombatPhase.RESULTS, TurnOwner.UNKNOWN, 0.5), 1.0).phase is \
+        CombatPhase.RESULTS
+
+
+def test_model_load_requires_human_train_provenance(tmp_path: Path) -> None:
+    model = _model()
+    model.save(tmp_path / "ok")
+    assert CombatStateModel.load(tmp_path / "ok") is not None
+    bad = fit_model([(extract_features(_button("dim"), _client(1)), "FIGHTING:OTHER", "a")],
+                    provenance={"truth_source": "human_confirmed", "training_split": "validation"})
+    bad.save(tmp_path / "bad")
+    assert CombatStateModel.load(tmp_path / "bad") is None
+
+
+def test_runtime_model_learns_from_train_only(repository: CorpusRepository, tmp_path: Path) -> None:
+    from combatbot.corpus.combat_state_benchmark import build_runtime_model
+    (train,) = _combat(repository, "t", 1, "train")
+    (validation,) = _combat(repository, "v", 1, "validation")
+    repository.confirm_combat_state(train.observation_id, phase="FIGHTING", turn_owner="PLAYER")
+    repository.confirm_combat_state(validation.observation_id, phase="RESULTS", turn_owner=None)
+    summary = build_runtime_model(repository, tmp_path / "data")
+    model = CombatStateModel.load(tmp_path / "data" / "combat_state_model")
+    assert summary["train_frames"] == 1 and model.labels == ("FIGHTING:PLAYER",)
+
+
+def test_leave_one_combat_out_never_sees_the_held_out_combat() -> None:
+    from combatbot.corpus.combat_state_benchmark import leave_one_combat_out
+    frames = []
+    for session, label, button in (("a", "RESULTS", "menu"), ("b", "FIGHTING:OTHER", "dim")):
+        phase, _, turn = label.partition(":")
+        for index in range(3):
+            frame = StateFrame(f"{session}{index}", session, index, "train", phase, turn or None)
+            frames.append({"frame": frame, "label": label, "feature": extract_features(_button(button), _client(90)),
+                           "time": float(index)})
+    result = leave_one_combat_out(frames)
+    # « RESULTS » n'existe que dans le combat a : laissé de côté, il ne peut jamais être prédit juste.
+    assert result["phase_confusion"].get("RESULTS->RESULTS", 0) == 0
