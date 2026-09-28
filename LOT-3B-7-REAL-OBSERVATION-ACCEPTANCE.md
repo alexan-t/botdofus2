@@ -60,7 +60,8 @@ Sortie : `data/benchmarks/acceptance-3b7.json/.md`. Tests : `tests/test_acceptan
 
 ## 3. Mesures sur ce PC (28/09)
 
-Recette `python -m combatbot.benchmark --acceptance` : verdict global **INCOMPLET**.
+Recette `python -m combatbot.benchmark --acceptance` : verdict global **FAIL** depuis la première
+session réelle (avant elle : INCOMPLET, rien n'était mesurable).
 
 | Domaine | Verdict | Mesure |
 |---|---|---|
@@ -69,7 +70,7 @@ Recette `python -m combatbot.benchmark --acceptance` : verdict global **INCOMPLE
 | Entités (3B-5D) | NOT_EVALUABLE | aucun split déclaré dans le corpus de ce PC |
 | Phase/tour (3B-6B) | NOT_EVALUABLE | aucune vérité phase/tour sur ce PC |
 | Map (3B-6C) | NOT_EVALUABLE | voir ci-dessous |
-| Latence | NOT_EVALUABLE | aucune session réelle journalisée pour l'instant |
+| Latence | **FAIL** | session réelle du 28/09 : p95 979 ms pour un critère ≤ 400 ms (voir § 3.1) |
 
 **Map — mesure vide détectée.** Le banc a rejoué les 102 frames du corpus local (57 avec mapId
 vérifié, 10 maps) : 0 mauvaise, mais aussi **0 correcte** (75 UNKNOWN, 16 TRANSITION, 11 AMBIGUOUS).
@@ -80,11 +81,80 @@ Corrections : (1) le banc lit `client_frame` avec la ROI runtime quand il existe
 (`ocr_inputs` dans le rapport) ; (2) la recette classe « 0 erreur parce que 0 réponse » en
 NOT_EVALUABLE au lieu de PASS. Lecteur OCR : médiane ≈ 0,97 s par lecture sur ce PC.
 
+## 3.1 Première session réelle (28/09, donjon Ougah de bout en bout)
+
+`session_544de7379326` : exécutable 0.4.3, client 2560x1377, DPI 96, layout `9a0751d48681994e`,
+216,4 s, **218 frames analysées**, 5 maps distinctes, 3 fins de combat détectées. Les rapports vivent
+sous `data/` (non versionné) : les chiffres sont donc recopiés ici.
+
+### Latence — **FAIL**
+
+| Étape | médiane | p95 | max |
+|---|---|---|---|
+| capture | 235,72 | **532,21** | 758,67 |
+| entities | 124,22 | 457,35 | 838,73 |
+| grid | 120,47 | 224,12 | 297,72 |
+| hud | 17,99 | 57,02 | 1580,10 |
+| map | 29,21 | 35,61 | 43,64 |
+| combat_state | 2,41 | 7,15 | 25,27 |
+| overlay | 13,32 | 35,06 | 88,80 |
+| **total** | **733,90** | **979,30** | 2261,11 |
+
+p95 à 979 ms pour un critère de 400 ms : **2,4× trop lent**. Conséquence mesurée : minuteur à 400 ms mais
+**288 ticks sautés sur 506** (57 %), cadence effective 1,03 img/s au lieu de 2,5. Premier coupable : la
+**capture** (236 ms de médiane), pas la vision.
+
+### Ce qui a tenu
+
+PA/PM : 4,1 % et 3,2 % d'inconnus en donjon réel. Map : 163/218 RESOLVED (75 %), 5 maps, calibration
+réutilisée de salle en salle. Grille : 148 frames ALIGNED, projection GameData sur 213/218 frames.
+
+### Phase et tour — faux « mon tour », cause racine identifiée
+
+« mon tour » affirmé sur **160 frames / 218 (73 %)**, dont **92 s en continu à travers 3 maps
+différentes** (t=38,8 → t=130,9) ; `turn_owner` = `None` sur les 218 frames ; « tour adverse » jamais
+détecté une seule fois sur 3 combats. 84 de ces 160 frames affichent PA=15/PM=6, signature de l'attente
+pendant le tour d'un autre. Le critère **« 0 "mon tour" affirmé à tort » est violé**.
+
+Chaîne de causes :
+
+1. le modèle 3B-6B **n'est pas installé sur ce PC** (`%LOCALAPPDATA%\PythonBot\data\combat_state_model`
+   absent ; `summary.json` porte `"combat_state_model": false`) ;
+2. `CombatStateModel.load()` renvoie `None` **en silence** (`combat_state_detector.py:146`) ;
+3. `RealCombatObserver` retombe alors sur l'ancienne heuristique (`combat_observer.py:261`) :
+   `turn_score = 0.6 * end_signal + 0.4 * max(conf_PA, conf_PM)` ;
+4. or `end_signal` vient de `_visual_activity()` (`combat_observer.py:82`) : **texture et contours, pas la
+   couleur**. Le bouton « TERMINER LE TOUR » reste dessiné pendant le tour adverse, seulement plus sombre
+   → même signal → « mon tour » permanent. Sans notion de début/fin de combat, l'affirmation traverse les
+   changements de salle.
+
+Le `turn_from_button()` de 3B-6B décide sur la couleur (jaune vif ≥ 0,15 → joueur ; vif ≤ 0,05 et jaune
+foncé ≥ 0,30 → un autre) : ce code est correct, il n'a simplement **jamais été appelé**.
+
+**Défaut de conception à corriger : fail-open.** Sans modèle, le système n'affiche pas « inconnu », il
+affirme « mon tour ». Cela contredit les garde-fous du projet (« `UNKNOWN` bloque l'action », fail-closed).
+Branché au lot 5, le bot cliquerait pendant le tour des monstres. Correction proposée : supprimer le repli
+heuristique sur le tour (phase/tour inconnus sans modèle) et avertir dans le log et l'UI. **Non appliquée
+à ce stade.**
+
+Modèle non reconstructible ici : le corpus runtime de ce PC a **0/102 vérité phase/tour**
+(`combat_state_confirmed`, `combat_phase_truth`, `turn_owner_truth` tous absents). Et la session du 28/09
+**n'est pas annotable** : le journal 3B-7 n'écrit volontairement aucune image.
+
+### Autre point
+
+**Case du joueur : 90,8 % d'inconnus** (`player_cell_id` quasi jamais résolu) — indispensable au
+pathfinding du lot 4B.
+
+Mode tactique et thème DOFUS : toujours « non détecté ». Une seule taille de client observée.
+
 ## 4. Reste à faire
 
-1. Session réelle avec `DofBot2.exe` reconstruit (exploration + au moins un combat), arrêt de
-   l'observation → latence mesurée sur le package.
+1. ~~Session réelle avec `DofBot2.exe` reconstruit → latence mesurée sur le package.~~ **Fait le
+   28/09** (§ 3.1) : verdict FAIL, à traiter en commençant par la capture.
 2. Re-mesurer PA/PM et entités avec le code actuel (bancs qui écrivent gabarits/profils : à lancer
    explicitement, décision utilisateur).
 3. Phase/tour : TEST sur ce PC impossible sans vérité ; soit copier le corpus 3B-6 de l'autre PC,
    soit annoter 2 combats neufs (TEST aveugle, second PC = validation d'une 2e configuration).
+4. Rendre le tour fail-closed (§ 3.1) : c'est le blocage réel avant tout lot d'exécution.
+5. Réduire la latence de capture (236 ms de médiane pour 2560x1377).
