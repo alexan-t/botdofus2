@@ -262,6 +262,11 @@ class Storage:
         )
         self.connection.commit()
 
+    def last_event_id(self) -> int | None:
+        """Identifiant du dernier événement : test de changement bon marché pour l'UI."""
+        row = self.connection.execute("SELECT MAX(id) FROM events").fetchone()
+        return int(row[0]) if row and row[0] is not None else None
+
     def recent_events(self, limit: int = 200) -> list[sqlite3.Row]:
         rows = self.connection.execute(
             "SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,)

@@ -59,7 +59,9 @@ def test_closed_loop_contract_success_failure_timeout() -> None:
     assert executor.verify("c1", ExpectedState(step.expected.player_cell_id, step.expected.ap, step.expected.mp)).kind \
         is ActionEventKind.SUCCEEDED
     executor.start(ActionRequest("c2", "p", 0, step, step.expected))
-    failed = executor.verify("c2", ExpectedState(step.expected.player_cell_id, step.expected.ap + 3, step.expected.mp))
+    unchanged = executor.verify("c2", ExpectedState(step.expected.player_cell_id, step.expected.ap + 3, step.expected.mp))
+    assert unchanged.kind is ActionEventKind.STARTED and unchanged.detail == "PA inchangés"   # CAST pas encore visible
+    failed = executor.verify("c2", ExpectedState(step.expected.player_cell_id, step.expected.ap + 1, step.expected.mp))
     assert failed.kind is ActionEventKind.FAILED and "ap" in failed.data["mismatches"]
     executor.start(ActionRequest("c3", "p", 0, step, step.expected, timeout_s=2.0))
     assert executor.verify("c3", None, now=clock.now + 1).kind is ActionEventKind.STARTED   # encore en attente
@@ -81,8 +83,12 @@ def test_plan_id_is_stable() -> None:
 def test_combat_core_is_pure_and_sends_no_input() -> None:
     assert executor_module.SENDS_INPUT is False
     code = ("import sys; import combatbot.combat.pathfinding, combatbot.combat.spells, combatbot.combat.targeting, "
-            "combatbot.combat.state, combatbot.combat.planner, combatbot.combat.executor; "
-            "bad = [m for m in ('cv2', 'PySide6', 'rapidocr', 'pyautogui', 'onnxruntime') if m in sys.modules]; "
+            "combatbot.combat.state, combatbot.combat.planner, combatbot.combat.executor, combatbot.combat.effects, "
+            "combatbot.combat.screen_actions, combatbot.combat.safety, combatbot.combat.mouse_executor, "
+            "combatbot.combat.closed_loop, combatbot.combat.scripted, combatbot.combat.turn_runner, "
+            "combatbot.combat.fight_loop, combatbot.combat.placement, combatbot.combat.launch, "
+            "combatbot.combat.selftest, combatbot.combat.live_adapter; "
+            "bad = [m for m in ('cv2', 'PySide6', 'rapidocr', 'pyautogui', 'onnxruntime', 'numpy', 'combatbot.input.win32_mouse') if m in sys.modules]; "
             "print(','.join(bad))")
     root = Path(__file__).resolve().parents[1]
     result = subprocess.run([sys.executable, "-c", code], cwd=root, capture_output=True, text=True, timeout=60)

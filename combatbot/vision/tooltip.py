@@ -50,10 +50,41 @@ FIELD_NAMES = (
 )
 
 
+OCR_THREADS_ENV = "DOFBOT_OCR_THREADS"
+
+
+def ocr_threads_setting() -> int | None:
+    """Threads ONNX Runtime demandés (``DOFBOT_OCR_THREADS``) ; None = réglage par défaut du moteur.
+
+    Aucune valeur n'est imposée : ``python -m combatbot.benchmark --ocr-threads-benchmark`` mesure sur
+    le PC le temps OCR et le CPU pour chaque valeur avant d'en choisir une.
+    """
+    import os
+    raw = os.environ.get(OCR_THREADS_ENV, "").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if value >= 1 else None
+
+
+def create_ocr_engine(threads: int | None = None):
+    """Nouveau moteur RapidOCR ; ``threads`` limite intra/inter-op d'ONNX Runtime si le moteur l'accepte."""
+    from rapidocr import RapidOCR
+    if threads is None:
+        return RapidOCR()
+    params = {"EngineConfig.onnxruntime.intra_op_num_threads": threads,
+              "EngineConfig.onnxruntime.inter_op_num_threads": 1}
+    try:
+        return RapidOCR(params=params)
+    except (TypeError, KeyError, ValueError):
+        return RapidOCR()                     # version sans ce réglage : comportement par défaut
+
+
 @lru_cache(maxsize=1)
 def _ocr_engine():
-    from rapidocr import RapidOCR
-    return RapidOCR()
+    """Moteur unique pour tout le processus (chargé une seule fois)."""
+    return create_ocr_engine(ocr_threads_setting())
 
 
 def read_visible_text(image: np.ndarray) -> tuple[str, float]:
