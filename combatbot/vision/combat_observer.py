@@ -158,7 +158,17 @@ class RealCombatObserver:
 
     def observe(self) -> ObservationPacket:
         started = time.perf_counter()
+        # LOT 3B-7 : durée de chaque étape (ms), pour la latence mesurée en session réelle.
+        stage_ms: dict[str, float] = {}
+        lap = [started]
+
+        def mark(stage: str) -> None:
+            current = time.perf_counter()
+            stage_ms[stage] = (current - lap[0]) * 1000
+            lap[0] = current
+
         frame = self.frame_provider()
+        mark("capture")
         if frame.hwnd != self.hwnd:
             raise RuntimeError("La capture ne correspond plus à la fenêtre observée")
         if not self.calibration.compatible(frame.client.width, frame.client.height):
@@ -177,11 +187,13 @@ class RealCombatObserver:
             centers = self.grid_resolver.cell_centers(frame.client.size, zones) \
                 if self.grid_resolver is not None else None
             map_resolution = self.map_context.update(frame.image, combat_image, cell_centers=centers)
+        mark("map")
         if self.grid_resolver is not None:
             resolution = self.grid_resolver.resolve(combat_image, frame.client.size, zones)
             grid = self._validate_grid(resolution, combat_image)
         else:
             grid = infer_combat_grid(combat_image, self.grid_calibration)
+        mark("grid")
         now = time.monotonic()
         entity_fields: dict[str, object] = {}
         entity_timings: dict[str, float] = {}
@@ -199,6 +211,7 @@ class RealCombatObserver:
             enemies = tuple(EnemyObservation("", cell, center, confidence, cell_ids.get(cell))
                             for cell, center, confidence in raw_enemies)
             player_cell_id = cell_ids.get(player_cell) if player_cell is not None else None
+        mark("entities")
 
         ap_image = _zone(frame, self.calibration, transform, "ap")
         mp_image = _zone(frame, self.calibration, transform, "mp")
@@ -227,6 +240,7 @@ class RealCombatObserver:
             _, (ap, confidence_ap), (mp, confidence_mp) = self._last_numbers
             assert self._last_number_results is not None
             ap_read, mp_read = self._last_number_results
+        mark("hud")
 
         counter_signal = (_visual_activity(ap_image) + _visual_activity(mp_image)) / 2
         end_turn_image = _zone(frame, self.calibration, transform, "end_turn")
@@ -262,6 +276,7 @@ class RealCombatObserver:
             fighting = semantic.phase.value == "FIGHTING"
             player_turn = {"PLAYER": True, "OTHER": False}.get(semantic.turn_owner.value) if fighting else None
             turn_score = semantic.confidence
+        mark("combat_state")
         essential = [grid.confidence, combat_confidence]
         essential.extend(score for value, score in ((ap, confidence_ap), (mp, confidence_mp)) if value is not None)
         if player_cell is not None:
@@ -280,7 +295,9 @@ class RealCombatObserver:
         observation = self.tracker.update(raw)
         annotated = draw_diagnostic_overlay(combat_image, observation, self.overlay_options,
                                             validation=self._validation_debug)
+        mark("overlay")
         elapsed_ms = (time.perf_counter() - started) * 1000
+        stage_ms["total"] = elapsed_ms
         phase = "inconnue"
         if semantic is not None:
             phase = semantic.label
@@ -332,6 +349,7 @@ class RealCombatObserver:
             "phase": phase,
             "semantic_combat_state": semantic.to_dict() if semantic is not None else None,
             "analysis_ms": elapsed_ms,
+            "stage_ms": {name: round(value, 2) for name, value in stage_ms.items()},
             "global_confidence": observation.observation_confidence,
             "entities": {"pipeline": "CELL_ENTITY_DETECTOR" if entity_timings else "LEGACY_CLASSIFY",
                          **entity_timings},

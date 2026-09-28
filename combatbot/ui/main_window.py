@@ -899,6 +899,7 @@ class MainWindow(QMainWindow):
             },
         )
         self._last_observation = None
+        self._start_session_telemetry(self._observer, calibration)
         self._prepare_map_detection(calibration.layout_signature)
         self.combat.mode.setCurrentText("Vision réelle")
         self.combat.set_observing(True)
@@ -978,10 +979,40 @@ class MainWindow(QMainWindow):
         self.combat.map_auto.setVisible(False)
         self.combat.set_declared_map("Retour à la détection automatique de la map.")
 
+    def _start_session_telemetry(self, observer, calibration) -> None:
+        """LOT 3B-7 : latence par étape et états de la session, dans data/logs/sessions (sans image)."""
+        from combatbot.corpus.entity_split import layout_digest
+        from combatbot.vision.session_telemetry import SessionTelemetry
+        try:
+            digest = layout_digest(calibration.layout_signature)
+        except (ValueError, TypeError, KeyError):
+            digest = "UNKNOWN"
+        self._telemetry = SessionTelemetry(app_data_root() / "data" / "logs" / "sessions", observer.session_id, {
+            "dpi": observer.capture_context.get("dpi"),
+            "calibration_client_size": [calibration.client_width, calibration.client_height],
+            "layout_digest": digest,
+            "combat_state_model": observer.combat_state_model is not None,
+            "entity_profiles": observer.entity_profiles is not None,
+            "timer_interval_ms": self.observation_timer.interval(),
+        })
+
+    def _stop_session_telemetry(self) -> None:
+        telemetry, self._telemetry = getattr(self, "_telemetry", None), None
+        if telemetry is None:
+            return
+        report = telemetry.close()
+        if report is not None:
+            total = report["latency_ms"]["total"]
+            self._on_event(CombatEvent(
+                "INFO", "vision.telemetry",
+                f"Session {telemetry.session_id} : {report['frames']} frames, latence médiane {total['median']} ms "
+                f"(p95 {total['p95']} ms) — {telemetry.directory}"))
+
     def _stop_observation(self) -> None:
         observer = self._observer
         if observer is not None and getattr(observer, "map_context", None) is not None:
             observer.map_context.close()
+        self._stop_session_telemetry()
         was_active = self.observation_timer.isActive() or self._observer is not None
         self.observation_timer.stop()
         self._observer = None
@@ -992,6 +1023,9 @@ class MainWindow(QMainWindow):
     def _observe_once(self) -> None:
         observer = self._observer
         if observer is None or self._observation_pending or self.jobs.active:
+            telemetry = getattr(self, "_telemetry", None)
+            if observer is not None and telemetry is not None:
+                telemetry.skip()
             return
         self._attach_map_detection()
         self._observation_pending = True
@@ -1001,6 +1035,9 @@ class MainWindow(QMainWindow):
             if observer is not self._observer or not isinstance(value, ObservationPacket):
                 return
             self._last_observation = value
+            telemetry = getattr(self, "_telemetry", None)
+            if telemetry is not None:
+                telemetry.record(value.metadata, value.observation)
             self.combat.set_observation(value)
             if self.combat.sequence_capture.isChecked():
                 self._capture_sequence(value)
@@ -1009,6 +1046,9 @@ class MainWindow(QMainWindow):
             self._observation_pending = False
             if observer is not self._observer:
                 return
+            telemetry = getattr(self, "_telemetry", None)
+            if telemetry is not None:
+                telemetry.error(message)
             self._stop_observation()
             self._on_event(CombatEvent("ERROR", "vision.observation", f"Observation interrompue : {message}"))
             QMessageBox.warning(self, "Vision réelle", f"Observation interrompue : {message}")
@@ -1100,6 +1140,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
         self.observation_timer.stop()
+        self._stop_session_telemetry()          # résumé écrit même si l'app est fermée en pleine observation
         self._observer = None
         if self.controller.thread is not None or self.jobs.active or self._pending_capture:
             self._closing = True
