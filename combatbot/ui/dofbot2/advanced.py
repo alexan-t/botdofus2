@@ -552,6 +552,7 @@ class ObservationPage(AdvancedPage):
         self.hover.raise_()
         super().live_update()
         self._update_details()
+        self._update_plan()
 
     def _detail_rows(self) -> list[QWidget]:
         combat = self.legacy.combat
@@ -566,6 +567,34 @@ class ObservationPage(AdvancedPage):
         self.signals_label.setContentsMargins(0, 10, 0, 10)
         rows.append(self.signals_label)
         return rows
+
+    def _plan_rows(self) -> list[QWidget]:
+        assume = WidgetBinding().add("assume", lambda: bool(self.legacy.dry_run_assume_range),
+                                     lambda value: setattr(self.legacy, "dry_run_assume_range", bool(value)))
+        self.plan_status = info_row("Statut", "aucun plan")
+        self.plan_lines = label("Démarrez l'observation : un plan est calculé à chaque image, sans jamais agir.",
+                                "d2RowDesc", wrap=True)
+        self.plan_lines.setContentsMargins(0, 10, 0, 10)
+        return [self.plan_status, self.plan_lines,
+                switch_row(assume, "assume", "Hypothèse : portée = distance logique",
+                           "Non prouvée pour 2.64.5 ; sans elle, tout sort reste « non prouvé » (plan BLOCKED)", False)]
+
+    def _update_plan(self) -> None:
+        if not hasattr(self, "plan_lines"):
+            return
+        plan = getattr(self.legacy, "_last_plan", None)
+        pill = self.plan_status.control.layout().itemAt(0).widget()
+        if plan is None:
+            pill.setText("aucun plan")
+            pill.setStyleSheet(f"color: {t.TEXT_2};")
+            return
+        ready = plan.status.value == "READY"
+        pill.setText(plan.status.value)
+        pill.setStyleSheet(f"color: {t.GREEN_LIGHT if ready else t.ALERT};")
+        lines = plan.describe()
+        if plan.assumptions:
+            lines += [f"hypothèse : {item}" for item in plan.assumptions]
+        self.plan_lines.setText("\n".join(lines))
 
     def _update_details(self) -> None:
         combat = self.legacy.combat
@@ -619,6 +648,8 @@ class ObservationPage(AdvancedPage):
                 switch_row(switches, "legacy", "Autoriser la grille historique en secours",
                            "Utilisée uniquement si GameData est indisponible", False),
             ], False, True),
+            ("plan", "Plan dry-run", "Ce que le bot ferait sur cette image · aucune action envoyée",
+             self._plan_rows(), False, True),
             ("details", "Détails de l'observation", "Toutes les valeurs lues à chaque image", self._detail_rows(),
              False, True),
             ("ent", "Entités", "Suivi des personnages sur la grille", [

@@ -291,3 +291,35 @@ def test_resume_automatic_map_row_appears_in_manual_mode(window) -> None:
     combat.map_auto_requested.connect(lambda: requested.append(True))
     page.accordions["map"].rows()[-1].control.findChild(QPushButton).click()
     assert requested
+
+
+def test_live_dry_run_plan_is_computed_and_shown(window, storage) -> None:
+    """FAST-4D : chaque frame observée produit un plan dry-run affiché, sans aucune action."""
+    from types import SimpleNamespace
+    from combatbot.gamedata.models import DofusCellId, GameMap, GameMapCell
+    from combatbot.gamedata.topology import build_topology
+    from tests.test_dry_run_replay import observation
+    legacy = window.legacy
+    profile_id = legacy.client_panel.profile_id
+    spell_id = storage.save_scan_candidate(profile_id, IconCandidate(1, 1, _icon("#8fd14f"), "h", .9, .9, "Inconnu"))
+    storage.save_profile_spell_fields(spell_id, {"name": "Flèche", "ap_cost": 3, "min_range": 1, "max_range": 3,
+                                                 "modifiable_range": 0, "line_cast": 0, "line_of_sight": 0,
+                                                 "per_turn": 1, "per_target": 1}, confirm=True)
+    cells = tuple(GameMapCell(DofusCellId(i), walkable=True, non_walkable_during_fight=False) for i in range(560))
+    legacy._declared_topology = build_topology(GameMap(123, cells, "test", 11), coordinates_verified=True)
+    legacy._map_identity.set_detected(123)
+    packet = SimpleNamespace(observation=observation(),
+                             metadata={"semantic_combat_state": {"phase": "FIGHTING", "turn_owner": "PLAYER"}})
+    legacy._plan_dry_run(packet)
+    assert legacy._last_plan.status.value == "BLOCKED"          # portée non prouvée par défaut
+    legacy.dry_run_assume_range = True
+    legacy._plan_dry_run(packet)
+    assert legacy._last_plan.describe() == [f"CAST profile:{spell_id} ON E1", "END_TURN"]
+    view = window.advanced_view
+    view.go_tab("observation")
+    page = view.pages["observation"]
+    page.live_update()
+    assert f"CAST profile:{spell_id} ON E1" in page.plan_lines.text() and "hypothèse" in page.plan_lines.text()
+    assert page.plan_status.control.layout().itemAt(0).widget().text() == "READY"
+    legacy._plan_dry_run(SimpleNamespace(observation=None, metadata={}))   # erreur : jamais bloquante
+    assert legacy._last_plan is None
