@@ -350,6 +350,8 @@ class RealCombatObserver:
             "combat_state_model": self.combat_state_model is not None,
             "analysis_ms": elapsed_ms,
             "stage_ms": {name: round(value, 2) for name, value in stage_ms.items()},
+            "capture_ms": dict(getattr(frame, "timings_ms", {}) or {}),
+            "capture_source": getattr(frame, "source", None),
             "global_confidence": observation.observation_confidence,
             "entities": {"pipeline": "CELL_ENTITY_DETECTOR" if entity_timings else "LEGACY_CLASSIFY",
                          **entity_timings},
