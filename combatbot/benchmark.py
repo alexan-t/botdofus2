@@ -52,6 +52,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--observation-e2e", action="store_true",
                         help="FAST-3B7 : observation complète frame par frame contre les vérités humaines "
                              "(prédictions enregistrées seulement, sans DOFUS ; filtre : --entity-splits)")
+    parser.add_argument("--dry-run-plans", action="store_true",
+                        help="FAST-4D/5A0 : rejoue le corpus à travers état → plan → exécuteur dry-run (aucune action)")
+    parser.add_argument("--profile-id", type=int, help="Profil dont les sorts confirmés sont utilisés (défaut : dernier)")
+    parser.add_argument("--assume-logical-range", action="store_true",
+                        help="Hypothèse explicite, non prouvée : portée = distance logique |dx|+|dy| (tracée dans le rapport)")
     parser.add_argument("--data-dir", type=Path, action="append",
                         help="3B-7 : dossier data/ à inspecter (répétable ; défaut : sources, runtime, LocalAppData)")
     parser.add_argument("--limit", type=int, help="Nombre maximal de frames (diagnostic)")
@@ -89,6 +94,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"JSON : {json_path}")
         print(f"Markdown : {markdown_path}")
         return 0
+    if args.dry_run_plans:
+        return _dry_run_plans(repository, args)
     if args.combat_state or args.install_combat_state_model:
         return _combat_state(repository, args)
     if args.map_resolution:
@@ -200,6 +207,42 @@ def _install_entities(args) -> int:
     if args.output_dir:
         args.output_dir.mkdir(parents=True, exist_ok=True)
         (args.output_dir / "runtime-installation.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+    return 0
+
+
+def _dry_run_plans(repository: CorpusRepository, args) -> int:
+    from combatbot.combat.pathfinding import CombatMap
+    from combatbot.combat.spells import load_profile_spells
+    from combatbot.combat.targeting import CONSERVATIVE_RULES, RangeMetric, TargetingRules
+    from combatbot.corpus.dry_run_replay import markdown_report, run_dry_run_replay, write_report
+    from combatbot.runtime import database_path
+    from combatbot.storage import Storage
+
+    storage = Storage(database_path())
+    try:
+        profile_id = args.profile_id or storage.get_setting("dofbot2_last_profile")
+        spells = load_profile_spells(storage, int(profile_id)) if profile_id else ()
+    finally:
+        storage.close()
+    client = _client_directory(args)
+    provider = None
+    if client is not None:
+        from combatbot.gamedata.provider import LocalGameDataProvider
+        provider = LocalGameDataProvider(client)
+        provider.scan_client()
+
+    def map_provider(map_id: int):
+        return CombatMap.from_topology(provider.get_map_topology(map_id)) if provider is not None else None
+
+    rules = TargetingRules(range_metric=RangeMetric.LOGICAL_MANHATTAN) if args.assume_logical_range \
+        else CONSERVATIVE_RULES
+    report = run_dry_run_replay(repository, map_provider, spells, rules=rules, limit=args.limit)
+    report["profile_id"] = profile_id
+    report["client"] = str(client) if client else None
+    json_path, markdown_path = write_report(report, args.output_dir or (app_data_root() / "data" / "benchmarks"))
+    print(markdown_report(report))
+    print(f"JSON : {json_path}")
+    print(f"Markdown : {markdown_path}")
     return 0
 
 
