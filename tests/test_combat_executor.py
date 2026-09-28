@@ -87,7 +87,7 @@ def test_combat_core_is_pure_and_sends_no_input() -> None:
             "combatbot.combat.screen_actions, combatbot.combat.safety, combatbot.combat.mouse_executor, "
             "combatbot.combat.closed_loop, combatbot.combat.scripted, combatbot.combat.turn_runner, "
             "combatbot.combat.fight_loop, combatbot.combat.placement, combatbot.combat.launch, "
-            "combatbot.combat.selftest; "
+            "combatbot.combat.selftest, combatbot.combat.live_adapter; "
             "bad = [m for m in ('cv2', 'PySide6', 'rapidocr', 'pyautogui', 'onnxruntime', 'numpy', 'combatbot.input.win32_mouse') if m in sys.modules]; "
             "print(','.join(bad))")
     root = Path(__file__).resolve().parents[1]
