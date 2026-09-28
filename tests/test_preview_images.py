@@ -58,6 +58,8 @@ def test_frame_preview_renders_each_new_frame_at_widget_size() -> None:
     from combatbot.ui.dofbot2.advanced import FramePreview
     widget = FramePreview("x")
     widget.resize(520, 300)
+    widget.show()
+    APP.processEvents()
     first, second = frame(2560, 1377, 10), frame(2560, 1377, 200)
     widget.set_frame(first)
     assert widget.image.width() <= 520 and widget.image.height() <= 300
@@ -69,3 +71,29 @@ def test_frame_preview_renders_each_new_frame_at_widget_size() -> None:
     assert widget.image is kept
     widget.set_frame(None)
     assert widget.image is None
+
+
+def test_hidden_previews_do_no_work_until_shown() -> None:
+    from combatbot.ui.dofbot2.advanced import FramePreview
+    from combatbot.ui.pages import ObservationPreview
+    preview = ObservationPreview()
+    preview.resize(900, 500)
+    preview.set_image(frame())                                     # jamais affiché : rien de calculé
+    assert preview._rendered is None
+    preview.show()
+    APP.processEvents()
+    assert preview._rendered is not None and preview.pixmap().width() == 900
+    preview.hide()
+    latest = frame(value=7)
+    preview.set_image(latest)
+    assert preview._rendered is None                               # caché : la frame attend l'affichage
+    preview.show()
+    APP.processEvents()
+    assert preview._rendered[0] == id(latest)
+    widget = FramePreview("x")
+    widget.resize(520, 300)
+    widget.set_frame(frame(2560, 1377))
+    assert widget.image is None
+    widget.show()
+    APP.processEvents()
+    assert widget.image is not None and widget.image.width() <= 520

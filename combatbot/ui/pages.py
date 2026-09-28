@@ -180,14 +180,25 @@ class ObservationPreview(QLabel):
         self._render()
 
     def _render(self) -> None:
-        """Réduit la frame une seule fois à la taille du widget ; rien si déjà fait pour cette taille."""
-        if self._source is None:
+        """Réduit la frame une seule fois à la taille du widget ; rien si déjà fait pour cette taille.
+
+        Onglet caché ou fenêtre réduite : rien n'est calculé ; la dernière frame est rendue à l'affichage.
+        """
+        if self._source is None or not self.isVisible() or self.window().isMinimized():
             return
         key = (id(self._source), self.width(), self.height())
         if key == self._rendered:
             return
         self._rendered = key
         self.setPixmap(preview_pixmap(self._source, self.width(), self.height()))
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt API
+        super().showEvent(event)
+        self._render()
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt API
+        self._render()                    # fenêtre restaurée : dernière frame rendue une seule fois
+        super().paintEvent(event)
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
         super().resizeEvent(event)

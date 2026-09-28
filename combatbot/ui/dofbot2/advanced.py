@@ -165,6 +165,9 @@ class FramePreview(QWidget):
         size = (max(1, self.width()), max(1, self.height()))
         if self._source is None or size == self._rendered_size and self.image is not None:
             return
+        if not self.isVisible() or self.window().isMinimized():
+            self.image, self._rendered_size = None, None   # rendue au prochain affichage
+            return
         self._rendered_size = size
         self.image = preview_pixmap(self._source, *size).toImage()
         self.update()
@@ -174,7 +177,13 @@ class FramePreview(QWidget):
         self._rendered_size = None
         self._render()
 
+    def showEvent(self, event) -> None:  # noqa: N802 - API Qt
+        super().showEvent(event)
+        self._render()
+
     def paintEvent(self, _event) -> None:  # noqa: N802 - API Qt
+        if self.image is None and self._source is not None:
+            self._render()
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
