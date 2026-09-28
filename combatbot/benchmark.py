@@ -58,6 +58,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="Profil de recette non ambigu (JSON) ; code 2 si plusieurs profils sans --profile-id")
     parser.add_argument("--spell-readiness", action="store_true",
                         help="Rapport profile-spells-readiness du profil (lecture seule)")
+    parser.add_argument("--runtime-profile", action="store_true",
+                        help="Profil de latence par étape depuis les journaux de sessions réelles")
     parser.add_argument("--execution-selftest", action="store_true",
                         help="Auto-test offline de la chaîne d'exécution (aucune entrée réelle)")
     parser.add_argument("--profile-id", type=int, help="Profil dont les sorts confirmés sont utilisés (défaut : dernier)")
@@ -85,6 +87,15 @@ def main(argv: list[str] | None = None) -> int:
         return _install_entities(args)
     if args.resolve_profile or args.spell_readiness:
         return _profile_reports(args)
+    if args.runtime_profile:
+        from combatbot.corpus.acceptance import default_data_dirs
+        from combatbot.live.runtime_profile import markdown_report as profile_markdown
+        from combatbot.live.runtime_profile import runtime_profile, write_report as write_profile
+        report = runtime_profile(args.data_dir or default_data_dirs())
+        json_path, _ = write_profile(report, args.output_dir or (app_data_root() / "data" / "benchmarks"))
+        print(profile_markdown(report))
+        print(f"JSON : {json_path}")
+        return 0
     if args.execution_selftest:
         from combatbot.combat.selftest import markdown_report as selftest_markdown
         from combatbot.combat.selftest import run_selftest, write_report as write_selftest
