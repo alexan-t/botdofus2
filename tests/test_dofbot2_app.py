@@ -12,6 +12,7 @@ from PySide6.QtGui import QColor, QImage
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
+from combatbot.combat.safety import GLOBAL_EMERGENCY_STOP
 from combatbot.storage import Storage
 from combatbot.ui.dofbot2 import system, theme
 from combatbot.ui.dofbot2.controls import Accordion, Choices, Stepper, Switch
@@ -176,6 +177,10 @@ def test_schedule_a_zone_and_session(window, storage) -> None:
     assert view.running and view.status_text.text() == "En cours" and view.run_button.text() == "Arrêter"
     view.emergency_stop()
     assert not view.running and view.status_text.text() == "En pause"
+    assert GLOBAL_EMERGENCY_STOP.triggered          # F9 verrouille toute future action
+    home.run_button.click()                          # seul un démarrage explicite réarme
+    assert view.running and not GLOBAL_EMERGENCY_STOP.triggered
+    view.emergency_stop()
     journal = [message for _time, message, _color in view.journal(7)]
     assert journal[0] == "Arrêt d'urgence (F9)"
     assert f"Session démarrée · {ZONES[1].name}" in journal

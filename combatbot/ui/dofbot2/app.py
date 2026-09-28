@@ -9,6 +9,7 @@ from PySide6.QtCore import QPoint, QRect, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFontMetrics, QGuiApplication, QPainter
 from PySide6.QtWidgets import QHBoxLayout, QStackedWidget, QVBoxLayout, QWidget
 
+from combatbot.combat.safety import GLOBAL_EMERGENCY_STOP
 from combatbot.models import CombatEvent
 from combatbot.storage import Storage
 from combatbot.ui.dofbot2 import theme as t
@@ -254,6 +255,7 @@ class AppView(QWidget):
             dungeon_page = self.pages.get("donjon")
             if isinstance(dungeon_page, PlacesPage):
                 dungeon_page.refresh_recent()
+        GLOBAL_EMERGENCY_STOP.rearm()   # seul un démarrage humain explicite réarme après F9
         self.running = True
         self._set_running_ui()
         self.log(f"Session démarrée · {plan.place.name}", "green")
@@ -271,6 +273,8 @@ class AppView(QWidget):
         self.running_changed.emit(False)
 
     def emergency_stop(self) -> None:
+        # Verrou global lu par toute future boucle d'action, même si la session n'est pas « en cours ».
+        GLOBAL_EMERGENCY_STOP.trigger("Arrêt d'urgence (F9)")
         self.stop("Arrêt d'urgence (F9)")
 
     def _set_running_ui(self) -> None:

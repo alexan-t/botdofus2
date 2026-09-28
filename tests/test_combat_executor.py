@@ -83,8 +83,9 @@ def test_plan_id_is_stable() -> None:
 def test_combat_core_is_pure_and_sends_no_input() -> None:
     assert executor_module.SENDS_INPUT is False
     code = ("import sys; import combatbot.combat.pathfinding, combatbot.combat.spells, combatbot.combat.targeting, "
-            "combatbot.combat.state, combatbot.combat.planner, combatbot.combat.executor; "
-            "bad = [m for m in ('cv2', 'PySide6', 'rapidocr', 'pyautogui', 'onnxruntime') if m in sys.modules]; "
+            "combatbot.combat.state, combatbot.combat.planner, combatbot.combat.executor, combatbot.combat.effects, "
+            "combatbot.combat.screen_actions, combatbot.combat.safety, combatbot.combat.mouse_executor; "
+            "bad = [m for m in ('cv2', 'PySide6', 'rapidocr', 'pyautogui', 'onnxruntime', 'numpy', 'combatbot.input.win32_mouse') if m in sys.modules]; "
             "print(','.join(bad))")
     root = Path(__file__).resolve().parents[1]
     result = subprocess.run([sys.executable, "-c", code], cwd=root, capture_output=True, text=True, timeout=60)
