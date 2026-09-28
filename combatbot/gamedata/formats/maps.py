@@ -146,9 +146,10 @@ def parse_dlm(data: bytes, source: str) -> GameMap:
     layer_count = s.number("B", "layer_count")
     meta["layer_count"] = layer_count
     graphics_cells = elements_total = 0
+    layer_cells: dict[int, tuple[int, ...]] = {}
     for layer_index in range(layer_count):
         s.stage, s.index = "layer", layer_index
-        s.number("B", "layer_id")
+        layer_id = s.number("B", "layer_id")
         graphics_count = s.number("H", "cell_count")
         if graphics_count > CELL_COUNT:
             raise s.error("CORRUPT", "Trop de cellules graphiques", f"cell_count<={CELL_COUNT}")
@@ -167,7 +168,10 @@ def parse_dlm(data: bytes, source: str) -> GameMap:
                 s.skip(ELEMENT_SIZES[kind], "graphical" if kind == 2 else "sound")
             elements_total += elements
         graphics_cells += graphics_count
+        layer_cells[layer_id] = tuple(sorted(set(layer_cells.get(layer_id, ())) | graphics_ids))
     meta["graphical_cells"], meta["graphical_elements"] = graphics_cells, elements_total
+    # Cellules portant au moins un élément graphique, par calque (0 = sol) : empreinte de forme.
+    meta["layer_cells"] = layer_cells
     cells = []
     data = s.data
     s.stage = "cell"

@@ -216,3 +216,48 @@ boss » en farm de donjon (détecteur de marqueur boss appris sur TRAIN, drapeau
 3. Aller sur une map voisine, puis encore une autre (à pied).
 4. Si possible : un zaap / une porte (changement non local).
 5. Noter à chaque fois : ID, coordonnées, source, GameData, projection (bloc Map de Vision réelle).
+
+## 11. Durcissement extérieur / intérieur (28/09)
+
+### Constat (journal live `map-resolution.jsonl`)
+11 des 12 ambiguïtés live opposaient la map **extérieure** (worldMap 1, outdoor) à des **intérieurs**
+(worldMap -1 : maisons, mine, souterrains) de mêmes coordonnées et mêmes noms, par exemple le Campement
+des Gobelins (-4,2) : 1 extérieur + 5 salles de mine. Une fois ambigu, le résolveur oubliait tout, et
+l'ambiguïté se propageait de map en map.
+
+### Deux nouvelles sources, qui ne font qu'ÉLIMINER des candidates
+1. **Forme de la map à l'écran** (`MapShape`, `GameDataShapeSource`, `screen_darkness`). Le DLM fournit les
+   cases marchables et les cases sans aucun élément graphique (nouveau `layer_cells` dans `parse_dlm`) ;
+   les centres des 560 cases viennent de la grille calibrée (`GameDataGridResolver.cell_centers`, la
+   même pour toutes les maps).
+   - **Cases marchables noires ≥ 25 %** → pas cette map. Mesuré sur 472 frames : la vraie map ne dépasse
+     jamais 10 %. C'est ce qui élimine l'extérieur quand on est dans une mine ou une maison.
+   - **Intérieur sans image de fond, vide éclairé à > 90 %** (au moins 120 cases vides visibles) → pas
+     cette map. C'est ce qui élimine la mine ou la maison quand on est dehors.
+   - Pas assez de cases visibles, ou toutes les candidates éliminées → rien n'est éliminé.
+2. **Hypothèses gardées** (`MapContextService.hypotheses`). Après une lecture ambiguë, les candidates
+   sont retenues ; au pas suivant, seules leurs voisines dans le graphe restent. Si une hypothèse est un
+   intérieur (une porte peut changer les coordonnées), l'écran doit en plus **soutenir** la voisine :
+   ≤ 10 % de ses cases marchables sont noires.
+
+Ces résolutions ont une confiance de 0,96 (< 0,97) : aucune empreinte n'est apprise sur elles.
+
+### Benchmark (496 frames, 472 avec vérité, OCR identique pour les 3 passes)
+| | Correctes | **Mauvaises** | Ambiguës | Couverture |
+|---|---|---|---|---|
+| Avant (sans forme ni hypothèses) | 331 | **0** | 61 | 0,701 |
+| Après | 356 | **0** | 36 | 0,754 |
+| Après + 1 confirmation humaine simulée par lieu | 371 | **0** | 21 | 0,786 |
+
+- Résolues maintenant : (0,-32) Tainéla, 20 frames (maison éliminée) ; (5,-19) Cité d'Astrub, 5 frames.
+- Encore ambiguë : (14,18) Territoire des Bandits, 16 frames. L'intérieur jumeau `38535168` est
+  entièrement dessiné, sans vide noir, donc rien ne peut l'éliminer par la forme → limite documentée.
+- 20 frames sans vérité restent ambiguës (non mesurables).
+- Rejeu de 2 observations live du 28/09 (Campement des Gobelins, dehors), ambiguës avec l'ancien code :
+  (-4,3) → `104072451` et (-4,2) → `104072452`, les extérieurs, voisins de (-4,4) `104072450`.
+
+### Limites
+- Le test « vide d'intérieur éclairé » n'a **aucun exemple réel d'intérieur** dans le corpus : à valider en
+  jeu (entrer / sortir d'une mine, d'une étable, d'une maison).
+- Intérieurs entièrement dessinés et maps en plusieurs versions (Jardins d'Hiver, Frigost) : restent
+  ambigus → mapId manuel, mémorisé ensuite.

@@ -212,12 +212,19 @@ def _map_resolution(repository: CorpusRepository, args) -> int:
         print("Dossier client GameData inconnu : --client requis", flush=True)
         return 2
     root = app_data_root() / "data"
+    from combatbot.gamedata.provider import LocalGameDataProvider
+    from combatbot.vision.map_resolver import GameDataShapeSource
     index = load_or_build(Path(client), root / "gamedata" / "cache")
+    provider = LocalGameDataProvider(Path(client))
+    provider.scan_client()
+    shapes = GameDataShapeSource(provider, index)
     output = args.output_dir or (root / "benchmarks")
     output.mkdir(parents=True, exist_ok=True)
-    for simulate, suffix in ((False, ""), (True, "-with-one-confirmation")):
+    runs = ((False, None, False, "-baseline"), (False, shapes, True, ""), (True, shapes, True, "-with-one-confirmation"))
+    for simulate, shape_source, hypotheses, suffix in runs:
         report = run_map_resolution_benchmark(repository, index, limit=args.limit,
-                                              simulate_human_confirmation=simulate)
+                                              simulate_human_confirmation=simulate, shapes=shape_source,
+                                              track_hypotheses=hypotheses)
         (output / f"map-resolution{suffix}.json").write_text(
             json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
         (output / f"map-resolution{suffix}.md").write_text(markdown_summary(report), encoding="utf-8")

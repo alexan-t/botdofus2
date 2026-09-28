@@ -171,11 +171,13 @@ class RealCombatObserver:
         assert combat_image is not None
         resolution = None
         map_resolution = None
+        zones = {name: rect.to_normalized_rect() for name, rect in self.calibration.zones.items()}
         if self.map_context is not None:
             # Met à jour l'identité de map AVANT la projection : la grille suit la map détectée.
-            map_resolution = self.map_context.update(frame.image, combat_image)
+            centers = self.grid_resolver.cell_centers(frame.client.size, zones) \
+                if self.grid_resolver is not None else None
+            map_resolution = self.map_context.update(frame.image, combat_image, cell_centers=centers)
         if self.grid_resolver is not None:
-            zones = {name: rect.to_normalized_rect() for name, rect in self.calibration.zones.items()}
             resolution = self.grid_resolver.resolve(combat_image, frame.client.size, zones)
             grid = self._validate_grid(resolution, combat_image)
         else:

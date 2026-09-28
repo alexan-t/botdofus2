@@ -950,14 +950,17 @@ class MainWindow(QMainWindow):
                 self.combat.set_declared_map(f"Détection automatique indisponible : {state['error']} — "
                                              "utilisez le mapId manuel en secours.")
             return
-        from combatbot.vision.map_resolver import MapContextResolver, MapContextService, MapKnowledge
+        from combatbot.vision.map_resolver import (
+            GameDataShapeSource, MapContextResolver, MapContextService, MapKnowledge,
+        )
         root = app_data_root() / "data"
         self._topology_source, self._topology_folder = state["source"], state["folder"]
         if observer.grid_resolver is not None:
             observer.grid_resolver.topology_source = state["source"]
             observer.grid_resolver.map_identity = self._map_identity
         observer.map_context = MapContextService(
-            MapContextResolver(state["index"], MapKnowledge(root / "map_knowledge.json")),
+            MapContextResolver(state["index"], MapKnowledge(root / "map_knowledge.json"),
+                               shapes=GameDataShapeSource(state["source"].provider, state["index"])),
             identity=self._map_identity, layout_signature=state.get("layout"),
             journal=root / "logs" / "map-resolution.jsonl")
         current = self._map_identity.current_map()

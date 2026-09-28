@@ -6,6 +6,7 @@ UNIQUEMENT au score : elle n'est jamais transmise au résolveur. Critère princi
 """
 from __future__ import annotations
 
+import ast
 from collections import Counter, defaultdict
 import statistics
 import time
@@ -23,7 +24,8 @@ CORPUS_ROI = (0.0, 0.0, 0.30, 0.16)
 
 def run_map_resolution_benchmark(repository: CorpusRepository, index: MapSpatialIndex, *,
                                  reader: MapCoordinateReader | None = None, limit: int | None = None,
-                                 simulate_human_confirmation: bool = False) -> dict:
+                                 simulate_human_confirmation: bool = False, shapes=None,
+                                 track_hypotheses: bool = True) -> dict:
     """``simulate_human_confirmation`` : scénario séparé où l'humain résout UNE fois chaque lieu
     ambigu (la vérité ne sert qu'à simuler cette réponse) ; on mesure ensuite si les frames
     suivantes se résolvent seules par l'empreinte mémorisée, sans jamais de mauvaise map."""
@@ -41,8 +43,8 @@ def run_map_resolution_benchmark(repository: CorpusRepository, index: MapSpatial
     sources = Counter()
     processed = 0
     for session_id in sorted(sessions):
-        service = MapContextService(MapContextResolver(index, knowledge), reader=reader, interval=0.0,
-                                    synchronous=True)
+        service = MapContextService(MapContextResolver(index, knowledge, shapes=shapes), reader=reader,
+                                    interval=0.0, synchronous=True, track_hypotheses=track_hypotheses)
         first_resolved = None
         for position, entry in enumerate(sorted(sessions[session_id], key=lambda item: item.frame_index)):
             if limit is not None and processed >= limit:
@@ -55,7 +57,8 @@ def run_map_resolution_benchmark(repository: CorpusRepository, index: MapSpatial
                 counts["unreadable_frame"] += 1
                 continue
             started = time.perf_counter()
-            resolution = service.update(image, image, now=float(position) * 2.5)
+            resolution = service.update(image, image, now=float(position) * 2.5,
+                                        cell_centers=_cell_centers(document) if shapes is not None else None)
             reader_ms.append(service.timings.get("coordinate_reader_ms", 0.0))
             resolver_ms.append(service.timings.get("resolver_ms", 0.0))
             status = resolution.status.value
@@ -96,6 +99,7 @@ def run_map_resolution_benchmark(repository: CorpusRepository, index: MapSpatial
     return {
         "scenario": "one_simulated_human_confirmation_per_ambiguous_place" if simulate_human_confirmation
         else "fully_automatic",
+        "screen_shape": shapes is not None, "hypotheses": track_hypotheses,
         "frames": processed,
         "frames_with_truth": truth_frames,
         "outcomes": dict(counts),
@@ -113,9 +117,25 @@ def run_map_resolution_benchmark(repository: CorpusRepository, index: MapSpatial
     }
 
 
+def _cell_centers(document: dict) -> dict[int, tuple[float, float]] | None:
+    """Centres des cases projetés au moment de la capture (grille GameData calibrée), sinon None."""
+    cells = (document.get("grid_snapshot") or {}).get("cells")
+    if isinstance(cells, str):
+        try:
+            cells = ast.literal_eval(cells)
+        except (ValueError, SyntaxError):
+            return None
+    if not isinstance(cells, list):
+        return None
+    centers = {int(cell["cell_id"]): (float(cell["center"][0]), float(cell["center"][1]))
+               for cell in cells if cell.get("cell_id") is not None and cell.get("center")}
+    return centers or None
+
+
 def markdown_summary(report: dict) -> str:
     outcomes = report["outcomes"]
-    lines = ["# Benchmark résolution de map (3B-6C)", "", f"Scénario : {report.get('scenario')}", "",
+    lines = ["# Benchmark résolution de map (3B-6C)", "", f"Scénario : {report.get('scenario')}",
+             f"Forme à l'écran : {report.get('screen_shape')} · hypothèses : {report.get('hypotheses')}", "",
              f"- Frames : {report['frames']} (avec vérité : {report['frames_with_truth']})",
              f"- Correctes : {outcomes.get('correct', 0)} · **Mauvaises : {report['wrong_maps']}** · "
              f"Ambiguës : {outcomes.get('ambiguous', 0)} · Inconnues : {outcomes.get('unknown', 0)} · "

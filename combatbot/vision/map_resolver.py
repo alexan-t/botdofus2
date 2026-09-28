@@ -2,7 +2,8 @@
 
 Sources (par ordre) : infos de map lues à l'écran (coordonnées + « Zone (Sous-zone) » + niveau,
 consensus temporel) → index GameData → contexte de la map précédente (graphe de voisinage) →
-empreinte visuelle des maps déjà résolues ou confirmées. Aucune source réseau, mémoire ou
+forme de la map à l'écran (cases marchables éclairées, vide noir des intérieurs) → hypothèses
+gardées après une ambiguïté → empreinte visuelle des maps déjà résolues ou confirmées. Aucune source réseau, mémoire ou
 injection. Principe : mieux vaut UNKNOWN/AMBIGUOUS qu'une mauvaise map. Un changement de map
 n'est retenu qu'après consensus ; une lecture isolée ne réinitialise rien.
 """
@@ -32,6 +33,17 @@ FINGERPRINT_MASK = "top14-bottom12-v1"
 FINGERPRINT_ACCEPT = 0.10      # distance max (fraction de bits) pour reconnaître une map
 FINGERPRINT_MARGIN = 0.08      # écart minimal avec la 2ᵉ candidate connue
 FINGERPRINT_MAX_PER_MAP = 8
+
+# Forme de la map à l'écran : une case marchable est toujours dessinée ; le vide d'un intérieur sans
+# image de fond est noir. Mesuré sur 472 frames du corpus : la vraie map n'a jamais plus de 10 % de
+# cases marchables noires. Ces tests ne font qu'ÉLIMINER des candidates, jamais en inventer.
+DARK_VALUE = 22                  # valeur HSV (0-255) sous laquelle un centre de case est « noir »
+SHAPE_WALK_MIN_CELLS = 20
+SHAPE_WALK_DARK_REFUTE = 0.25    # ≥ 25 % des cases marchables noires → pas cette map
+SHAPE_WALK_DARK_SUPPORT = 0.10   # ≤ 10 % → la forme soutient cette map
+SHAPE_VOID_MIN_CELLS = 120
+SHAPE_VOID_DARK_MIN = 0.10       # intérieur sans fond dont le vide est éclairé à > 90 % → pas cette map
+HYPOTHESIS_CONFIDENCE = 0.96     # < 0.97 : aucune empreinte apprise sur ces résolutions
 
 
 class MapResolutionStatus(str, Enum):
@@ -159,13 +171,95 @@ class MapKnowledge:
         temporary.replace(self.path)
 
 
+# ---------------------------------------------------------------------- forme de la map
+@dataclass(frozen=True)
+class MapShape:
+    """Faits GameData statiques : cases marchables, cases sans aucun élément graphique."""
+
+    walkable: frozenset[int]
+    void: frozenset[int]
+    background_fixtures: int
+    outdoor: bool
+
+
+def map_shape(game_map, outdoor: bool) -> MapShape:
+    drawn: set[int] = set()
+    for cells in (game_map.metadata.get("layer_cells") or {}).values():
+        drawn.update(int(cell) for cell in cells)
+    identifiers = [int(cell.cell_id) for cell in game_map.cells]
+    return MapShape(frozenset(int(cell.cell_id) for cell in game_map.cells if cell.walkable),
+                    frozenset(cell for cell in identifiers if cell not in drawn),
+                    int(game_map.metadata.get("background_fixture_count") or 0), bool(outdoor))
+
+
+class GameDataShapeSource:
+    """map_id → MapShape depuis les DLM locaux (quelques candidates seulement, en cache)."""
+
+    def __init__(self, provider, index: MapSpatialIndex, max_cache: int = 64) -> None:
+        self.provider, self.index, self.max_cache = provider, index, max_cache
+        self._cache: dict[int, MapShape | None] = {}
+
+    def __call__(self, map_id: int) -> MapShape | None:
+        if map_id not in self._cache:
+            record = self.index.get_map(map_id)
+            try:
+                shape = map_shape(self.provider.get_map(int(map_id), track=False), record.outdoor) \
+                    if record is not None else None
+            except (OSError, ValueError):
+                shape = None
+            self._cache[map_id] = shape
+            while len(self._cache) > self.max_cache:
+                self._cache.pop(next(iter(self._cache)))
+        return self._cache[map_id]
+
+
+def screen_darkness(combat_image: np.ndarray | None,
+                    centers: dict[int, tuple[float, float]] | None) -> dict[int, bool] | None:
+    """Case → centre noir à l'écran (patch 7×7), pour les cases dont le centre est dans l'image."""
+    if combat_image is None or not getattr(combat_image, "size", 0) or not centers:
+        return None
+    value = cv2.cvtColor(combat_image, cv2.COLOR_BGR2HSV)[..., 2] if combat_image.ndim == 3 else combat_image
+    height, width = value.shape[:2]
+    dark = {}
+    for cell_id, (x, y) in centers.items():
+        x, y = int(round(x)), int(round(y))
+        if 4 <= x < width - 4 and 4 <= y < height - 4:
+            dark[int(cell_id)] = float(value[y - 3:y + 4, x - 3:x + 4].mean()) < DARK_VALUE
+    return dark or None
+
+
 # ---------------------------------------------------------------------- résolveur
 class MapContextResolver:
     """Décision explicable : chaque étape réduit les candidates ou s'abstient."""
 
-    def __init__(self, index: MapSpatialIndex, knowledge: MapKnowledge | None = None) -> None:
+    def __init__(self, index: MapSpatialIndex, knowledge: MapKnowledge | None = None,
+                 shapes=None) -> None:
         self.index = index
         self.knowledge = knowledge or MapKnowledge()
+        self.shapes = shapes        # map_id → MapShape | None ; None = test de forme indisponible
+
+    def _shape_verdict(self, record: MapRecord, dark: dict[int, bool]) -> dict[str, object]:
+        """``refuted`` : la forme GameData contredit l'écran ; ``supported`` : marchables éclairées."""
+        shape = self.shapes(record.map_id) if self.shapes is not None else None
+        if shape is None:
+            return {"available": False}
+        verdict: dict[str, object] = {"available": True, "refuted": None, "supported": False}
+        walk = [dark[cell] for cell in shape.walkable if cell in dark]
+        if len(walk) >= SHAPE_WALK_MIN_CELLS:
+            ratio = float(np.mean(walk))
+            verdict["walk_dark"] = round(ratio, 3)
+            verdict["supported"] = ratio <= SHAPE_WALK_DARK_SUPPORT
+            if ratio >= SHAPE_WALK_DARK_REFUTE:
+                verdict["refuted"] = "WALKABLE_CELLS_DARK"
+                return verdict
+        if not shape.outdoor and shape.background_fixtures == 0:
+            void = [dark[cell] for cell in shape.void if cell in dark]
+            if len(void) >= SHAPE_VOID_MIN_CELLS:
+                ratio = float(np.mean(void))
+                verdict["void_dark"] = round(ratio, 3)
+                if ratio < SHAPE_VOID_DARK_MIN:
+                    verdict["refuted"] = "INDOOR_VOID_LIT"
+        return verdict
 
     def _names_match(self, record: MapRecord, observation: MapInfoObservation) -> bool:
         if observation.map_name is not None:
@@ -180,7 +274,9 @@ class MapContextResolver:
 
     def resolve(self, observation: MapInfoObservation | None, *, previous_map_id: int | None = None,
                 scene_changed: bool = False, fingerprint: np.ndarray | None = None,
-                log_map_id: int | None = None, now: float | None = None) -> MapResolution:
+                log_map_id: int | None = None, now: float | None = None,
+                screen_dark: dict[int, bool] | None = None,
+                previous_candidates: tuple[int, ...] = ()) -> MapResolution:
         stamp = time.time() if now is None else now
         base = {"previous_map_id": previous_map_id, "timestamp": stamp}
         if log_map_id is not None:
@@ -224,8 +320,48 @@ class MapContextResolver:
             if len(initial) == 1:
                 sources[0] = "OCR_COORDS_UNIQUE"
             return resolved(named[0], 0.99, "UNIQUE_AFTER_NAMES")
-        # Plusieurs maps partagent coordonnées + noms (extérieur / intérieur, donjons…).
-        if previous_map_id is not None:
+        # Plusieurs maps partagent coordonnées + noms (extérieur / intérieur, mines, donjons…).
+        verdicts: dict[int, dict] = {}
+        if screen_dark and self.shapes is not None:
+            verdicts = {record.map_id: self._shape_verdict(record, screen_dark) for record in named}
+            contributions["shape"] = {str(k): {key: value for key, value in v.items() if key != "available"}
+                                      for k, v in verdicts.items() if v.get("available")}
+            survivors = [record for record in named if not verdicts[record.map_id].get("refuted")]
+            if not survivors:
+                contributions["shape_refutes_all"] = True          # écran incohérent : rien n'est éliminé
+            elif len(survivors) < len(named):
+                contributions["shape_refuted"] = [r.map_id for r in named if r not in survivors]
+                sources.append("SCREEN_SHAPE")
+                named = survivors
+                if len(named) == 1:
+                    return resolved(named[0], HYPOTHESIS_CONFIDENCE, "UNIQUE_AFTER_SCREEN_SHAPE")
+        if previous_candidates:
+            # Map précédente ambiguë : ses candidates restent des hypothèses (plus récentes que la
+            # dernière map résolue). Un pas vers une voisine peut lever l'ambiguïté.
+            hypotheses = {int(item) for item in previous_candidates}
+            same = [record for record in named if record.map_id in hypotheses]
+            contributions["hypotheses"] = len(hypotheses)
+            if same and not scene_changed:
+                if len(same) == 1:
+                    sources.append("PREVIOUS_CANDIDATES")
+                    return resolved(same[0], HYPOTHESIS_CONFIDENCE, "UNIQUE_REMAINING_HYPOTHESIS")
+                named = same
+            else:
+                adjacent = [record for record in named
+                            if any(self._adjacent(record, hypothesis) for hypothesis in hypotheses)]
+                contributions["hypothesis_graph_candidates"] = len(adjacent)
+                indoor_hypothesis = any(not getattr(self.index.get_map(h), "outdoor", False) for h in hypotheses)
+                if len(adjacent) == 1:
+                    # Depuis un intérieur possible, une porte peut aussi changer de coordonnées : on exige
+                    # alors que l'écran SOUTIENNE la voisine (ses cases marchables sont éclairées).
+                    if not indoor_hypothesis or verdicts.get(adjacent[0].map_id, {}).get("supported"):
+                        sources.append("PREVIOUS_CANDIDATES_GRAPH")
+                        return resolved(adjacent[0], HYPOTHESIS_CONFIDENCE,
+                                        "UNIQUE_NEIGHBOUR_OF_PREVIOUS_CANDIDATES")
+                    contributions["hypothesis_graph_unsupported"] = adjacent[0].map_id
+                elif adjacent:
+                    named = adjacent
+        elif previous_map_id is not None:
             same = next((record for record in named if record.map_id == previous_map_id), None)
             if same is not None and not scene_changed:
                 contributions["previous_map_score"] = 1.0
@@ -314,7 +450,8 @@ class MapContextService:
 
     def __init__(self, resolver: MapContextResolver, *, reader: MapCoordinateReader | None = None,
                  identity: AutoMapIdentity | None = None, interval: float = 2.0, stale_seconds: float = 90.0,
-                 layout_signature: str | None = None, journal: Path | None = None, synchronous: bool = False) -> None:
+                 layout_signature: str | None = None, journal: Path | None = None, synchronous: bool = False,
+                 track_hypotheses: bool = True) -> None:
         self.resolver = resolver
         self.reader = reader or MapCoordinateReader()
         self.identity = identity or AutoMapIdentity()
@@ -335,6 +472,9 @@ class MapContextService:
         self._accepted: MapInfoObservation | None = None
         self.resolution = MapResolution(None, MapResolutionStatus.UNKNOWN, reason="DETECTING")
         self.map_id: int | None = None
+        # Candidates de la dernière lecture ambiguë ; vidées dès qu'une map est résolue.
+        self.hypotheses: tuple[int, ...] = ()
+        self.track_hypotheses = track_hypotheses
         self.manual = False
         self.timings: dict[str, float] = {}
 
@@ -380,7 +520,9 @@ class MapContextService:
             self._accepted = accepted
 
     # --------------------------------------------------------------- mise à jour par frame
-    def update(self, client_image: np.ndarray, combat_image: np.ndarray, now: float | None = None) -> MapResolution:
+    def update(self, client_image: np.ndarray, combat_image: np.ndarray, now: float | None = None,
+               cell_centers: dict[int, tuple[float, float]] | None = None) -> MapResolution:
+        """``cell_centers`` : centres des 560 cases dans ``combat_image`` (grille calibrée), sinon None."""
         stamp = time.monotonic() if now is None else now
         started = time.perf_counter()
         in_transition = self.transitions.update(combat_image)
@@ -413,9 +555,12 @@ class MapContextService:
             fingerprint = compute_fingerprint(combat_image)
             resolution = self.resolver.resolve(accepted, previous_map_id=previous,
                                                scene_changed=self.transitions.changed_since_read,
-                                               fingerprint=fingerprint, now=stamp)
+                                               fingerprint=fingerprint, now=stamp,
+                                               screen_dark=screen_darkness(combat_image, cell_centers),
+                                               previous_candidates=self.hypotheses)
             self.timings["resolver_ms"] = (time.perf_counter() - resolver_started) * 1000
             if resolution.status is MapResolutionStatus.RESOLVED:
+                self.hypotheses = ()
                 self.transitions.changed_since_read = False
                 if resolution.changed:
                     self._log("MAP_CHANGED", resolution, accepted)
@@ -424,6 +569,10 @@ class MapContextService:
                 if resolution.confidence >= 0.97:
                     self.resolver.knowledge.learn(resolution.map_id, fingerprint, source=resolution.source,
                                                   layout=self.layout_signature)
+            elif self.track_hypotheses and resolution.status is MapResolutionStatus.AMBIGUOUS                     and resolution.candidates != self.hypotheses:
+                self.hypotheses = resolution.candidates
+                self.transitions.changed_since_read = False    # hypothèses fixées sur cette scène
+                self._log(resolution.status.value, resolution, accepted)
             elif resolution.status is not self.resolution.status or resolution.candidates != self.resolution.candidates:
                 # Ambigu/incohérent : la map précédente reste l'identité du suivi (aucun reset),
                 # mais rien n'est enregistré tant que la map n'est pas résolue. Journalisé une fois.
@@ -439,6 +588,7 @@ class MapContextService:
             return
         self.manual = True
         self.map_id = map_id
+        self.hypotheses = ()
         self.identity.declare(map_id, MapIdSource.MANUAL_GUESS)
         record = self.resolver.index.get_map(map_id)
         accepted = self._accepted

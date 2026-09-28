@@ -131,6 +131,20 @@ class GameDataGridResolver:
             self._projected.clear()
         return self._projector[1]
 
+    def cell_centers(self, client_size: ClientSize, zones) -> dict[int, tuple[float, float]] | None:
+        """Centres des 560 cases (identiques pour toutes les maps) si le profil s'applique, sinon None."""
+        if self.profile is None:
+            return None
+        status = self.profile.status_for(client_size, zones)
+        if not status.applicable:
+            return None
+        effective = status.transform
+        if self.runtime_adjustment is not None and not self.runtime_adjustment.is_zero:
+            effective = self.runtime_adjustment.apply(status.transform)
+        projector = self.projector(effective)
+        return {cell_id: (float(center.x), float(center.y))
+                for cell_id, (_coordinate, center, _polygon) in projector._geometry.items()}
+
     def _legacy(self, image: np.ndarray, reason: str, *, forced: bool = False,
                 status: ProjectionStatus | None = None) -> GridResolution:
         if self.profile is not None and not (self.allow_legacy_fallback or forced):

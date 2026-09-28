@@ -476,3 +476,132 @@ def test_grid_not_aligned_frames_are_excluded_from_entity_annotation(tmp_path: P
     ids = {entry.observation_id for entry in entity_entries(repository)}
     assert tagged.observation_id not in ids
     assert kept.observation_id in ids or not ids          # sans cellules projetées, aucune n'est listée
+
+
+# ------------------------------------------------------------------ durcissement : forme à l'écran et hypothèses
+from combatbot.vision.map_resolver import MapShape, screen_darkness  # noqa: E402
+
+ROOM = frozenset(range(250, 290))                     # petite pièce d'intérieur au milieu de la grille
+
+
+def _shapes(extra=None):
+    table = {
+        10: MapShape(frozenset(range(0, 560, 2)), frozenset(), 0, True),       # extérieur plein
+        20: MapShape(ROOM, frozenset(set(range(560)) - ROOM), 0, False),       # maison : vide noir autour
+        11: MapShape(frozenset(range(0, 560, 3)), frozenset(), 0, True),
+        21: MapShape(ROOM, frozenset(set(range(560)) - ROOM), 0, False),
+        **(extra or {})}
+    return table.get
+
+
+def _dark(lit: set[int]) -> dict[int, bool]:
+    return {cell: cell not in lit for cell in range(560)}
+
+
+def test_dark_screen_refutes_outdoor_map(index) -> None:
+    """Dans la maison : les cases marchables de l'extérieur sont noires → seule la maison reste."""
+    result = MapContextResolver(index, shapes=_shapes()).resolve(_info(0, -32), screen_dark=_dark(set(ROOM)))
+    assert result.status is MapResolutionStatus.RESOLVED and result.map_id == 20
+    assert "SCREEN_SHAPE" in result.source and result.contributions["shape_refuted"] == [10]
+    assert result.confidence < 0.97                 # aucune empreinte apprise sur ce seul indice
+
+
+def test_lit_screen_refutes_indoor_without_background(index) -> None:
+    """Dehors : le vide de la maison est éclairé → la maison est éliminée."""
+    result = MapContextResolver(index, shapes=_shapes()).resolve(_info(0, -32), screen_dark=_dark(set(range(560))))
+    assert result.status is MapResolutionStatus.RESOLVED and result.map_id == 10
+    assert result.contributions["shape"]["20"]["refuted"] == "INDOOR_VOID_LIT"
+
+
+def test_indoor_with_background_image_is_never_refuted_by_lit_void(index) -> None:
+    shapes = _shapes({20: MapShape(ROOM, frozenset(set(range(560)) - ROOM), 3, False)})
+    result = MapContextResolver(index, shapes=shapes).resolve(_info(0, -32), screen_dark=_dark(set(range(560))))
+    assert result.status is MapResolutionStatus.AMBIGUOUS
+
+
+def test_shape_refuting_every_candidate_eliminates_nothing(index) -> None:
+    shapes = _shapes({20: MapShape(frozenset(range(300, 340)), frozenset(), 0, False)})
+    result = MapContextResolver(index, shapes=shapes).resolve(_info(0, -32), screen_dark=_dark(set()))
+    assert result.status is MapResolutionStatus.AMBIGUOUS and result.contributions["shape_refutes_all"]
+    assert set(result.candidates) == {10, 20}
+
+
+def test_shape_needs_enough_visible_cells(index) -> None:
+    few = {cell: True for cell in range(10)}           # presque rien de visible : aucune élimination
+    result = MapContextResolver(index, shapes=_shapes()).resolve(_info(0, -32), screen_dark=few)
+    assert result.status is MapResolutionStatus.AMBIGUOUS
+
+
+def test_screen_darkness_samples_cell_centres() -> None:
+    image = np.zeros((100, 200, 3), np.uint8)
+    image[:, 100:] = 200
+    dark = screen_darkness(image, {1: (50, 50), 2: (150, 50), 3: (199, 50)})
+    assert dark == {1: True, 2: False}                 # la case 3 sort de l'image
+
+
+@pytest.fixture
+def twin_index() -> MapSpatialIndex:
+    """Deux coordonnées voisines, chacune avec un extérieur et un intérieur jumeaux."""
+    return MapSpatialIndex([
+        _record(10, 0, -32, neighbours=(11,)),
+        _record(20, 0, -32, world=-1, outdoor=False, neighbours=(9020,)),   # voisins DLM fictifs
+        _record(11, 0, -31, neighbours=(10,)),
+        _record(21, 0, -31, world=-1, outdoor=False, neighbours=(9021,)),
+        _record(12, 1, -32, neighbours=(13,)),
+        _record(14, 1, -32, neighbours=(15,)),
+        _record(13, 1, -31, neighbours=(12,)),
+        _record(15, 1, -31, neighbours=(14,)),
+        _record(16, 1, -31, neighbours=()),
+    ])
+
+
+def test_outdoor_hypotheses_resolve_through_graph(twin_index) -> None:
+    result = MapContextResolver(twin_index).resolve(_info(1, -31), scene_changed=True, previous_candidates=(12,))
+    assert result.status is MapResolutionStatus.RESOLVED and result.map_id == 13
+    assert "PREVIOUS_CANDIDATES_GRAPH" in result.source
+
+
+def test_hypotheses_narrow_without_forcing(twin_index) -> None:
+    result = MapContextResolver(twin_index).resolve(_info(1, -31), scene_changed=True, previous_candidates=(12, 14))
+    assert result.status is MapResolutionStatus.AMBIGUOUS and set(result.candidates) == {13, 15}
+
+
+def test_indoor_hypothesis_requires_screen_support(twin_index) -> None:
+    """Depuis {extérieur, maison}, une porte pourrait changer les coordonnées : le graphe seul ne suffit pas."""
+    resolver = MapContextResolver(twin_index, shapes=_shapes())
+    blind = resolver.resolve(_info(0, -31), scene_changed=True, previous_candidates=(10, 20))
+    assert blind.status is MapResolutionStatus.AMBIGUOUS and set(blind.candidates) == {11, 21}
+    assert blind.contributions["hypothesis_graph_unsupported"] == 11
+    # Écran éclairé partout : la maison 21 est éliminée par la forme, l'extérieur 11 est soutenu.
+    seen = resolver.resolve(_info(0, -31), scene_changed=True, previous_candidates=(10, 20),
+                            screen_dark=_dark(set(range(560))))
+    assert seen.status is MapResolutionStatus.RESOLVED and seen.map_id == 11
+
+
+def test_service_keeps_hypotheses_until_resolved(twin_index, tmp_path: Path) -> None:
+    service = MapContextService(MapContextResolver(twin_index, MapKnowledge(tmp_path / "k.json")),
+                                reader=ScriptedReader([(1, -32), (1, -32), (1, -31), (1, -31)]),
+                                interval=0.0, synchronous=True)
+    frame = _frame()
+    service.update(frame, frame, now=0.0)
+    ambiguous = service.update(frame, frame, now=1.0)
+    assert ambiguous.status is MapResolutionStatus.AMBIGUOUS and service.hypotheses == (12, 14)
+    service.update(frame, frame, now=2.0)
+    still = service.update(frame, frame, now=3.0)     # 2 hypothèses → 2 voisines : jamais forcé
+    assert still.status is MapResolutionStatus.AMBIGUOUS and set(service.hypotheses) == {13, 15}
+    assert service.map_id is None
+
+
+def test_service_resolves_after_one_step_from_ambiguous_start(twin_index, tmp_path: Path) -> None:
+    index = MapSpatialIndex([r for r in twin_index.maps.values() if r.map_id != 14 and r.map_id != 15])
+    service = MapContextService(MapContextResolver(index, MapKnowledge(tmp_path / "k.json")),
+                                reader=ScriptedReader([(0, -32), (0, -32), (0, -31), (0, -31)]),
+                                interval=0.0, synchronous=True, track_hypotheses=True)
+    frame = _frame()
+    service.update(frame, frame, now=0.0)
+    assert service.update(frame, frame, now=1.0).status is MapResolutionStatus.AMBIGUOUS
+    assert service.hypotheses == (10, 20)
+    service.update(frame, frame, now=2.0)
+    step = service.update(frame, frame, now=3.0)
+    # Hypothèse intérieure possible et pas d'écran : rien n'est forcé (porte possible).
+    assert step.status is MapResolutionStatus.AMBIGUOUS and step.map_id is None
