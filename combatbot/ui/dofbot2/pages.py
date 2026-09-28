@@ -99,9 +99,11 @@ class Page(QScrollArea):
         self.layout_.addStretch(1)
         self.accordions: dict[str, Accordion] = {}
         self._open_state: dict[str, bool] = {}
+        self.accordion_rebuild_count = 0      # diagnostic de performance : reconstructions complètes
 
     def set_accordions(self, specs: list[tuple[str, str, str, list[QWidget], bool, bool]]) -> None:
         """(clé, titre, sous-titre, lignes, ouvert par défaut, facultatif) ; l'état ouvert est conservé."""
+        self.accordion_rebuild_count += 1
         for accordion in self.accordions.values():
             self.accordions_box.removeWidget(accordion)
             accordion.hide()

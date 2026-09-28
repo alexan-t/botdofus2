@@ -65,6 +65,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--session-id", help="Session à analyser (défaut : la plus récente)")
     parser.add_argument("--targeting-proof-report", action="store_true",
                         help="4C : compare les règles candidates aux vérités du client collectées (aucune adoptée)")
+    parser.add_argument("--runtime-health", action="store_true",
+                        help="Santé CPU/RAM/threads/handles/UI de DofBot2 sur frames synthétiques (aucune action)")
+    parser.add_argument("--duration", type=float, default=60.0, help="--runtime-health : durée par phase (s)")
+    parser.add_argument("--sample-every", type=float, default=5.0, help="--runtime-health : période d'échantillon (s)")
+    parser.add_argument("--cycles", type=int, default=20, help="--runtime-health : cycles START/STOP")
+    parser.add_argument("--trace-python", action="store_true", help="--runtime-health : tas Python (tracemalloc)")
     parser.add_argument("--runtime-profile", action="store_true",
                         help="Profil de latence par étape depuis les journaux de sessions réelles")
     parser.add_argument("--execution-selftest", action="store_true",
@@ -98,6 +104,16 @@ def main(argv: list[str] | None = None) -> int:
         return _targeting_proof_report(args)
     if args.live_fasttrack_report:
         return _live_fasttrack_report(args)
+    if args.runtime_health:
+        from combatbot.performance.health import markdown_report as health_markdown
+        from combatbot.performance.health import run_health, write_report as write_health
+        output = args.output_dir or (app_data_root() / "data" / "benchmarks")   # avant l'isolation du harnais
+        report = run_health(args.duration, sample_every_s=args.sample_every, cycles=args.cycles,
+                            trace_python=args.trace_python)
+        json_path, _ = write_health(report, output)
+        print(health_markdown(report))
+        print(f"JSON : {json_path}")
+        return 0
     if args.runtime_profile:
         from combatbot.corpus.acceptance import default_data_dirs
         from combatbot.live.runtime_profile import markdown_report as profile_markdown
