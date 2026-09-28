@@ -9,7 +9,7 @@ import pytest
 from PySide6.QtCore import QBuffer, QIODevice, Qt
 from PySide6.QtGui import QColor, QImage
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QDialog, QLabel, QVBoxLayout
+from PySide6.QtWidgets import QApplication, QDialog, QLabel, QPushButton, QVBoxLayout
 
 from combatbot.models import CombatEvent, StrategyMode, TargetPriority
 from combatbot.storage import Storage
@@ -270,3 +270,24 @@ def test_legacy_features_stay_reachable(window, monkeypatch) -> None:
     assert shown[2][0] == "Simulation"   # la vue simulée s'ouvre en mode simulation
     view.go_tab("observation")
     assert window.legacy.combat.mode.currentText() == "Vision réelle"
+
+
+def test_resume_automatic_map_row_appears_in_manual_mode(window) -> None:
+    """Le contrôleur historique reste masqué : l'état du bouton se lit avec isHidden(), pas isVisible()."""
+    view = window.advanced_view
+    combat = window.legacy.combat
+    view.go_tab("observation")
+    page = view.pages["observation"]
+
+    def titles() -> list[str]:
+        return [row.findChild(QLabel).text() for row in page.accordions["map"].rows() if row.findChild(QLabel)]
+
+    page.live_update()
+    assert "Revenir à la détection automatique" not in titles()
+    combat.map_auto.setVisible(True)                   # mapId manuel déclaré
+    page.live_update()
+    assert "Revenir à la détection automatique" in titles()
+    requested = []
+    combat.map_auto_requested.connect(lambda: requested.append(True))
+    page.accordions["map"].rows()[-1].control.findChild(QPushButton).click()
+    assert requested

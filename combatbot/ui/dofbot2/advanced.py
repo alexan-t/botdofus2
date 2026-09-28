@@ -581,7 +581,7 @@ class ObservationPage(AdvancedPage):
     def accordion_signature(self) -> object:
         combat = self.legacy.combat
         return (combat.real_values["map"].text(), combat.real_values["map_coords"].text(),
-                combat.map_auto.isVisible(), combat.sequence_split.isEnabled(), self.observing)
+                not combat.map_auto.isHidden(), combat.sequence_split.isEnabled(), self.observing)
 
     def build_accordions(self) -> None:
         combat = self.legacy.combat
@@ -600,7 +600,7 @@ class ObservationPage(AdvancedPage):
                      outlined=True),
             switch_row(switches, "verified", "Vérifié par /mapid", "Cochez si vous avez tapé /mapid dans le chat", False),
         ]
-        if combat.map_auto.isVisible():
+        if not combat.map_auto.isHidden():
             map_rows.append(info_row("Revenir à la détection automatique", "", combat.map_auto.click, "Revenir",
                                      outlined=True))
         split_row = choice_row(switches, "split", "Split du combat", "Fixé au démarrage de l'observation", splits,
