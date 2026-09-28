@@ -121,7 +121,9 @@ def test_connection_steps_drive_the_legacy_panel(window, monkeypatch) -> None:
     view.live_update()
     assert page.question.text() == "L'aperçu montre-t-il bien le jeu ?"
     assert page.window_title.text() == "Kira - Dofus 3.2" and "hwnd 0x0004A2" in page.window_meta.text()
-    assert page.preview.image is not None and view.status_text.text() == "Capture à confirmer"
+    # La frame est transmise ; l'aperçu réduit n'est calculé qu'une fois la page affichée
+    # (page non visible ici : voir test_hidden_previews_do_no_work_until_shown).
+    assert page.preview._source is not None and view.status_text.text() == "Capture à confirmer"
     page.primary.click()   # « Oui, c'est DOFUS »
     assert window.legacy.client_panel.content_confirmed
     page.live_update()

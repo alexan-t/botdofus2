@@ -13,7 +13,9 @@
       6. la recette consolidée 3B-7 (--acceptance) ;
       7. les rapports de préparation live : sorts du profil (--spell-readiness), profil de latence
          (--runtime-profile), raisons de cellule joueur inconnue (--player-cell-diagnostics) et preuve
-         portée/LOS collectée (--targeting-proof-report).
+         portée/LOS collectée (--targeting-proof-report) ;
+      8. la santé des ressources (--runtime-health : CPU, RAM, threads, handles, GDI, retard UI, croissance
+         mémoire, 20 cycles démarrer/arrêter) et le banc des threads RapidOCR (--ocr-threads-benchmark).
     Le corpus est photographié avant/après : toute modification fait échouer la recette.
     Tous les résultats sont copiés dans reports\windows-acceptance-<date>\ avec un récapitulatif
     SUMMARY.md à transmettre tel quel.
@@ -176,6 +178,13 @@ Invoke-Logged "Profil de latence (sessions réelles)" "runtime-profile.txt" `
     @("-m", "combatbot.benchmark", "--runtime-profile", "--output-dir", $ReportDir) | Out-Null
 Invoke-Logged "Cellule joueur inconnue : raisons" "player-cell-diagnostics.txt" `
     @("-m", "combatbot.benchmark", "--player-cell-diagnostics", "--output-dir", $ReportDir) | Out-Null
+Invoke-Logged "Santé des ressources (CPU, RAM, threads, handles, GDI, UI) — frames synthétiques" "runtime-health.txt" `
+    @("-m", "combatbot.benchmark", "--runtime-health", "--duration", "60", "--sample-every", "5", "--cycles", "20",
+      "--output-dir", $ReportDir) | Out-Null
+Invoke-Logged "Stress UI : GDI, USER, handles, RAM par blocs (aucune action jeu)" "ui-stress.txt" `
+    @("-m", "combatbot.benchmark", "--ui-stress", "--cycles", "20", "--output-dir", $ReportDir) | Out-Null
+Invoke-Logged "RapidOCR : temps et CPU selon les threads ONNX (rien n'est appliqué)" "ocr-threads.txt" `
+    @("-m", "combatbot.benchmark", "--ocr-threads-benchmark", "--output-dir", $ReportDir) | Out-Null
 $Proof = @("-m", "combatbot.benchmark", "--targeting-proof-report", "--output-dir", $ReportDir)
 if ($Client -ne "") { $Proof += @("--client", $Client) }
 Invoke-Logged "Preuve portée/LOS collectée (4C, aucune règle adoptée)" "4c-proof.txt" $Proof | Out-Null
@@ -207,6 +216,33 @@ $Latency = Read-Report (Join-Path $ReportDir "runtime-profile.json")
 $Cells = Read-Report (Join-Path $ReportDir "player-cell-diagnostics.json")
 $Spells = Read-Report (Join-Path $ReportDir "profile-spells-readiness.json")
 $ProofReport = Read-Report (Join-Path $ReportDir "4c-proof.json")
+$Health = Read-Report (Join-Path $ReportDir "runtime-health.json")
+$Resource = @("", "## RESOURCE HEALTH", "")
+if ($Health) {
+    $Resource += @("| Phase | CPU moy/p95 (% d'un cœur) | RAM début→fin (max) Mo | Privé fin Mo | Threads | Handles | GDI/USER | UI lag p95/max ms | Observation p50/p95 ms | Croissance mémoire |",
+                   "|---|---|---|---|---|---|---|---|---|---|")
+    foreach ($Phase in $Health.phases) {
+        $Resource += ("| {0} | {1}/{2} | {3}→{4} ({5}) | {6} | {7}→{8} | {9}→{10} | {11}/{12} | {13}/{14} | {15}/{16} | {17} |" -f
+            $Phase.phase, $Phase.cpu_mean, $Phase.cpu_p95, $Phase.rss_mb.start, $Phase.rss_mb.end, $Phase.rss_mb.max,
+            $Phase.private_mb.end, $Phase.threads.start, $Phase.threads.end, $Phase.handles.start, $Phase.handles.end,
+            $Phase.gdi_objects.end, $Phase.user_objects.end, $Phase.ui_lag_p95_ms, $Phase.ui_lag_max_ms,
+            $Phase.observation_p50_ms, $Phase.observation_p95_ms, $Phase.rss_growth.verdict)
+    }
+    $Cycles = $Health.start_stop
+    $Resource += @("", ("- {0} cycles START/STOP : mémoire {1} ({2} → {3} Mo), threads {4} → {5}, observateur/job vivant après arrêt : {6}" -f
+        $Cycles.cycles, $Cycles.rss_growth.verdict, $Cycles.rss_growth.start, $Cycles.rss_growth.end,
+        $Cycles.threads[0], $Cycles.threads[-1], $(if ($Cycles.observer_alive_after_stop -or $Cycles.jobs_active_after_stop) { "OUI" } else { "non" })))
+} else {
+    $Resource += "- runtime-health absent"
+}
+$Stress = Read-Report (Join-Path $ReportDir "ui-stress.json")
+if ($Stress) {
+    $Resource += ("- Stress UI ({0} blocs) : GDI {1} ({2} → {3}), USER {4} ({5} → {6}), handles {7} ({8} → {9}), RAM {10} ({11} → {12} Mo)" -f
+        $Stress.rounds, $Stress.gdi_growth.verdict, $Stress.gdi_growth.start, $Stress.gdi_growth.end,
+        $Stress.user_growth.verdict, $Stress.user_growth.start, $Stress.user_growth.end,
+        $Stress.handles_growth.verdict, $Stress.handles_growth.start, $Stress.handles_growth.end,
+        $Stress.rss_growth.verdict, $Stress.rss_growth.start, $Stress.rss_growth.end)
+}
 $Verdicts = @(
     "| Rapport | Verdict |", "|---|---|",
     "| Auto-test d'exécution | $(if ($SelfTest) { $SelfTest.verdict } else { 'absent' }) |",
@@ -234,6 +270,7 @@ foreach ($Step in $Steps) {
     $Summary += "| $($Step.Name) | **$($Step.Verdict)** | $($Step.ExitCode) | $($Step.Detail -replace '\|', '/') |"
 }
 $Summary += @("", "## Verdicts des rapports", "") + $Verdicts
+$Summary += $Resource
 $Summary += @("", "Fichiers joints : journaux *.txt, rapports JSON/Markdown des benchmarks, acceptance JSON.",
               "Transmettre le dossier entier : $ReportDir")
 $Summary | Out-File (Join-Path $ReportDir "SUMMARY.md") -Encoding utf8

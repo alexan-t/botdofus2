@@ -23,13 +23,13 @@ from combatbot.ui.dofbot2 import theme as t
 from combatbot.ui.dofbot2.app import StatusDot
 from combatbot.ui.dofbot2.controls import (
     Choices, Dock, SettingRow, Stepper, ToastStack, button, card, choice_row, info_row, input_row, label, repolish,
-    step_row, switch_row,
+    set_prop, set_style, set_text, set_tooltip, step_row, switch_row,
 )
 from combatbot.ui.dofbot2.icons import ICONS, icon_pixmap
 from combatbot.ui.dofbot2.pages import Page
 from combatbot.ui.dofbot2.settings import JsonSettings, SettingsBinding, app_settings
 from combatbot.ui.dofbot2.widgets import HoverButton, rounded_pixmap
-from combatbot.ui.images import bgr_to_pixmap
+from combatbot.ui.images import preview_pixmap
 from combatbot.vision.models import ZONE_LABELS
 
 if TYPE_CHECKING:
@@ -145,21 +145,45 @@ class FramePreview(QWidget):
         super().__init__(parent)
         self.placeholder, self.radius = placeholder, radius
         self.image: QImage | None = None
-        self._source_id: int | None = None
+        # Référence à la frame affichée (identité exacte, pas ``id()`` que Python peut réutiliser) ; seule
+        # une copie réduite à la taille du widget est convertie pour Qt, une fois par frame ou par taille.
+        self._source: np.ndarray | None = None
+        self._rendered_size: tuple[int, int] | None = None
 
     def set_frame(self, image: np.ndarray | None) -> None:
         if image is None:
             if self.image is not None:
-                self.image, self._source_id = None, None
+                self.image, self._source, self._rendered_size = None, None, None
                 self.update()
             return
-        if id(image) == self._source_id:
+        if image is self._source:
             return
-        self._source_id = id(image)
-        self.image = bgr_to_pixmap(image).toImage()
+        self._source, self._rendered_size = image, None
+        self._render()
+
+    def _render(self) -> None:
+        size = (max(1, self.width()), max(1, self.height()))
+        if self._source is None or size == self._rendered_size and self.image is not None:
+            return
+        if not self.isVisible() or self.window().isMinimized():
+            self.image, self._rendered_size = None, None   # rendue au prochain affichage
+            return
+        self._rendered_size = size
+        self.image = preview_pixmap(self._source, *size).toImage()
         self.update()
 
+    def resizeEvent(self, event) -> None:  # noqa: N802 - API Qt
+        super().resizeEvent(event)
+        self._rendered_size = None
+        self._render()
+
+    def showEvent(self, event) -> None:  # noqa: N802 - API Qt
+        super().showEvent(event)
+        self._render()
+
     def paintEvent(self, _event) -> None:  # noqa: N802 - API Qt
+        if self.image is None and self._source is not None:
+            self._render()
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
@@ -248,8 +272,9 @@ def _row(text: str, value: QWidget) -> QWidget:
 
 
 def _set_value(widget, text: str, color: str | None = None) -> None:
-    widget.setText(text)
-    widget.setStyleSheet(f"color: {color or value_color(text)};")
+    """Rafraîchissement périodique : ni setText ni setStyleSheet (re-polish) si rien n'a changé."""
+    set_text(widget, text)
+    set_style(widget, f"color: {color or value_color(text)};")
 
 
 # --- A1 Connexion ------------------------------------------------------------------------------------
@@ -537,22 +562,38 @@ class ObservationPage(AdvancedPage):
         for key, value in self.signal_values.items():
             text = combat.real_values[key].text().split("\n")[0]
             _set_value(value, text if text else "inconnu")
-            value.setToolTip(combat.real_values[key].text())
+            set_tooltip(value, combat.real_values[key].text())
         observing = self.observing
-        self.toggle.setText("Arrêter l'observation" if observing else "Démarrer l'observation")
-        self.toggle.setProperty("running", observing)
-        repolish(self.toggle)
+        set_text(self.toggle, "Arrêter l'observation" if observing else "Démarrer l'observation")
+        set_prop(self.toggle, "running", observing)
         self.player.setEnabled(combat.select_player.isEnabled())
         self.player.setChecked(combat.select_player.isChecked())
         self.save.setEnabled(combat.observation_save.isEnabled())
         hover = combat.hover_info.text()
-        self.hover.setText(hover if len(hover) < 90 else hover[:87] + "…")
-        self.hover.adjustSize()
-        self.hover.move(12, self.canvas.height() - self.hover.height() - 12)
-        self.hover.raise_()
+        if set_text(self.hover, hover if len(hover) < 90 else hover[:87] + "…"):
+            self.hover.adjustSize()
+        position = (12, self.canvas.height() - self.hover.height() - 12)
+        if (self.hover.x(), self.hover.y()) != position:
+            self.hover.move(*position)
+            self.hover.raise_()
         super().live_update()
+        self._update_map()
         self._update_details()
         self._update_plan()
+
+    def _map_subtitle(self) -> str:
+        coordinates = self.legacy.combat.real_values["map_coords"].text()
+        return (f"Détectée automatiquement pendant l'observation · {coordinates}"
+                if coordinates and coordinates != "Inconnu" else "Détectée automatiquement pendant l'observation")
+
+    def _update_map(self) -> None:
+        """Texte de map et coordonnées mis à jour en place : jamais de reconstruction des accordéons."""
+        accordion = self.accordions.get("map")
+        if accordion is not None:
+            accordion.set_subtitle(self._map_subtitle())
+        pill = getattr(self, "map_value", None)
+        if pill is not None:
+            set_text(pill, self.legacy.combat.real_values["map"].text() or "inconnue")
 
     def _detail_rows(self) -> list[QWidget]:
         combat = self.legacy.combat
@@ -585,32 +626,34 @@ class ObservationPage(AdvancedPage):
         plan = getattr(self.legacy, "_last_plan", None)
         pill = self.plan_status.control.layout().itemAt(0).widget()
         if plan is None:
-            pill.setText("aucun plan")
-            pill.setStyleSheet(f"color: {t.TEXT_2};")
+            set_text(pill, "aucun plan")
+            set_style(pill, f"color: {t.TEXT_2};")
             return
         ready = plan.status.value == "READY"
-        pill.setText(plan.status.value)
-        pill.setStyleSheet(f"color: {t.GREEN_LIGHT if ready else t.ALERT};")
+        set_text(pill, plan.status.value)
+        set_style(pill, f"color: {t.GREEN_LIGHT if ready else t.ALERT};")
         lines = plan.describe()
         if plan.assumptions:
             lines += [f"hypothèse : {item}" for item in plan.assumptions]
-        self.plan_lines.setText("\n".join(lines))
+        set_text(self.plan_lines, "\n".join(lines))
 
     def _update_details(self) -> None:
         combat = self.legacy.combat
         for key, pill in getattr(self, "detail_values", {}).items():
             text = combat.real_values[key].text() or "Inconnu"
-            pill.setText(text if len(text) < 60 else text[:57] + "…")
-            pill.setToolTip(text)
-            pill.setStyleSheet(f"color: {value_color(text)};")
-            pill.setVisible(True)
+            set_text(pill, text if len(text) < 60 else text[:57] + "…")
+            set_tooltip(pill, text)
+            set_style(pill, f"color: {value_color(text)};")
+            if pill.isHidden():
+                pill.setVisible(True)
         if hasattr(self, "signals_label"):
-            self.signals_label.setText(combat.real_signals.toPlainText() or "Aucun signal visuel pour l'instant.")
+            set_text(self.signals_label, combat.real_signals.toPlainText() or "Aucun signal visuel pour l'instant.")
 
     def accordion_signature(self) -> object:
+        # Seuls les changements de STRUCTURE (lignes présentes, activées) reconstruisent les accordéons ;
+        # le texte de map et les coordonnées sont mis à jour en place (_update_map).
         combat = self.legacy.combat
-        return (combat.real_values["map"].text(), combat.real_values["map_coords"].text(),
-                not combat.map_auto.isHidden(), combat.sequence_split.isEnabled(), self.observing)
+        return (not combat.map_auto.isHidden(), combat.sequence_split.isEnabled(), self.observing)
 
     def build_accordions(self) -> None:
         combat = self.legacy.combat
@@ -622,8 +665,10 @@ class ObservationPage(AdvancedPage):
         switches.add("split", lambda: combat.sequence_split.currentText().replace("Split : ", ""),
                      lambda value: combat.sequence_split.setCurrentIndex(splits.index(str(value))))
         manual = WidgetBinding().add("map_id", combat.map_id_input.text, combat.map_id_input.setText)
+        map_row = info_row("Map actuelle", values["map"].text() or "inconnue")
+        self.map_value = map_row.control.layout().itemAt(0).widget()
         map_rows = [
-            info_row("Map actuelle", values["map"].text() or "inconnue"),
+            map_row,
             input_row(manual, "map_id", "mapId manuel (secours)", "ex. 153880322"),
             info_row("Utiliser ce mapId", "", combat.map_load.click, "Utiliser", "En secours si la détection échoue",
                      outlined=True),
@@ -635,11 +680,8 @@ class ObservationPage(AdvancedPage):
         split_row = choice_row(switches, "split", "Split du combat", "Fixé au démarrage de l'observation", splits,
                                splits[0])
         split_row.control.setEnabled(combat.sequence_split.isEnabled())
-        coordinates = values["map_coords"].text()
         self.set_accordions([
-            ("map", "Map", f"Détectée automatiquement pendant l'observation · {coordinates}"
-             if coordinates and coordinates != "Inconnu" else "Détectée automatiquement pendant l'observation",
-             map_rows, False, True),
+            ("map", "Map", self._map_subtitle(), map_rows, False, True),
             ("grid", "Grille", "Projection et vérification de la grille", [
                 info_row("Projection de grille", "", combat.projection_calibrate.click, "Ouvrir",
                          "Aligne la grille isométrique sur l'écran", outlined=True),
@@ -1282,10 +1324,10 @@ class JournalPage(AdvancedPage):
         self._render(force=True)
 
     def _render(self, force: bool = False) -> None:
-        events = self.view.storage.recent_events(self.LIMIT)
-        last = int(events[-1]["id"]) if events else None
+        last = self.view.storage.last_event_id()           # 0,006 ms au lieu de relire 120 lignes par tick
         if not force and last == self._last_id:
             return
+        events = self.view.storage.recent_events(self.LIMIT)
         self._last_id = last
         levels = LEVEL_FILTERS.get(str(self.filters.value()))
         for row in self.rows:
@@ -1452,8 +1494,8 @@ class AdvancedView(QWidget):
         else:
             text, color = "Aucune fenêtre", t.TEXT_2
         self.status_dot.set_color(color)
-        self.status_text.setText(text)
-        self.status_text.setStyleSheet(f"color: {color};")
+        set_text(self.status_text, text)
+        set_style(self.status_text, f"color: {color};")
         self.pages[self.current_tab].live_update()
 
     # --- Services pour les pages --------------------------------------------------------------------
