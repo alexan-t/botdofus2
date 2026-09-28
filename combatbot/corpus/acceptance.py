@@ -143,6 +143,28 @@ def evaluate_map(report: dict) -> Verdict:
     return Verdict(PASS, metrics, ["couverture informative : AMBIGUOUS/UNKNOWN sont des refus volontaires"])
 
 
+def evaluate_observation_e2e(report: dict) -> Verdict:
+    """FAST-3B7 : verdict du banc image par image. INCOMPLET (domaines sans vérité) reste non-PASS."""
+    domains = report.get("domains") or {}
+    metrics = {key: {"status": item.get("status"), "wrong": (item.get("metrics") or {}).get("wrong"),
+                     "precision": (item.get("metrics") or {}).get("precision"),
+                     "unknown_rate": (item.get("metrics") or {}).get("unknown_rate")}
+               for key, item in domains.items() if item.get("status") not in (INFO,)}
+    metrics["frames"] = report.get("frames")
+    metrics["end_to_end_p95_ms"] = (report.get("end_to_end_ms") or {}).get("p95")
+    overall = report.get("overall")
+    if not report.get("frames"):
+        return Verdict(NOT_EVALUABLE, metrics, ["corpus vide"])
+    if overall == FAIL:
+        return Verdict(FAIL, metrics, ["au moins une affirmation fausse contre une vérité humaine"])
+    measured = [item for item in domains.values() if item.get("status") in (PASS, PARTIAL)]
+    if not measured:
+        return Verdict(NOT_EVALUABLE, metrics, ["aucune vérité humaine confirmée dans le corpus"])
+    if overall == PASS:
+        return Verdict(PASS, metrics)
+    return Verdict(PARTIAL, metrics, ["domaines non mesurés ou abstentions : voir observation-e2e.md"])
+
+
 DOMAINS: tuple[Domain, ...] = (
     Domain("grid", "Grille : visibilité, combat, alignement (3B-3)",
            "0 faux combat en exploration ; rappel combat ≥ 0,95 ; ≥ 95 % des frames visibles ALIGNED",
@@ -170,6 +192,12 @@ DOMAINS: tuple[Domain, ...] = (
            ("benchmarks/map-resolution.json",),
            ("combatbot/vision/map_resolver.py", "combatbot/vision/map_reader.py", "combatbot/gamedata/map_index.py"),
            "python -m combatbot.benchmark --map-resolution", evaluate_map),
+    Domain("observation_e2e", "Observation de bout en bout, frame par frame (FAST-3B7)",
+           "0 affirmation fausse contre une vérité humaine ; une vérité absente ou une abstention n'est jamais PASS",
+           ("benchmarks/observation-e2e.json",),
+           ("combatbot/corpus/observation_e2e_metrics.py", "combatbot/corpus/observation_e2e_benchmark.py",
+            "combatbot/vision/combat_observer.py"),
+           "python -m combatbot.benchmark --observation-e2e", evaluate_observation_e2e),
 )
 
 

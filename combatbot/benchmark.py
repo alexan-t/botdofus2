@@ -49,6 +49,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="3B-6C : rejouer le corpus pour mesurer la résolution automatique de map")
     parser.add_argument("--acceptance", action="store_true",
                         help="3B-7 : recette consolidée (rapports des bancs + sessions réelles), sans rien relancer")
+    parser.add_argument("--observation-e2e", action="store_true",
+                        help="FAST-3B7 : observation complète frame par frame contre les vérités humaines "
+                             "(prédictions enregistrées seulement, sans DOFUS ; filtre : --entity-splits)")
     parser.add_argument("--data-dir", type=Path, action="append",
                         help="3B-7 : dossier data/ à inspecter (répétable ; défaut : sources, runtime, LocalAppData)")
     parser.add_argument("--limit", type=int, help="Nombre maximal de frames (diagnostic)")
@@ -77,6 +80,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"JSON : {json_path}")
         return 0
     repository = CorpusRepository(args.corpus_root)
+    if args.observation_e2e:
+        from combatbot.corpus.observation_e2e_benchmark import markdown_report as e2e_markdown
+        from combatbot.corpus.observation_e2e_benchmark import run_observation_e2e, write_report as write_e2e
+        report = run_observation_e2e(repository, tuple(args.entity_splits) if args.entity_splits else None)
+        json_path, markdown_path = write_e2e(report, args.output_dir or (app_data_root() / "data" / "benchmarks"))
+        print(e2e_markdown(report))
+        print(f"JSON : {json_path}")
+        print(f"Markdown : {markdown_path}")
+        return 0
     if args.combat_state or args.install_combat_state_model:
         return _combat_state(repository, args)
     if args.map_resolution:
