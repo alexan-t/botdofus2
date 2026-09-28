@@ -535,6 +535,8 @@ class CombatPage(QWidget):
             f"{'Oui' if observation.combat_detected else 'Non'} ({observation.combat_confidence:.0%})"
         )
         turn = "Inconnu" if observation.player_turn is None else ("Oui" if observation.player_turn else "Non")
+        if packet.metadata.get("combat_state_model") is False:
+            turn = "Inconnu — modèle phase/tour absent (à installer)"
         self.real_values["turn"].setText(f"{turn} ({observation.turn_confidence:.0%})")
         def hud_text(value, confidence, evidence) -> str:
             if not evidence:

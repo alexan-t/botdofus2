@@ -103,7 +103,8 @@ def test_combat_present_reads_grid_player_enemies_ap_pm() -> None:
     assert observation.player_cell == Cell(1, 1)
     assert Cell(3, 1) in observation.enemy_cells
     assert len(observation.grid.cells) == 16
-    assert observation.player_turn is True
+    # 3B-7 fail-closed : sans modèle phase/tour, jamais « mon tour » (l'ancienne heuristique l'affirmait).
+    assert observation.player_turn is None
     assert packet.elapsed_ms >= 0
 
 
@@ -212,3 +213,17 @@ def test_debug_capture_is_only_saved_on_explicit_call(tmp_path) -> None:
     assert json_path.exists()
     assert len(list(tmp_path.glob("*.png"))) == 2
     assert '"safe_for_decision"' not in json_path.read_text(encoding="utf-8")
+
+
+def test_turn_is_fail_closed_without_combat_state_model(monkeypatch) -> None:
+    """3B-7 : cause racine du faux « mon tour » permanent — sans modèle, le tour reste inconnu."""
+    from combatbot.vision import combat_state_detector
+    monkeypatch.setattr(combat_state_detector.CombatStateModel, "load", classmethod(lambda cls, directory: None))
+    frame = combat_frame()
+    calls = iter(((6, 0.95), (3, 0.95)) * 5)
+    observer = RealCombatObserver(7, calibration(), frame_provider=lambda: frame,
+                                  number_reader=lambda _image: next(calls), grid_calibration=GRID)
+    for _ in range(3):
+        packet = observer.observe()
+        assert packet.observation.player_turn is None
+    assert packet.metadata["combat_state_model"] is False

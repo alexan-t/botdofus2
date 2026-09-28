@@ -150,6 +150,10 @@ class RealCombatObserver:
         from combatbot.vision.combat_state_detector import CombatStateModel, SemanticCombatStateTracker
         self.combat_state_model = combat_state_model if combat_state_model is not None else \
             CombatStateModel.load(app_data_root() / "data" / "combat_state_model")
+        if self.combat_state_model is None:
+            # 3B-7 : fail-closed. Sans modèle phase/tour, le tour reste INCONNU (plus d'heuristique).
+            import logging
+            logging.warning("Modèle phase/tour absent (data/combat_state_model) : tour toujours inconnu")
         self.combat_state_tracker = SemanticCombatStateTracker()
         self.session_id = str(self.capture_context.get("session_id") or f"session_{uuid4().hex[:12]}")
         self._frame_index = 0
@@ -257,16 +261,11 @@ class RealCombatObserver:
         combat_confidence = state.confidence
         combat_detected = state.combat_detected
 
-        # Le bouton et les compteurs doivent tous deux être lisibles avant de conclure au tour.
-        turn_score = 0.6 * end_signal + 0.4 * max(confidence_ap, confidence_mp)
-        if not combat_detected or end_signal < 0.2:
-            player_turn = None
-        elif turn_score >= 0.52 and (ap is not None or mp is not None):
-            player_turn = True
-        elif turn_score <= 0.24:
-            player_turn = False
-        else:
-            player_turn = None
+        # 3B-7 : fail-closed. L'ancienne heuristique (texture du bouton + confiance PA/PM) affirmait
+        # « mon tour » pendant le tour des monstres (bouton dessiné, juste plus sombre) : supprimée.
+        # Le tour ne vient que du détecteur 3B-6B (couleur du bouton) ; sans modèle, il reste inconnu.
+        player_turn = None
+        turn_score = 0.0
         semantic = None
         if self.combat_state_model is not None:
             # LOT 3B-6B : le tour vient uniquement de la couleur du bouton fin de tour ; jamais de mémoire.
@@ -348,6 +347,7 @@ class RealCombatObserver:
             "requires_recalibration": bool(resolution and resolution.requires_recalibration),
             "phase": phase,
             "semantic_combat_state": semantic.to_dict() if semantic is not None else None,
+            "combat_state_model": self.combat_state_model is not None,
             "analysis_ms": elapsed_ms,
             "stage_ms": {name: round(value, 2) for name, value in stage_ms.items()},
             "global_confidence": observation.observation_confidence,

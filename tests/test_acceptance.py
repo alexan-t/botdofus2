@@ -108,3 +108,12 @@ def test_run_acceptance_writes_report_and_overall(tmp_path: Path, monkeypatch) -
     assert json.loads(json_path.read_text(encoding="utf-8"))["lot"] == "3B-7"
     text = md_path.read_text(encoding="utf-8")
     assert "Pour mesurer" in text and "mode tactique : non détecté" in text
+
+
+def test_frozen_test_report_layout_is_read_as_test() -> None:
+    """Rapport réel 3B-6B TEST (clé « result ») : lu comme une mesure TEST, pas « aucune vérité »."""
+    from combatbot.corpus.acceptance import evaluate_combat_state
+    block = {"phase": {"precision": 0.974, "coverage": 0.907},
+             "turn": {"precision": 1.0, "coverage": 0.9, "dangerous_claimed_my_turn": 0, "dangerous_missed_my_turn": 0}}
+    verdict = evaluate_combat_state({"freeze_sha": "1eef84a", "test_frames": 43, "result": block})
+    assert verdict.metrics["scope"] == "test" and verdict.status == "PASS"

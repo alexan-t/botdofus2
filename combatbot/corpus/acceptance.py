@@ -100,6 +100,9 @@ def evaluate_entities(report: dict) -> Verdict:
 def _combat_block(report: dict) -> tuple[str, dict] | None:
     if "phase" in report and "turn" in report:
         return "rapport", report
+    # Rapport TEST figé (3B-6B, « combat-state-TEST-<sha>.json ») : mesure sous « result ».
+    if isinstance(report.get("result"), dict) and "phase" in report["result"] and report.get("test_frames"):
+        return "test", report["result"]
     for scope in ("test", "validation", "train_loco_with_tracker"):
         block = report.get(scope)
         if isinstance(block, dict) and "phase" in block:
