@@ -1,192 +1,131 @@
-# LOT — Validation performance (PR #8) : JobRunner, stress UI, recette Windows
+# LOT — Validation Windows performance et readiness (PR #8)
 
-> **ACTIONS RÉELLES : NONE.**
+> **ENTRÉE RÉELLE ENVOYÉE : AUCUNE.**
 >
-> - **Branche** : `lot-performance-ui-memory` (PR #8), empilée sur `lot-windows-live-readiness`. Non fusionnée, cible inchangée.
-> - **Environnement de cette validation** : conteneur Linux, Qt offscreen, Python 3.11, PySide6 6.11.2. `DOFBOT_ALLOW_REAL_INPUT` absent (vérifié).
-> - **Recette Windows NON EXÉCUTÉE.** Le PC de l'utilisateur, DOFUS et RapidOCR ne sont pas accessibles depuis ce conteneur. Aucun chiffre ci-dessous ne prétend venir de Windows. Tout ce qui est propre à Windows (GDI, USER, handles Windows, octets privés Windows, OCR) est marqué **NOT MEASURED** et sera produit par la recette ci-dessous.
+> Branche `lot-performance-ui-memory`, PR #8, non fusionnée. Validation exécutée le 29 septembre 2026 sur le commit `19153f9`. La variable `DOFBOT_ALLOW_REAL_INPUT` était absente puis explicitement supprimée avant la capture réelle.
 
-## 1. Commande à lancer sur le PC
+## Environnement et périmètre
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\run_windows_acceptance.ps1
-# si plusieurs profils existent (le script le signale), relancer avec l'identifiant affiché :
-powershell -ExecutionPolicy Bypass -File scripts\run_windows_acceptance.ps1 -ProfileId <ID>
-```
+- Windows 10 Professionnel 22H2, build 19045.
+- AMD Ryzen 5 3600, 6 cœurs / 12 processeurs logiques, 32 Go de RAM.
+- Python 3.12.14.
+- Profil résolu sans ambiguïté : profil 1.
+- Client détecté : HWND `177343598`, titre `Barbare - Dofus 2.64.5.0`, non minimisé.
+- Capture réelle en lecture seule : **réussie**, 2560 × 1377, source `window`, contenu non uniforme. Le résultat `CONTENT_UNCERTAIN` signifie seulement qu'aucune icône connue n'a confirmé visuellement le client ; la capture elle-même est valide.
+- Observation réelle longue : **NOT_EVALUABLE**. Le profil 1 de cette base ne possède aucune calibration et aucun dossier GameData configuré. Le démarrage normal refuse donc l'observation. Ce garde-fou n'a pas été contourné et aucune calibration n'a été inventée.
+- Corpus : 3840 fichiers avant et après la recette, aucune différence.
 
-- **Ne jamais deviner `<ID>`** : utiliser celui que le script affiche.
-- **La section RESOURCE HEALTH** contient :
-  - `--runtime-health` : phases IDLE / OBSERVATION / onglet avancé / MINIMISÉ, 20 cycles START/STOP ;
-  - la nouvelle ligne **Stress UI** : GDI, USER, handles et RAM, via `--ui-stress --cycles 20`, soit 10 blocs ;
-  - le banc `--ocr-threads-benchmark` si RapidOCR est installé.
-- **Aucune entrée n'est envoyée.** La fenêtre DofBot2 est pilotée dans un dossier de données temporaire.
+Artefacts détaillés : `reports/windows-acceptance-20260929-010036/`.
 
-## 2. Commits de cette étape
+## Correctifs issus de la recette
 
-| SHA | Objet |
+| Commit | Correction |
 |---|---|
-| `76e8987` | fix: keep JobRunner callbacks on the GUI thread and drop them after close |
-| `0148145` | test: stress GDI, USER, handles and RAM across repeated UI operations |
-| (ce commit) | docs: record the PR #8 performance validation |
+| `1a9c79f` | Déclare les signatures Win32 complètes dans le collecteur de ressources. Sans `argtypes`, le pseudo-handle 64 bits de `GetCurrentProcess` était tronqué et provoquait `OverflowError: int too long to convert`. Le test de chemin de sécurité accepte aussi les séparateurs Windows. |
+| `19153f9` | Classe les cycles start/stop après la moitié d'échauffement et publie séparément RSS, Private Bytes, threads, handles, GDI et USER. L'ancien calcul incluait la création initiale des caches Qt et signalait à tort une fuite. |
 
-## 3. Revue technique de PR #8 — JobRunner
+Les corrections existantes de PR #8 sur `JobRunner` restent validées : callbacks sur le thread GUI, abandon des callbacks après destruction, refus d'un `submit()` hors thread GUI et libération des références après les jobs.
 
-### Architecture vérifiée
+## Résultats automatisés
 
-- **Signaux.** Le `_Signals` (QObject) de chaque job est créé dans `submit()`, donc dans le thread appelant.
-- **Exécution.** `work()` s'exécute dans un thread du `QThreadPool`. Les émissions depuis ce thread sont mises en file (connexion automatique, donc *queued*) vers le thread propriétaire des signaux.
-- **Pas de hack.** Aucun `processEvents` n'est utilisé comme contournement.
-
-### Deux vrais trous trouvés et corrigés (`76e8987`)
-
-1. **`submit()` appelé hors du thread GUI.**
-   - *Avant* : les signaux naissaient dans le worker, et les rappels (qui touchent des widgets) s'exécutaient dans un thread non-GUI.
-   - *Maintenant* : l'appel lève `RuntimeError`. Cela garantit que la file cible est toujours le thread GUI.
-2. **`JobRunner` détruit pendant un job** (fenêtre ou dialogue fermé).
-   - *Avant* : le rappel du job s'exécutait quand même, sur des widgets détruits.
-   - *Maintenant* : l'état « fermé » est gardé **hors** de l'objet C++ (dict capturé), et mis à jour par `destroyed` et par `shutdown()`. Les rappels en vol sont abandonnés, et un nouveau `submit()` est refusé.
-
-**Preuve que les tests mordent** : sur l'ancien code, exactement 2 tests échouent (runner détruit, `submit` depuis un thread).
-
-### Tests (`tests/test_job_runner_threads.py`, 7 tests, plus `test_job_runner_release.py`)
-
-Contrôle du thread : `QThread.currentThread() == QApplication.instance().thread()` **et** `threading.get_ident()`.
-
-| Cas | Résultat |
-|---|---|
-| `work()` dans un worker ; `on_success`, `on_error`, `_done`, `all_done` dans le thread GUI | PASS |
-| Succès, exception, jobs successifs | PASS |
-| 8 jobs concurrents : chaque rappel exactement une fois, `all_done` une seule fois | PASS |
-| Rappel capturant un widget : widget mis à jour depuis le thread GUI | PASS |
-| Widget détruit / runner détruit pendant le job : aucun crash, aucun rappel | PASS (runner détruit : échouait avant) |
-| `submit()` depuis un thread worker | refusé (échouait avant) |
-| Tout libéré après `done` : weakrefs sur rappels, `work`, propriétaire et job à `None`, `_jobs` vide | PASS |
-| Stress de 300 jobs : aucun job ni propriétaire vivant, tas plat, threads +≤ 2 | PASS |
-
-**Note sur les tests de destruction.** `processEvents()` n'exécute pas les `deleteLater` : sans `sendPostedEvents(None, DeferredDelete)`, un test « runner détruit » passe à tort. Les tests et le harnais (`_pump`) traitent donc explicitement les suppressions différées, comme la vraie boucle d'événements Qt.
-
-## 4. RESOURCE HEALTH (Linux, harnais)
-
-### Stress UI (`--ui-stress`, 18 blocs)
-
-Contenu de chaque bloc :
-- 1000 `set_text`/`set_style` ;
-- reconstruction volontaire des accordéons de chaque page ;
-- 50 observations synthétiques ;
-- 5 réductions/restaurations ;
-- 20 jobs.
-
-| Mesure | Bloc 1 | Blocs 2..18 | Verdict |
-|---|---|---|---|
-| RSS | 207 Mo | 202 → 222 Mo (plafond ≈ 221 Mo, bruit ± 5 Mo) | **STABLE** (+0,26 Mo par bloc, non significatif) |
-| Octets privés (Linux : anonymes) | 138 Mo | 134 → 153 Mo (plafond ≈ 152 Mo) | plafond |
-| Threads | 16 | 16 à chaque bloc | **STABLE** |
-| Handles (descripteurs Linux) | 12 | 12 à chaque bloc | **STABLE** |
-| GDI / USER | — | — | **NOT MEASURED** (Windows seulement) |
-| Reconstructions d'accordéons | 9 par bloc | 9 par bloc | voulu (le stress force `refresh()`) |
-
-**Deux artefacts de mesure éliminés avant ce verdict** (aucun n'était une fuite de DofBot2) :
-
-1. **Harnais sans suppressions différées.** Les widgets supprimés par `deleteLater` ne l'étaient jamais : +23 Mo par bloc. Corrigé dans `_pump`, avec un test dédié.
-2. **Sonde `tracemalloc`.** Les instantanés conservés par le script de mesure produisaient une croissance linéaire. Ils ont été retirés de la mesure.
-
-**Bissection** :
-- widgets isolés : plats ;
-- changements d'onglet : plats ;
-- page Observation : échauffement d'environ 2,7 Mo, puis plate.
-
-### Phases (lot précédent, inchangées par cette étape)
-
-| Phase | CPU (% d'un cœur) | RAM fin | UI lag p95 / max | Tendance |
-|---|---|---|---|---|
-| IDLE | 1,4 | 147 Mo | 2,5 / 4,6 ms | STABLE |
-| OBSERVATION (autre onglet) | 3,2 | 186 Mo | 2,8 / 83 ms (pic isolé) | plateau |
-| OBSERVATION onglet avancé | 8,9 | 205 Mo | 3,3 / 9,2 ms | plateau |
-| MINIMISÉ | 2,4 | 205 Mo | 2,9 / 16 ms | STABLE |
-| 20 cycles START/STOP | — | 209 → 211 Mo | — | STABLE |
-
-## 5. Latence : UI et vision séparées
-
-- **UI lag** : retard du timer du thread GUI. Il vaut p95 ≤ 3,3 ms dans toutes les phases. L'UI ne bloque pas.
-- **Latence d'observation** : durée du job de vision.
-  - *Ici* : p50 ≈ 252 ms, ce qui est la durée **simulée**, avec 0 tick sauté et aucune file.
-  - *En réel* : la latence vision (capture, détection, OCR de map) n'est **pas mesurable dans ce conteneur**. La recette Windows et `--runtime-profile` la donnent.
-- **Si le PC « rame »** : les deux mesures ne se confondent pas.
-  - Si l'UI lag reste bas pendant que la latence d'observation monte, la cause est la vision ou l'OCR, pas l'UI.
-
-## 6. OCR — recommandation (non appliquée)
-
-- **Aujourd'hui.** Un seul moteur RapidOCR par processus. Les threads ONNX suivent le réglage par défaut : potentiellement tous les cœurs pendant chaque lecture de map.
-- **Recommandation.** Si la recette montre une pression CPU OCR élevée, lancer `--ocr-threads-benchmark`. Choisir ensuite la plus petite valeur de `DOFBOT_OCR_THREADS` dont la latence reste acceptable ; typiquement 2 ou 4, selon le banc.
-- **Non appliqué.** La variable absente conserve le comportement actuel. Aucun réglage n'est imposé sans mesure sur le PC.
-
-## 7. Revalidation UI
-
-| Élément | Constat |
-|---|---|
-| **Aperçus** | une seule réduction à la taille utile ; aucun rendu en onglet caché ou fenêtre réduite ; rendu au premier repaint après restauration (tests existants PASS) |
-| **Accordéons** | 0 reconstruction en 60 s d'observation (lot précédent) ; les reconstructions forcées du stress ne font pas croître la mémoire |
-| **Setters différentiels** | 1000 `set_text`/`set_style` par bloc sans croissance |
-| **Journaux** | tableau de bord 100 ; Journal avancé 120 (80 affichées) ; `LogsPage` 200 |
-| **`CombatPage.history`** | audité : `setPlainText` des 30 dernières entrées, historique moteur borné à 100. Borné, **non modifié** |
-
-## 8. Tests manuels
-
-- **UI sans DOFUS.** **Non réalisé ici** : pas d'écran ni de PC. La recette Windows ouvre la vraie fenêtre ; un contrôle visuel reste à faire sur le PC.
-- **DOFUS en lecture seule.** **Non disponible** dans ce conteneur.
-
-## 9. Interdits respectés
-
-Aucune des pratiques interdites n'est utilisée :
-- `gc.collect()` ;
-- arrêt forcé de thread ;
-- nettoyage global de `QPixmap` ;
-- mode éco dégradant la logique ;
-- délai artificiel ;
-- `sleep` dans le thread UI de l'application.
-
-Les seuls `time.sleep` sont dans le harnais de mesure et dans les tests, pendant l'attente des jobs.
-
-Côté entrées réelles :
-- aucune entrée réelle ;
-- `RealInputGate` jamais activé ;
-- backend souris Windows jamais appelé.
-
-## 10. Tests
-
-- Ciblés : `test_job_runner_threads.py` et `test_job_runner_release.py` (8 passed), `test_performance_monitor.py` (4), `test_windows_acceptance_script.py` (4).
-- Suite complète : **780 passed, 2 skipped, 1 failed** (`test_rapidocr_reads_synthetic_visible_text`, module absent). Le test HUD intermittent est passé lors de cette exécution.
-- Rappel : `test_rapidocr_reads_synthetic_visible_text` échoue car le module est absent du conteneur.
-- Test intermittent **antérieur** : `test_hud_ground_truth::test_collection_turns_without_shared_counter_are_separate_groups` (1/15 sur la base `a174375`). Il n'est pas masqué.
-- Aucun test supprimé ; aucun `xfail` ; aucune vérité de test modifiée.
+- Tests Windows ciblés de la recette : **3 passed**.
+- Suite complète de la recette : **782 passed, 1 skipped**.
+- Suite complète après les deux correctifs : **783 passed, 1 skipped en 91,03 s**.
+- Stress `JobRunner`, 300 jobs : aucun job ni propriétaire restant, rappels libérés, threads dans la tolérance.
+- Auto-test d'exécution : **PASS**, entrée réelle envoyée : **NONE**.
 - `git diff --check` : propre.
 
-## 11. Table finale
+## Ressources Windows
+
+Chaque phase dure 60 secondes. L'observation du harnais emploie des frames synthétiques afin de mesurer l'UI et le cycle de vie sans agir sur DOFUS.
+
+| Phase | CPU moy./p95 (% d'un cœur) | RSS début → fin, max (Mo) | Private Bytes fin (Mo) | Threads | Handles | GDI / USER fin | UI lag p95 / max (ms) | Observation p50 / p95 (ms) | Verdict mémoire |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| IDLE | 0,9 / 1,9 | 139,27 → 139,38, 139,48 | 445,78 | 25 → 21 | 1218 → 1214 | 23 / 41 | 26,27 / 45,41 | — | STABLE |
+| OBSERVATION | 2,3 / 2,5 | 159,68 → 160,04, 160,05 | 464,05 | 22 → 21 | 1228 → 1230 | 26 / 45 | 19,16 / 52,48 | 252,79 / 253,43 | STABLE |
+| ADVANCED_OBSERVATION | 2,7 / 1,9 | 160,47 → 160,40, 160,50 | 465,00 | 21 → 13 | 1230 → 1207 | 26 / 31 | 26,07 / 51,36 | 252,91 / 253,65 | STABLE |
+| MINIMIZED | 1,9 / 1,9 | 162,15 → 162,08, 162,18 | 466,45 | 19 → 13 | 1226 → 1208 | 26 / 33 | 17,58 / 42,34 | 252,79 / 253,44 | STABLE |
+
+Le mode minimisé ne reconstruit pas l'aperçu. Son CPU reste bas, mais n'est pas significativement inférieur à l'observation synthétique, elle-même très légère.
+
+### 50 cycles start/stop
+
+La première moitié est l'échauffement. Sur les 25 derniers cycles :
+
+| Ressource | Mesure | Verdict |
+|---|---|---|
+| RSS | plateau autour de 147,5 Mo, dernier point 145,95 Mo | PLATEAU_AFTER_WARMUP |
+| Private Bytes | plateau autour de 468,8 Mo, dernier point 466,82 Mo | PLATEAU_AFTER_WARMUP |
+| Threads | montée initiale 28 → 32, puis retour et plateau à 29 | PLATEAU_AFTER_WARMUP |
+| Handles | 439 → 444 puis 444 stable | PLATEAU_AFTER_WARMUP |
+| GDI / USER | stable ; le stress UI confirme GDI 26 → 26 et USER 46 → 46 | STABLE |
+| QTimers / widgets / paquets | 10 / 1249 / 1, stables | STABLE |
+| Observateur ou job après arrêt | aucun | PASS |
+
+Il n'y a pas de croissance continue après échauffement : **aucune fuite mémoire ou de ressource n'est démontrée**.
+
+### Stress UI, 10 blocs
+
+Chaque bloc force 1000 changements texte/style, les reconstructions d'accordéons, 50 aperçus, 5 réductions/restaurations et 20 jobs.
+
+- RSS : 193,02 → 192,96 Mo, **STABLE**.
+- Handles : 1261 → 1257, **STABLE**.
+- GDI : 26 → 26, **STABLE**.
+- USER : 46 → 46, **STABLE**.
+- Threads : échauffement 25 → 35, puis 31 en fin.
+- 140 reconstructions d'accordéons au total, toutes provoquées volontairement par le stress. En observation normale, le compteur reste à zéro.
+
+## OCR et latence
+
+| Threads ONNX | Chargement (ms) | Lecture médiane / p95 (ms) | CPU (% d'un cœur) |
+|---:|---:|---:|---:|
+| défaut | 955,9 | 1334,72 / 1409,41 | 538,1 |
+| 1 | 340,4 | 1920,18 / 2098,93 | 99,7 |
+| 2 | 344,5 | 1484,71 / 1514,87 | 190,7 |
+| 4 | 439,1 | 1350,36 / 1499,36 | 365,0 |
+
+**Recommandation : 2 threads** via `DOFBOT_OCR_THREADS=2`. Cela réduit la pression CPU d'environ 65 % par rapport au défaut, avec environ 11 % de latence médiane supplémentaire. Le réglage n'est pas appliqué automatiquement : la variable existante constitue déjà un mécanisme réversible.
+
+Le profil détaillé capture / map / grille / entités / HUD / état de combat reste **NOT_EVALUABLE** faute de session réelle calibrée. Les 472 frames historiques donnent seulement une durée totale médiane de 772,79 ms et p95 de 1675,35 ms, sans ventilation fiable. Le lecteur de coordonnées de map est le coût spécialisé mesuré le plus élevé, médiane 800,526 ms ; l'OCR/map est donc le suspect principal, mais un classement complet des trois postes les plus chers demanderait une session calibrée.
+
+## Readiness vision et combat
+
+- Observation e2e hors ligne, 496 frames : **FAIL**.
+- État de combat : phase précision 97,44 %, couverture 90,70 % ; tour précision 100 %, couverture 90 %, aucun faux « mon tour » dangereux.
+- Map : précision 100 % sur les valeurs produites, couverture 79,87 %.
+- Cellule joueur en combat : 116 connues sur 149 ; 33 inconnues, soit **22,1 %**.
+- Entités ennemies : précision 45,76 %, donc **FAIL**.
+- Occupation : précision 40 %, taux inconnu global 94,35 %, donc **FAIL**.
+- PA/PM : taux inconnu 75,51 %, non évaluable.
+- Dry-run : 496/496 plans **BLOCKED**. `safe_for_decision` bloque toutes les frames ; les autres causes majeures sont phase 353, ennemi 330, PM 249, PA 214, map/topologie 201 et cellule joueur 191.
+- Sorts : 0/13 prêts. Les 13 scans sont `Inconnu` et les règles AP, portée, ligne, LOS, par tour et par cible restent non renseignées. Aucune valeur n'a été modifiée sans preuve.
+- Portée/LOS 4C : **UNVERIFIED**, zéro échantillon.
+- Aucun seuil vision, vérité TEST, moteur de combat ou calibration automatique n'a été modifié.
+
+Le blocage de décision le plus directement actionnable est la préparation des sorts, suivie par la couverture des observations réelles annotées. Aucun résultat de cette recette ne justifie d'assouplir les garde-fous.
+
+## Verdict final
 
 | Critère | Verdict |
 |---|---|
-| JobRunner memory release | **PASS** (300 jobs : aucun job, rappel ni propriétaire vivant) |
-| JobRunner GUI-thread callbacks | **PASS** (2 trous corrigés : `submit` hors GUI, runner détruit) |
-| RSS stability Windows | **NOT MEASURED** (Linux : STABLE, plafond ≈ 221 Mo) — recette Windows |
-| Private bytes stability | **NOT MEASURED** sous Windows (Linux : plafond ≈ 152 Mo) |
-| Thread stability | **PASS** (Linux : 16 threads sur 18 blocs ; 15 → 15 sur 20 cycles) |
-| Handle stability | **PARTIAL** (Linux : 12 → 12 ; handles Windows : recette) |
-| GDI stability | **NOT MEASURED** (Windows seulement ; ligne « Stress UI » de la recette) |
-| USER object stability | **NOT MEASURED** (Windows seulement ; ligne « Stress UI » de la recette) |
-| UI responsiveness | **PASS** (UI lag p95 ≤ 3,3 ms, harnais Linux) |
+| JobRunner memory release | **PASS** |
+| JobRunner GUI-thread callbacks | **PASS** |
+| RSS stability Windows | **PASS** |
+| Private Bytes stability | **PASS** |
+| Thread stability | **PASS** |
+| Handle stability | **PASS** |
+| GDI stability | **PASS** |
+| USER object stability | **PASS** |
+| UI responsiveness | **PASS** |
 | Preview rendering | **PASS** |
-| Accordion rebuilds | **PASS** (0 en observation ; reconstructions forcées sans croissance) |
+| Accordion rebuilds | **PASS** |
 | Logs bounded | **PASS** |
-| OCR CPU pressure | **NOT MEASURED** (RapidOCR absent ; banc prêt ; recommandation non appliquée) |
-| Observation latency | **PARTIAL** (UI mesurée ; latence vision réelle : recette / `--runtime-profile`) |
-| Start/stop cleanup | **PASS** (20 cycles STABLE, aucun observateur ni job résiduel) |
+| OCR CPU pressure | **PARTIAL** — réglage par défaut lourd ; 2 threads recommandés |
+| Observation latency | **PARTIAL** — total historique mesuré, ventilation live non évaluable |
+| Start/stop cleanup | **PASS** |
+| Fenêtre et capture DOFUS | **PASS** |
+| Observation réelle calibrée | **NOT_EVALUABLE** — calibration absente |
+| Readiness décision combat | **FAIL** — 0/13 sorts prêts, 496/496 plans bloqués |
 | REAL INPUT SENT | **NONE** |
 
-**Est-ce que DofBot2 ralentit encore le PC ?**
-- **Côté UI et mémoire (mesurable ici) : non.** Il n'y a plus de fuite démontrée : mémoire en plateau, threads et handles stables, UI lag de quelques millisecondes.
-- **Ce qui reste à mesurer sur le PC :**
-  - pression CPU de l'OCR ;
-  - GDI / USER ;
-  - latence vision réelle.
-
-  La recette ci-dessus les donne, à renvoyer pour conclure.
+**Est-ce que DofBot2 ralentit encore le PC ?** L'UI et la gestion mémoire sont désormais acceptables : pas de fuite, pas de croissance de handles/GDI/USER et une boucle UI réactive. RapidOCR reste susceptible de charger fortement le processeur pendant la lecture de map avec le réglage par défaut. Le compromis mesuré est 2 threads. La latence vision réelle complète devra être rejouée après calibration du profil, sans contourner les validations.
