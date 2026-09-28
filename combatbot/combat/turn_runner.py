@@ -139,9 +139,14 @@ class SingleTurnRunner:
             self._finish(report, TurnOutcome.TIMED_OUT, "mon tour n'a pas été observé à temps")
         return None
 
-    def run(self, geometry: ScreenGeometry) -> TurnReport:
+    def run(self, geometry: ScreenGeometry, start: Observation | None = None) -> TurnReport:
+        """``start`` : observation sûre de mon tour déjà obtenue (boucle multi-tours), sinon on l'attend."""
         report = TurnReport(TurnOutcome.ABORTED, "")
-        current = self.wait_player_turn(report, geometry)
+        if start is not None and start.state.turn == "PLAYER" and start.state.safe_for_decision is True:
+            current = start
+            report.last_observation = start
+        else:
+            current = self.wait_player_turn(report, geometry)
         if current is None:
             return report
         self.coordinator.guard.begin_turn()
