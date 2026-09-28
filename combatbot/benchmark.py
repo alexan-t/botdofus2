@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 from combatbot.corpus.benchmark import run_benchmark, write_reports
@@ -10,7 +11,16 @@ from combatbot.corpus.repository import CorpusRepository
 from combatbot.runtime import app_data_root, PROJECT_ROOT
 
 
+def _force_utf8_stdout() -> None:
+    """Les rapports contiennent « ≥ » et « ⚠ » : la console Windows est en cp1252."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
+
+
 def main(argv: list[str] | None = None) -> int:
+    _force_utf8_stdout()
     parser = argparse.ArgumentParser(description="Mesure la baseline du corpus réel PythonBot")
     parser.add_argument("--corpus-root", type=Path, help="Racine data/corpus à utiliser")
     parser.add_argument("--output-dir", type=Path, help="Dossier de rapport")
