@@ -63,10 +63,15 @@ $VenvScripts = Split-Path -Parent $Python
 $env:PATH = "$VenvScripts;$PythonBase;$PythonBase\DLLs;$env:SystemRoot\System32;$env:SystemRoot"
 Push-Location $ProjectRoot
 try {
-    & $Python -m PyInstaller --noconfirm --clean $Spec
+    # PyInstaller écrit ses INFO sur stderr : sous Windows PowerShell 5.1, « Stop » en ferait une
+    # erreur fatale dès la première ligne. Seul le code de sortie fait foi.
+    $ErrorActionPreference = "Continue"
+    & $Python -m PyInstaller --noconfirm --clean $Spec 2>&1 | ForEach-Object { Write-Host $_ }
+    $ErrorActionPreference = "Stop"
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller a échoué avec le code $LASTEXITCODE." }
 }
 finally {
+    $ErrorActionPreference = "Stop"
     Pop-Location
     $env:PATH = $OriginalPath
 }
