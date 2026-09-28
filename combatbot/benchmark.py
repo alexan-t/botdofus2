@@ -54,6 +54,8 @@ def main(argv: list[str] | None = None) -> int:
                              "(prédictions enregistrées seulement, sans DOFUS ; filtre : --entity-splits)")
     parser.add_argument("--dry-run-plans", action="store_true",
                         help="FAST-4D/5A0 : rejoue le corpus à travers état → plan → exécuteur dry-run (aucune action)")
+    parser.add_argument("--execution-selftest", action="store_true",
+                        help="Auto-test offline de la chaîne d'exécution (aucune entrée réelle)")
     parser.add_argument("--profile-id", type=int, help="Profil dont les sorts confirmés sont utilisés (défaut : dernier)")
     parser.add_argument("--assume-logical-range", action="store_true",
                         help="Hypothèse explicite, non prouvée : portée = distance logique |dx|+|dy| (tracée dans le rapport)")
@@ -77,6 +79,14 @@ def main(argv: list[str] | None = None) -> int:
         if not args.entities:
             parser.error("--install-runtime-profiles exige --entities")
         return _install_entities(args)
+    if args.execution_selftest:
+        from combatbot.combat.selftest import markdown_report as selftest_markdown
+        from combatbot.combat.selftest import run_selftest, write_report as write_selftest
+        report = run_selftest()
+        json_path, _ = write_selftest(report, args.output_dir or (app_data_root() / "data" / "benchmarks"))
+        print(selftest_markdown(report))
+        print(f"JSON : {json_path}")
+        return 0 if report["verdict"] == "PASS" else 1
     if args.acceptance:
         from combatbot.corpus.acceptance import markdown_report, run_acceptance, write_acceptance
         report = run_acceptance(args.data_dir)
