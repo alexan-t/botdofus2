@@ -22,7 +22,7 @@ retenu est donc toujours le même.
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Iterable, Mapping
 
@@ -61,6 +61,9 @@ class CombatMap:
     map_id: int
     neighbors: Mapping[int, tuple[int, ...]]
     static: Mapping[int, CellBlock]
+    # Drapeau LOS statique (bit 3) : ``False`` = bloque la vue, ``None`` = inconnu. Aucun algorithme de
+    # ligne de vue n'est fourni ici (non démontré) : voir combat/targeting.py.
+    line_of_sight: Mapping[int, bool | None] = field(default_factory=dict)
 
     @classmethod
     def from_cells(cls, map_id: int, cells: Iterable[GameMapCell],
@@ -70,7 +73,7 @@ class CombatMap:
             raise ValueError("Une map de combat exige exactement les 560 DofusCellId")
         static = {int(cell.cell_id): static_block(cell) for cell in cells}
         neighbors = {cell: tuple(sorted(links)) for cell, links in (adjacency or topology_adjacency()).items()}
-        return cls(map_id, neighbors, static)
+        return cls(map_id, neighbors, static, {int(cell.cell_id): cell.line_of_sight for cell in cells})
 
     @classmethod
     def from_topology(cls, topology: GridTopology) -> "CombatMap":
