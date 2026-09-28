@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 from combatbot.models import CombatSnapshot, Spell, Strategy, StrategyMode, TargetPriority
 from combatbot.storage import Storage
 from combatbot.ui.grid_widget import GridWidget
-from combatbot.ui.images import bgr_to_pixmap
+from combatbot.ui.images import preview_pixmap
 from combatbot.ui.client_panel import ClientPanel
 from combatbot.ui.scan_panel import ScanPanel
 from combatbot.ui.gamedata_panel import GameDataPanel
@@ -170,19 +170,40 @@ class ObservationPreview(QLabel):
         self.setMinimumSize(560, 390)
         self.setStyleSheet("border: 1px solid rgba(143,209,79,36); background: #0f1510;")
         self._image_size: tuple[int, int] | None = None
+        self._source = None               # tableau de l'observation (référence, pas de copie)
+        self._rendered: tuple[int, int, int] | None = None
 
     def set_image(self, image) -> None:
         self._image_size = (image.shape[1], image.shape[0])
-        pixmap = bgr_to_pixmap(image)
-        self.setPixmap(pixmap.scaled(self.size(), Qt.AspectRatioMode.KeepAspectRatio,
-                                     Qt.TransformationMode.SmoothTransformation))
+        self._source = image
+        self._rendered = None
+        self._render()
+
+    def _render(self) -> None:
+        """Réduit la frame une seule fois à la taille du widget ; rien si déjà fait pour cette taille.
+
+        Onglet caché ou fenêtre réduite : rien n'est calculé ; la dernière frame est rendue à l'affichage.
+        """
+        if self._source is None or not self.isVisible() or self.window().isMinimized():
+            return
+        key = (id(self._source), self.width(), self.height())
+        if key == self._rendered:
+            return
+        self._rendered = key
+        self.setPixmap(preview_pixmap(self._source, self.width(), self.height()))
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt API
+        super().showEvent(event)
+        self._render()
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt API
+        self._render()                    # fenêtre restaurée : dernière frame rendue une seule fois
+        super().paintEvent(event)
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
-        if self.pixmap() is not None and self._image_size:
-            # L'image suivante rétablira la résolution source; éviter d'agrandir un aperçu déjà réduit.
-            self.setPixmap(self.pixmap().scaled(self.size(), Qt.AspectRatioMode.KeepAspectRatio,
-                                                Qt.TransformationMode.SmoothTransformation))
         super().resizeEvent(event)
+        if self._source is not None:
+            self._render()                # depuis la source : jamais un agrandissement flou
 
     def _image_point(self, event) -> tuple[int, int] | None:
         pixmap = self.pixmap()
@@ -535,6 +556,8 @@ class CombatPage(QWidget):
             f"{'Oui' if observation.combat_detected else 'Non'} ({observation.combat_confidence:.0%})"
         )
         turn = "Inconnu" if observation.player_turn is None else ("Oui" if observation.player_turn else "Non")
+        if packet.metadata.get("combat_state_model") is False:
+            turn = "Inconnu — modèle phase/tour absent (à installer)"
         self.real_values["turn"].setText(f"{turn} ({observation.turn_confidence:.0%})")
         def hud_text(value, confidence, evidence) -> str:
             if not evidence:
@@ -866,12 +889,17 @@ class StatisticsPage(QWidget):
 
 
 class LogsPage(QWidget):
+    LIMIT = 200             # lignes affichées ; même politique que le tableau de bord (100) et le Journal (120)
+
     def __init__(self, storage: Storage) -> None:
         super().__init__()
         self.storage = storage
         outer = title("Logs", "Événements structurés conservés dans SQLite")
         self.text = QTextEdit()
         self.text.setReadOnly(True)
+        # Fenêtre d'affichage bornée (l'historique complet reste dans SQLite) : sans borne, une longue
+        # session accumulait des milliers de blocs (≈ 9 Mo pour 20 000 lignes mesurées).
+        self.text.document().setMaximumBlockCount(self.LIMIT)
         outer.addWidget(self.text, 1)
         self.setLayout(outer)
         self.refresh()
@@ -879,7 +907,7 @@ class LogsPage(QWidget):
     def refresh(self) -> None:
         lines = [
             f"{row['created_at']}  [{row['level']}] {row['event']}  {row['message']}  {row['context_json']}"
-            for row in self.storage.recent_events()
+            for row in self.storage.recent_events(self.LIMIT)
         ]
         self.text.setPlainText("\n".join(lines))
         self.text.moveCursor(self.text.textCursor().MoveOperation.End)

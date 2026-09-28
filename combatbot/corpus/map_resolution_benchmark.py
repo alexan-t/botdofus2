@@ -29,7 +29,10 @@ def run_map_resolution_benchmark(repository: CorpusRepository, index: MapSpatial
     """``simulate_human_confirmation`` : scénario séparé où l'humain résout UNE fois chaque lieu
     ambigu (la vérité ne sert qu'à simuler cette réponse) ; on mesure ensuite si les frames
     suivantes se résolvent seules par l'empreinte mémorisée, sans jamais de mauvaise map."""
-    reader = reader or MapCoordinateReader(roi=CORPUS_ROI)
+    # Depuis 3B-6B le client entier est enregistré (``client_frame``) : l'OCR le lit avec la ROI runtime.
+    # Sinon repli sur le crop combat, qui coupe parfois la 1re ligne selon la calibration (lecture refusée).
+    crop_reader = reader or MapCoordinateReader(roi=CORPUS_ROI)
+    client_reader = reader or MapCoordinateReader()
     knowledge = MapKnowledge()          # connaissance vierge : aucune fuite depuis le runtime
     sessions: dict[str, list] = defaultdict(list)
     for entry in repository.list_entries():
@@ -42,7 +45,10 @@ def run_map_resolution_benchmark(repository: CorpusRepository, index: MapSpatial
     resolver_ms: list[float] = []
     sources = Counter()
     processed = 0
+    ocr_inputs = Counter()
     for session_id in sorted(sessions):
+        use_client = all("client_frame" in entry.paths for entry in sessions[session_id])
+        reader = client_reader if use_client else crop_reader
         service = MapContextService(MapContextResolver(index, knowledge, shapes=shapes), reader=reader,
                                     interval=0.0, synchronous=True, track_hypotheses=track_hypotheses)
         first_resolved = None
@@ -53,11 +59,13 @@ def run_map_resolution_benchmark(repository: CorpusRepository, index: MapSpatial
             document = repository.read_observation(entry)
             truth = (document.get("grid_snapshot") or {}).get("map_id_declared")
             image = cv2.imread(str(repository.resolve(entry.paths["frame"])))
-            if image is None:
+            client = cv2.imread(str(repository.resolve(entry.paths["client_frame"]))) if use_client else image
+            if image is None or client is None:
                 counts["unreadable_frame"] += 1
                 continue
+            ocr_inputs["client_frame" if use_client else "combat_crop"] += 1
             started = time.perf_counter()
-            resolution = service.update(image, image, now=float(position) * 2.5,
+            resolution = service.update(client, image, now=float(position) * 2.5,
                                         cell_centers=_cell_centers(document) if shapes is not None else None)
             reader_ms.append(service.timings.get("coordinate_reader_ms", 0.0))
             resolver_ms.append(service.timings.get("resolver_ms", 0.0))
@@ -101,6 +109,7 @@ def run_map_resolution_benchmark(repository: CorpusRepository, index: MapSpatial
         else "fully_automatic",
         "screen_shape": shapes is not None, "hypotheses": track_hypotheses,
         "frames": processed,
+        "ocr_inputs": dict(ocr_inputs),
         "frames_with_truth": truth_frames,
         "outcomes": dict(counts),
         "wrong_maps": counts["WRONG"],

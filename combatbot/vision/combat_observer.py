@@ -150,6 +150,10 @@ class RealCombatObserver:
         from combatbot.vision.combat_state_detector import CombatStateModel, SemanticCombatStateTracker
         self.combat_state_model = combat_state_model if combat_state_model is not None else \
             CombatStateModel.load(app_data_root() / "data" / "combat_state_model")
+        if self.combat_state_model is None:
+            # 3B-7 : fail-closed. Sans modèle phase/tour, le tour reste INCONNU (plus d'heuristique).
+            import logging
+            logging.warning("Modèle phase/tour absent (data/combat_state_model) : tour toujours inconnu")
         self.combat_state_tracker = SemanticCombatStateTracker()
         self.session_id = str(self.capture_context.get("session_id") or f"session_{uuid4().hex[:12]}")
         self._frame_index = 0
@@ -158,7 +162,17 @@ class RealCombatObserver:
 
     def observe(self) -> ObservationPacket:
         started = time.perf_counter()
+        # LOT 3B-7 : durée de chaque étape (ms), pour la latence mesurée en session réelle.
+        stage_ms: dict[str, float] = {}
+        lap = [started]
+
+        def mark(stage: str) -> None:
+            current = time.perf_counter()
+            stage_ms[stage] = (current - lap[0]) * 1000
+            lap[0] = current
+
         frame = self.frame_provider()
+        mark("capture")
         if frame.hwnd != self.hwnd:
             raise RuntimeError("La capture ne correspond plus à la fenêtre observée")
         if not self.calibration.compatible(frame.client.width, frame.client.height):
@@ -177,11 +191,16 @@ class RealCombatObserver:
             centers = self.grid_resolver.cell_centers(frame.client.size, zones) \
                 if self.grid_resolver is not None else None
             map_resolution = self.map_context.update(frame.image, combat_image, cell_centers=centers)
+        mark("map")
+        grid_ms: dict[str, float] = {}
         if self.grid_resolver is not None:
             resolution = self.grid_resolver.resolve(combat_image, frame.client.size, zones)
+            grid_ms["resolve"] = round((time.perf_counter() - lap[0]) * 1000, 2)
             grid = self._validate_grid(resolution, combat_image)
+            grid_ms["validate"] = round((time.perf_counter() - lap[0]) * 1000 - grid_ms["resolve"], 2)
         else:
             grid = infer_combat_grid(combat_image, self.grid_calibration)
+        mark("grid")
         now = time.monotonic()
         entity_fields: dict[str, object] = {}
         entity_timings: dict[str, float] = {}
@@ -199,6 +218,7 @@ class RealCombatObserver:
             enemies = tuple(EnemyObservation("", cell, center, confidence, cell_ids.get(cell))
                             for cell, center, confidence in raw_enemies)
             player_cell_id = cell_ids.get(player_cell) if player_cell is not None else None
+        mark("entities")
 
         ap_image = _zone(frame, self.calibration, transform, "ap")
         mp_image = _zone(frame, self.calibration, transform, "mp")
@@ -227,6 +247,7 @@ class RealCombatObserver:
             _, (ap, confidence_ap), (mp, confidence_mp) = self._last_numbers
             assert self._last_number_results is not None
             ap_read, mp_read = self._last_number_results
+        mark("hud")
 
         counter_signal = (_visual_activity(ap_image) + _visual_activity(mp_image)) / 2
         end_turn_image = _zone(frame, self.calibration, transform, "end_turn")
@@ -243,16 +264,11 @@ class RealCombatObserver:
         combat_confidence = state.confidence
         combat_detected = state.combat_detected
 
-        # Le bouton et les compteurs doivent tous deux être lisibles avant de conclure au tour.
-        turn_score = 0.6 * end_signal + 0.4 * max(confidence_ap, confidence_mp)
-        if not combat_detected or end_signal < 0.2:
-            player_turn = None
-        elif turn_score >= 0.52 and (ap is not None or mp is not None):
-            player_turn = True
-        elif turn_score <= 0.24:
-            player_turn = False
-        else:
-            player_turn = None
+        # 3B-7 : fail-closed. L'ancienne heuristique (texture du bouton + confiance PA/PM) affirmait
+        # « mon tour » pendant le tour des monstres (bouton dessiné, juste plus sombre) : supprimée.
+        # Le tour ne vient que du détecteur 3B-6B (couleur du bouton) ; sans modèle, il reste inconnu.
+        player_turn = None
+        turn_score = 0.0
         semantic = None
         if self.combat_state_model is not None:
             # LOT 3B-6B : le tour vient uniquement de la couleur du bouton fin de tour ; jamais de mémoire.
@@ -262,6 +278,7 @@ class RealCombatObserver:
             fighting = semantic.phase.value == "FIGHTING"
             player_turn = {"PLAYER": True, "OTHER": False}.get(semantic.turn_owner.value) if fighting else None
             turn_score = semantic.confidence
+        mark("combat_state")
         essential = [grid.confidence, combat_confidence]
         essential.extend(score for value, score in ((ap, confidence_ap), (mp, confidence_mp)) if value is not None)
         if player_cell is not None:
@@ -280,7 +297,9 @@ class RealCombatObserver:
         observation = self.tracker.update(raw)
         annotated = draw_diagnostic_overlay(combat_image, observation, self.overlay_options,
                                             validation=self._validation_debug)
+        mark("overlay")
         elapsed_ms = (time.perf_counter() - started) * 1000
+        stage_ms["total"] = elapsed_ms
         phase = "inconnue"
         if semantic is not None:
             phase = semantic.label
@@ -331,7 +350,11 @@ class RealCombatObserver:
             "requires_recalibration": bool(resolution and resolution.requires_recalibration),
             "phase": phase,
             "semantic_combat_state": semantic.to_dict() if semantic is not None else None,
+            "combat_state_model": self.combat_state_model is not None,
             "analysis_ms": elapsed_ms,
+            "stage_ms": {name: round(value, 2) for name, value in stage_ms.items()},
+            "capture_ms": dict(getattr(frame, "timings_ms", {}) or {}),
+            "grid_ms": grid_ms,
             "global_confidence": observation.observation_confidence,
             "entities": {"pipeline": "CELL_ENTITY_DETECTOR" if entity_timings else "LEGACY_CLASSIFY",
                          **entity_timings},
@@ -427,7 +450,11 @@ class RealCombatObserver:
         timings = {"detector_ms": detection.timings_ms.get("total", 0.0), "tracker_ms": tracker_ms,
                    "roi_maps_ms": detection.timings_ms.get("roi_maps", 0.0),
                    "player_profile": detection.diagnostics.get("player_profile"),
-                   "team_profile": detection.diagnostics.get("team_profile")}
+                   "team_profile": detection.diagnostics.get("team_profile"),
+                   # Diagnostic de la décision joueur (aucun effet sur la décision elle-même).
+                   "player_decision": detection.diagnostics.get("player_decision"),
+                   "player_candidates": detection.diagnostics.get("player_candidates"),
+                   "player_track_state": player_track.state.value if player_track else None}
         return grid, player_cell, player_cell_id, player_confidence, tuple(enemies), fields, timings
 
     def designate_player_cell(self, pixel: CombatPoint | tuple[int, int], packet: ObservationPacket):

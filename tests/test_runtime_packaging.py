@@ -40,3 +40,12 @@ def test_development_paths_stay_in_project(monkeypatch) -> None:
     monkeypatch.setattr(runtime, "is_frozen", lambda: False)
     assert runtime.database_path() == runtime.PROJECT_ROOT / "data" / "pythonbot.sqlite3"
     assert runtime.log_directory() == runtime.PROJECT_ROOT / "logs"
+
+
+def test_smoke_report_serializes_numpy_values_from_a_real_capture() -> None:
+    import json
+    import numpy as np
+    from combatbot.packaging_smoke import _json_default
+    payload = {"zone_rects": {"mp": (np.int64(12), np.int32(3))}, "mean": np.float32(1.5), "pts": np.arange(2)}
+    assert json.loads(json.dumps(payload, default=_json_default)) == {"zone_rects": {"mp": [12, 3]}, "mean": 1.5,
+                                                                      "pts": [0, 1]}

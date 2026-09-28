@@ -654,3 +654,41 @@ def test_repeated_manual_confirmation_is_stored_once(tmp_path: Path) -> None:
     knowledge.confirm(key, 104859145, layout="L", context=None)
     assert len(knowledge.confirmations) == 2
     assert knowledge.confirmed_maps(key) == {104858121, 104859145}
+
+
+# ------------------------------------------------ banc : client entier préféré au crop combat (3B-7)
+def test_benchmark_reads_the_full_client_when_recorded(index, tmp_path: Path) -> None:
+    import cv2
+    from types import SimpleNamespace
+    from combatbot.corpus.map_resolution_benchmark import run_map_resolution_benchmark
+
+    cv2.imwrite(str(tmp_path / "combat.png"), np.full((90, 160, 3), 90, np.uint8))
+    cv2.imwrite(str(tmp_path / "client.png"), np.full((120, 200, 3), 90, np.uint8))
+
+    class Repo:
+        def __init__(self, with_client: bool):
+            paths = {"frame": "combat.png", **({"client_frame": "client.png"} if with_client else {})}
+            self.entries = [SimpleNamespace(session_id="s", frame_index=i, paths=paths) for i in range(3)]
+
+        def list_entries(self):
+            return self.entries
+
+        def read_observation(self, entry):
+            return {"grid_snapshot": {"map_id_declared": 11}}
+
+        def resolve(self, relative):
+            return tmp_path / relative
+
+    class Recorder(ScriptedReader):
+        shapes: list = []
+
+        def read(self, client_image, *, roi_image=None, timestamp=None):
+            Recorder.shapes.append(client_image.shape[:2])
+            return super().read(client_image, roi_image=roi_image, timestamp=timestamp)
+
+    report = run_map_resolution_benchmark(Repo(True), index, reader=Recorder([(0, -31)] * 3))
+    assert set(Recorder.shapes) == {(120, 200)} and report["ocr_inputs"] == {"client_frame": 3}
+    assert report["outcomes"].get("correct") and report["wrong_maps"] == 0
+    Recorder.shapes = []
+    report = run_map_resolution_benchmark(Repo(False), index, reader=Recorder([(0, -31)] * 3))
+    assert set(Recorder.shapes) == {(90, 160)} and report["ocr_inputs"] == {"combat_crop": 3}

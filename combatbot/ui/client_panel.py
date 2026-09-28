@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
 )
 
 from combatbot.storage import Storage
-from combatbot.ui.images import bgr_to_pixmap
+from combatbot.ui.images import preview_pixmap
 from combatbot.vision.models import CapturedFrame, ConnectionResult, Profile, RecognizedProfile
 from combatbot.vision.window import list_dofus_windows
 
@@ -438,10 +438,9 @@ class ClientPanel(QWidget):
 
     def set_frame(self, frame: CapturedFrame) -> None:
         self.frame = frame
-        pixmap = bgr_to_pixmap(frame.image)
-        self.preview.setPixmap(pixmap.scaled(max(600, self.preview.width() - 4), max(300, self.preview.height() - 4),
-                                             Qt.AspectRatioMode.KeepAspectRatio,
-                                             Qt.TransformationMode.SmoothTransformation))
+        # Réduction unique vers la taille d'affichage : aucun pixmap pleine résolution intermédiaire.
+        self.preview.setPixmap(preview_pixmap(frame.image, max(600, self.preview.width() - 4),
+                                              max(300, self.preview.height() - 4)))
         self.preview.setToolTip(f"Capture cliente {frame.client.width} × {frame.client.height}")
         if not frame.activation_succeeded:
             self.recognition_status.setText(
