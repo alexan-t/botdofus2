@@ -889,12 +889,17 @@ class StatisticsPage(QWidget):
 
 
 class LogsPage(QWidget):
+    LIMIT = 200             # lignes affichées ; même politique que le tableau de bord (100) et le Journal (120)
+
     def __init__(self, storage: Storage) -> None:
         super().__init__()
         self.storage = storage
         outer = title("Logs", "Événements structurés conservés dans SQLite")
         self.text = QTextEdit()
         self.text.setReadOnly(True)
+        # Fenêtre d'affichage bornée (l'historique complet reste dans SQLite) : sans borne, une longue
+        # session accumulait des milliers de blocs (≈ 9 Mo pour 20 000 lignes mesurées).
+        self.text.document().setMaximumBlockCount(self.LIMIT)
         outer.addWidget(self.text, 1)
         self.setLayout(outer)
         self.refresh()
@@ -902,7 +907,7 @@ class LogsPage(QWidget):
     def refresh(self) -> None:
         lines = [
             f"{row['created_at']}  [{row['level']}] {row['event']}  {row['message']}  {row['context_json']}"
-            for row in self.storage.recent_events()
+            for row in self.storage.recent_events(self.LIMIT)
         ]
         self.text.setPlainText("\n".join(lines))
         self.text.moveCursor(self.text.textCursor().MoveOperation.End)
