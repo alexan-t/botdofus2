@@ -10,7 +10,10 @@
       3. l'auto-test offline de la chaîne d'exécution (--execution-selftest) ;
       4. le benchmark e2e d'observation (--observation-e2e) ;
       5. le rejeu dry-run des décisions (--dry-run-plans) ;
-      6. la recette consolidée 3B-7 (--acceptance).
+      6. la recette consolidée 3B-7 (--acceptance) ;
+      7. les rapports de préparation live : sorts du profil (--spell-readiness), profil de latence
+         (--runtime-profile), raisons de cellule joueur inconnue (--player-cell-diagnostics) et preuve
+         portée/LOS collectée (--targeting-proof-report).
     Le corpus est photographié avant/après : toute modification fait échouer la recette.
     Tous les résultats sont copiés dans reports\windows-acceptance-<date>\ avec un récapitulatif
     SUMMARY.md à transmettre tel quel.
@@ -19,7 +22,9 @@
     DOFBOT_ALLOW_REAL_INPUT de son environnement : la porte d'entrée réelle reste fermée.
 
 .PARAMETER ProfileId
-    Profil dont les sorts confirmés servent au rejeu dry-run (défaut : dernier profil utilisé).
+    Profil dont les sorts confirmés servent au rejeu dry-run. Sans cette option, le profil n'est choisi
+    que s'il est UNIQUE en base ; sinon la recette s'arrête proprement avec la commande exacte à relancer.
+    Le « dernier profil utilisé » n'est jamais pris pour une preuve.
 
 .PARAMETER AssumeLogicalRange
     Active EXPLICITEMENT l'hypothèse de portée logique (non prouvée) pour le rejeu dry-run.
@@ -121,6 +126,31 @@ function Invoke-Logged([string]$Name, [string]$Log, [string[]]$Arguments) {
     return $Code
 }
 
+# --- 2 bis. Profil : jamais deviné -------------------------------------------------------------
+$Resolve = @("-m", "combatbot.benchmark", "--resolve-profile")
+if ($ProfileId -gt 0) { $Resolve += @("--profile-id", "$ProfileId") }
+Push-Location $ProjectRoot
+$ErrorActionPreference = "Continue"
+$ResolutionJson = (& $Python @Resolve 2>$null | Select-Object -Last 1)
+$ResolveCode = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+Pop-Location
+$ResolutionJson | Out-File (Join-Path $ReportDir "profile-resolution.json") -Encoding utf8
+$Resolution = $null
+try { $Resolution = $ResolutionJson | ConvertFrom-Json } catch { $Resolution = $null }
+if ($ResolveCode -ne 0 -or $null -eq $Resolution -or $null -eq $Resolution.profile_id) {
+    $Reason = if ($Resolution) { $Resolution.reason } else { "résolution illisible" }
+    Add-Step "Profil" "STOP" $ResolveCode $Reason
+    Write-Host ""
+    Write-Host "Profil non déterminé de façon non ambiguë : $Reason"
+    if ($Resolution) { foreach ($Candidate in $Resolution.candidates) { Write-Host ("  profil {0} : {1}" -f $Candidate.id, $Candidate.label) } }
+    Write-Host "Relancez avec le bon identifiant, par exemple :"
+    Write-Host "  powershell -ExecutionPolicy Bypass -File scripts\run_windows_acceptance.ps1 -ProfileId <ID>"
+    exit 2
+}
+$ProfileId = [int]$Resolution.profile_id
+Add-Step "Profil" "OK" 0 ("{0} ({1})" -f $ProfileId, $Resolution.reason)
+
 # --- 3. Tests -----------------------------------------------------------------------------------
 $WindowsTests = @(
     "tests/test_settings_ux.py::test_browser_titled_dofus_is_not_a_game_window",
@@ -134,13 +164,21 @@ Invoke-Logged "Suite pytest complète" "pytest-full.txt" @("-m", "pytest", "-q",
 Invoke-Logged "Auto-test d'exécution (aucune entrée réelle)" "execution-selftest.txt" `
     @("-m", "combatbot.benchmark", "--execution-selftest", "--output-dir", $ReportDir) | Out-Null
 Invoke-Logged "Benchmark e2e d'observation" "observation-e2e.txt" @("-m", "combatbot.benchmark", "--observation-e2e") | Out-Null
-$DryRun = @("-m", "combatbot.benchmark", "--dry-run-plans")
-if ($ProfileId -gt 0) { $DryRun += @("--profile-id", "$ProfileId") }
+$DryRun = @("-m", "combatbot.benchmark", "--dry-run-plans", "--profile-id", "$ProfileId")
 if ($AssumeLogicalRange) { $DryRun += "--assume-logical-range" }
 if ($Client -ne "") { $DryRun += @("--client", $Client) }
 Invoke-Logged ("Rejeu dry-run des décisions" + ($(if ($AssumeLogicalRange) { " (HYPOTHÈSE de portée logique)" } else { " (règles prudentes)" }))) `
     "dry-run-plans.txt" $DryRun | Out-Null
 Invoke-Logged "Recette consolidée 3B-7" "acceptance.txt" @("-m", "combatbot.benchmark", "--acceptance", "--output-dir", $ReportDir) | Out-Null
+Invoke-Logged "Sorts du profil (préparation décision)" "spell-readiness.txt" `
+    @("-m", "combatbot.benchmark", "--spell-readiness", "--profile-id", "$ProfileId", "--output-dir", $ReportDir) | Out-Null
+Invoke-Logged "Profil de latence (sessions réelles)" "runtime-profile.txt" `
+    @("-m", "combatbot.benchmark", "--runtime-profile", "--output-dir", $ReportDir) | Out-Null
+Invoke-Logged "Cellule joueur inconnue : raisons" "player-cell-diagnostics.txt" `
+    @("-m", "combatbot.benchmark", "--player-cell-diagnostics", "--output-dir", $ReportDir) | Out-Null
+$Proof = @("-m", "combatbot.benchmark", "--targeting-proof-report", "--output-dir", $ReportDir)
+if ($Client -ne "") { $Proof += @("--client", $Client) }
+Invoke-Logged "Preuve portée/LOS collectée (4C, aucune règle adoptée)" "4c-proof.txt" $Proof | Out-Null
 
 # --- 5. Corpus inchangé, collecte ---------------------------------------------------------------
 $After = @(Get-CorpusSnapshot)
@@ -165,12 +203,20 @@ $SelfTest = Read-Report (Join-Path $ReportDir "execution-selftest.json")
 $E2E = Read-Report (Join-Path $ReportDir "observation-e2e.json")
 $Plans = Read-Report (Join-Path $ReportDir "dry-run-plans.json")
 $Acceptance = Read-Report (Join-Path $ReportDir "acceptance-3b7.json")
+$Latency = Read-Report (Join-Path $ReportDir "runtime-profile.json")
+$Cells = Read-Report (Join-Path $ReportDir "player-cell-diagnostics.json")
+$Spells = Read-Report (Join-Path $ReportDir "profile-spells-readiness.json")
+$ProofReport = Read-Report (Join-Path $ReportDir "4c-proof.json")
 $Verdicts = @(
     "| Rapport | Verdict |", "|---|---|",
     "| Auto-test d'exécution | $(if ($SelfTest) { $SelfTest.verdict } else { 'absent' }) |",
     "| Observation e2e (3B-7 offline) | $(if ($E2E) { $E2E.overall } else { 'absent' }) |",
     "| Rejeu dry-run (plans) | $(if ($Plans) { ($Plans.statuses | ConvertTo-Json -Compress) } else { 'absent' }) |",
-    "| Recette consolidée 3B-7 | $(if ($Acceptance) { $Acceptance.overall } else { 'absent' }) |"
+    "| Recette consolidée 3B-7 | $(if ($Acceptance) { $Acceptance.overall } else { 'absent' }) |",
+    "| Profil de latence | $(if ($Latency) { $Latency.verdict } else { 'absent' }) |",
+    "| Cellule joueur (en combat, taux inconnu) | $(if ($Cells) { $Cells.fight_player_unknown_rate } else { 'absent' }) |",
+    "| Sorts prêts pour une décision réelle | $(if ($Spells) { '{0}/{1}' -f $Spells.decision_ready, $Spells.total } else { 'absent' }) |",
+    "| Portée/LOS (4C) | $(if ($ProofReport) { $ProofReport.rule_status } else { 'absent' }) |"
 )
 
 # --- 6. Récapitulatif -----------------------------------------------------------------------------
@@ -180,7 +226,7 @@ $Summary = @(
     "# Recette Windows DofBot2 — $Stamp", "",
     "- Machine : $env:COMPUTERNAME · commit ``$Commit`` ($Branch)",
     "- Racine runtime : ``$DataRoot``",
-    "- Profil : $(if ($ProfileId -gt 0) { $ProfileId } else { 'dernier utilisé' }) · hypothèse de portée logique : $(if ($AssumeLogicalRange) { 'OUI (explicite)' } else { 'non' })",
+    "- Profil : $ProfileId ($($Resolution.reason)) · hypothèse de portée logique : $(if ($AssumeLogicalRange) { 'OUI (explicite)' } else { 'non' })",
     "- **ACTIONS DANS DOFUS : AUCUNE** (aucun clic, aucune touche ; DofBot2 et DOFUS non lancés)", "",
     "| Étape | Verdict | Code | Détail |", "|---|---|---|---|"
 )
