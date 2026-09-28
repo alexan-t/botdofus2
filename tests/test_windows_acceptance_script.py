@@ -15,7 +15,7 @@ def test_script_runs_every_required_step() -> None:
     text = SCRIPT.read_text(encoding="utf-8-sig")
     for flag in ("--execution-selftest", "--observation-e2e", "--dry-run-plans", "--acceptance", "--profile-id",
                  "--resolve-profile", "--spell-readiness", "--runtime-profile", "--player-cell-diagnostics",
-                 "--targeting-proof-report", "--runtime-health", "--ocr-threads-benchmark"):
+                 "--targeting-proof-report", "--runtime-health", "--ocr-threads-benchmark", "--ui-stress"):
         assert flag in text
     for test in ("test_browser_titled_dofus_is_not_a_game_window", "test_rapidocr_reads_synthetic_visible_text",
                  "test_window_selection_by_handle_and_client_rect"):

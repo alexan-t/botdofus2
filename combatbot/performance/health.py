@@ -86,9 +86,13 @@ class SyntheticObserver:
 
 
 def _pump(app, seconds: float) -> None:
+    """Comme la boucle Qt réelle, y compris les suppressions ``deleteLater`` (que ``processEvents`` seul
+    n'exécute jamais : sans cela, le harnais conserverait des widgets que l'application libère)."""
+    from PySide6.QtCore import QEvent
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
         app.processEvents()
+        app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         time.sleep(0.005)
 
 
@@ -281,3 +285,74 @@ def write_report(report: dict, output: Path) -> tuple[Path, Path]:
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     md_path.write_text(markdown_report(report), encoding="utf-8")
     return json_path, md_path
+
+
+def run_ui_stress(rounds: int = 5) -> dict[str, object]:
+    """GDI / USER / handles : blocs d'opérations UI répétés, mesure après chaque bloc (aucune action jeu).
+
+    Par bloc : 1000 changements texte/style, reconstruction des accordéons de chaque page, 50 nouveaux
+    aperçus, 5 réductions/restaurations, 20 jobs. Une hausse au premier bloc puis un plafond est normal ;
+    une croissance à chaque bloc est signalée (``classify_growth`` sur les blocs 2..N).
+    """
+    from PySide6.QtWidgets import QApplication
+    if os.environ.get("QT_QPA_PLATFORM") is None and os.name != "nt" and not os.environ.get("DISPLAY"):
+        os.environ["QT_QPA_PLATFORM"] = "offscreen"
+    workdir = Path(tempfile.mkdtemp(prefix="dofbot2-uistress-"))
+    os.environ["PYTHONBOT_DATA_DIR"] = str(workdir)
+    from combatbot.storage import Storage
+    from combatbot.ui.dofbot2 import theme
+    from combatbot.ui.dofbot2.controls import set_style, set_text
+    from combatbot.ui.dofbot2.profiles import create_profile
+    from combatbot.ui.dofbot2.shell import DofBot2Window
+    app = QApplication.instance() or QApplication([])
+    theme.load_fonts()
+    storage = Storage(workdir / "stress.sqlite3")
+    DofBot2Window._connect_legacy = lambda self, hwnd: None
+    profile = create_profile(storage, "Stress", 0, "Cra")
+    window = DofBot2Window(storage, start_screen="profile")
+    window.show()
+    window.enter_app(profile.id)
+    window.open_advanced()
+    view = window.advanced_view
+    view.set_recheck(False)
+    legacy = window.legacy
+    observer = SyntheticObserver(0.0)
+    sampler = ResourceSampler()
+    rows = [sampler.sample(block=0)]
+    for block in range(1, rounds + 1):
+        page = view.pages["observation"]
+        view.go_tab("observation", animate=False)
+        for index in range(1000):
+            set_text(view.status_text, f"état {index}")
+            set_style(view.status_text, f"color: #{(index * 97) % 0xFFFFFF:06x};")
+        for key in view.pages:
+            view.go_tab(key, animate=False)
+            view.pages[key].refresh()                             # reconstruction volontaire des accordéons
+            app.processEvents()
+        view.go_tab("observation", animate=False)
+        for _ in range(50):
+            legacy.combat.set_observation(observer.observe())
+            app.processEvents()
+        for _ in range(5):
+            window.showMinimized()
+            app.processEvents()
+            window.showNormal()
+            app.processEvents()
+        for _ in range(20):
+            legacy.jobs.submit(lambda: 1, lambda value: None, lambda message: None)
+        deadline = time.monotonic() + 10
+        while legacy.jobs.active and time.monotonic() < deadline:
+            app.processEvents()
+            time.sleep(0.005)
+        _pump(app, 0.5)
+        rows.append(sampler.sample(block=block, accordion_rebuilds=page.accordion_rebuild_count))
+    window.close()
+    storage.close()
+    later = rows[1:]
+    times = [float(row["block"]) * 60 for row in later]         # un bloc = une « minute » pour la tendance
+    return {"schema_version": 1, "report": "ui-stress", "rounds": rounds, "rows": rows,
+            "gdi_growth": classify_growth(times, [row.get("gdi_objects") for row in later], 0),
+            "user_growth": classify_growth(times, [row.get("user_objects") for row in later], 0),
+            "handles_growth": classify_growth(times, [row.get("handles") for row in later], 0),
+            "rss_growth": classify_growth(times, [row.get("rss_mb") for row in later], 0),
+            "threads": [row.get("threads") for row in rows], "actions": "NONE"}

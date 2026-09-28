@@ -67,6 +67,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="4C : compare les règles candidates aux vérités du client collectées (aucune adoptée)")
     parser.add_argument("--ocr-threads-benchmark", action="store_true",
                         help="Temps OCR et CPU selon les threads ONNX Runtime de RapidOCR (rien n'est appliqué)")
+    parser.add_argument("--ui-stress", action="store_true",
+                        help="GDI/USER/handles/RSS après des blocs répétés d'opérations UI (aucune action jeu)")
     parser.add_argument("--runtime-health", action="store_true",
                         help="Santé CPU/RAM/threads/handles/UI de DofBot2 sur frames synthétiques (aucune action)")
     parser.add_argument("--duration", type=float, default=60.0, help="--runtime-health : durée par phase (s)")
@@ -115,6 +117,18 @@ def main(argv: list[str] | None = None) -> int:
         output.mkdir(parents=True, exist_ok=True)
         (output / "ocr-threads.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         print(ocr_markdown(report))
+        return 0
+    if args.ui_stress:
+        import json
+        from combatbot.performance.health import run_ui_stress
+        output = args.output_dir or (app_data_root() / "data" / "benchmarks")
+        report = run_ui_stress(max(3, args.cycles // 2))
+        output.mkdir(parents=True, exist_ok=True)
+        (output / "ui-stress.json").write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str),
+                                              encoding="utf-8")
+        for key in ("gdi_growth", "user_growth", "handles_growth", "rss_growth"):
+            print(f"{key}: {report[key].get('verdict')} ({report[key].get('start')} → {report[key].get('end')})")
+        print(f"threads : {report['threads']}")
         return 0
     if args.runtime_health:
         from combatbot.performance.health import markdown_report as health_markdown

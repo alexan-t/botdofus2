@@ -181,6 +181,8 @@ Invoke-Logged "Cellule joueur inconnue : raisons" "player-cell-diagnostics.txt" 
 Invoke-Logged "Santé des ressources (CPU, RAM, threads, handles, GDI, UI) — frames synthétiques" "runtime-health.txt" `
     @("-m", "combatbot.benchmark", "--runtime-health", "--duration", "60", "--sample-every", "5", "--cycles", "20",
       "--output-dir", $ReportDir) | Out-Null
+Invoke-Logged "Stress UI : GDI, USER, handles, RAM par blocs (aucune action jeu)" "ui-stress.txt" `
+    @("-m", "combatbot.benchmark", "--ui-stress", "--cycles", "20", "--output-dir", $ReportDir) | Out-Null
 Invoke-Logged "RapidOCR : temps et CPU selon les threads ONNX (rien n'est appliqué)" "ocr-threads.txt" `
     @("-m", "combatbot.benchmark", "--ocr-threads-benchmark", "--output-dir", $ReportDir) | Out-Null
 $Proof = @("-m", "combatbot.benchmark", "--targeting-proof-report", "--output-dir", $ReportDir)
@@ -232,6 +234,14 @@ if ($Health) {
         $Cycles.threads[0], $Cycles.threads[-1], $(if ($Cycles.observer_alive_after_stop -or $Cycles.jobs_active_after_stop) { "OUI" } else { "non" })))
 } else {
     $Resource += "- runtime-health absent"
+}
+$Stress = Read-Report (Join-Path $ReportDir "ui-stress.json")
+if ($Stress) {
+    $Resource += ("- Stress UI ({0} blocs) : GDI {1} ({2} → {3}), USER {4} ({5} → {6}), handles {7} ({8} → {9}), RAM {10} ({11} → {12} Mo)" -f
+        $Stress.rounds, $Stress.gdi_growth.verdict, $Stress.gdi_growth.start, $Stress.gdi_growth.end,
+        $Stress.user_growth.verdict, $Stress.user_growth.start, $Stress.user_growth.end,
+        $Stress.handles_growth.verdict, $Stress.handles_growth.start, $Stress.handles_growth.end,
+        $Stress.rss_growth.verdict, $Stress.rss_growth.start, $Stress.rss_growth.end)
 }
 $Verdicts = @(
     "| Rapport | Verdict |", "|---|---|",

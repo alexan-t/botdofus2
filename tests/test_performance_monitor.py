@@ -30,3 +30,19 @@ def test_sampler_adds_cpu_after_the_first_sample() -> None:
     sampler = ResourceSampler()
     first, second = sampler.sample(phase="x"), sampler.sample(phase="x")
     assert first["cpu_percent"] is None and "rss_mb" in second and second["phase"] == "x"
+
+
+def test_harness_pump_runs_deferred_deletes_like_the_qt_event_loop() -> None:
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication, QLabel
+    from combatbot.performance.health import _pump
+    app = QApplication.instance() or QApplication([])
+    destroyed = []
+    label = QLabel("x")
+    label.destroyed.connect(lambda *_: destroyed.append(True))
+    label.deleteLater()
+    app.processEvents()
+    assert destroyed == []                       # processEvents seul ne supprime rien
+    _pump(app, 0.02)
+    assert destroyed == [True]
