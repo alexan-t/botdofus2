@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
+from PySide6.QtCore import QObject, QThreadPool, Signal
 
 
 class _Signals(QObject):
@@ -13,23 +13,33 @@ class _Signals(QObject):
     done = Signal()
 
 
-class _Job(QRunnable):
+class _Job:
+    """Un travail en cours : ses signaux (thread du pool → thread UI) et sa fonction."""
+
     def __init__(self, work: Callable[[], object]) -> None:
-        super().__init__()
-        self.setAutoDelete(False)
-        self.work = work
+        self.work: Callable[[], object] | None = work
         self.signals = _Signals()
 
     def run(self) -> None:
+        work, signals = self.work, self.signals
         try:
-            self.signals.succeeded.emit(self.work())
+            signals.succeeded.emit(work())
         except Exception as exc:
-            self.signals.failed.emit(f"{type(exc).__name__} : {exc}")
+            signals.failed.emit(f"{type(exc).__name__} : {exc}")
         finally:
-            self.signals.done.emit()
+            signals.done.emit()
 
 
 class JobRunner(QObject):
+    """Jobs hors thread UI.
+
+    Le pool exécute une simple fonction Python (runnable interne supprimé par Qt après exécution). Un
+    ``QRunnable`` Python avec ``setAutoDelete(False)`` était au contraire conservé par le pool pour
+    toujours, avec ses rappels et tout ce qu'ils capturaient (observateur, frames, calibration) : fuite
+    mesurée par ``--runtime-health`` (un observateur complet conservé par cycle démarrer/arrêter).
+    À la fin, les rappels sont déconnectés et le job n'est plus référencé.
+    """
+
     all_done = Signal()
 
     def __init__(self) -> None:
@@ -53,9 +63,17 @@ class JobRunner(QObject):
         job.signals.succeeded.connect(on_success)
         job.signals.failed.connect(on_error)
         job.signals.done.connect(lambda: self._done(job))
-        self.pool.start(job)
+        self.pool.start(job.run)
 
     def _done(self, job: _Job) -> None:
         self._jobs.discard(job)
+        # La connexion « done → lambda(job) » forme un cycle via Qt, invisible pour le GC Python : la
+        # rompre libère le job et tout ce que ses rappels capturent.
+        for signal in (job.signals.succeeded, job.signals.failed, job.signals.done):
+            try:
+                signal.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+        job.work = None
         if not self._jobs:
             self.all_done.emit()
