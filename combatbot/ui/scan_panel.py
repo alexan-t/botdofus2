@@ -18,6 +18,7 @@ class ScanPanel(QWidget):
     scan_requested = Signal(int, int, int, float)
     tooltip_requested = Signal(int)
     scan_finished = Signal(int)   # nombre d'icônes enregistrées (écran Sorts de DofBot2)
+    page_confirm_requested = Signal(int, int, int)   # page, colonnes, rangées — confirmation humaine
 
     def __init__(self, storage: Storage) -> None:
         super().__init__()
@@ -50,6 +51,12 @@ class ScanPanel(QWidget):
         tooltip = QPushButton("Analyser l'infobulle (3 s)")
         tooltip.clicked.connect(self._request_tooltip)
         buttons.addWidget(tooltip)
+        confirm_page = QPushButton("Confirmer : la barre affiche cette page")
+        confirm_page.setToolTip("Mémorise la barre actuelle comme page affichée. Invalidée dès que la barre change ; "
+                                "sans confirmation, aucun sort n'est lancé.")
+        confirm_page.clicked.connect(lambda: self.page_confirm_requested.emit(
+            self.page.value(), self.columns.value(), self.rows.value()))
+        buttons.addWidget(confirm_page)
         buttons.addStretch()
         outer.addLayout(buttons)
         self.summary = QLabel("Connectez une fenêtre, confirmez la barre de sorts, puis vérifiez la grille proposée.")

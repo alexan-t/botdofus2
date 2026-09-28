@@ -96,6 +96,28 @@ def infer_grid_shape(bar: np.ndarray) -> tuple[int, int, float] | None:
     return best[1], best[2], min(0.85, max(0.3, (best[0] - 1) / 2))
 
 
+def slot_icons(bar: np.ndarray, columns: int, rows: int):
+    """Découpage unique de la barre calibrée : (case 1-based, icône sans bordure), ligne par ligne."""
+    height, width = bar.shape[:2]
+    for row in range(rows):
+        for column in range(columns):
+            x0, x1 = round(column * width / columns), round((column + 1) * width / columns)
+            y0, y1 = round(row * height / rows), round((row + 1) * height / rows)
+            inset = max(2, min(x1 - x0, y1 - y0) // 12)
+            yield row * columns + column + 1, bar[y0 + inset:y1 - inset, x0 + inset:x1 - inset].copy()
+
+
+def bar_signature(bar: np.ndarray, columns: int, rows: int, presence_threshold: float = 0.26
+                  ) -> dict[int, str | None]:
+    """Hash visuel de chaque case (None = case vide) : sert à invalider une page de sorts confirmée."""
+    if bar.ndim != 3 or bar.shape[2] != 3 or bar.dtype != np.uint8:
+        raise ValueError("La barre doit être une image BGR uint8")
+    if columns < 1 or rows < 1 or columns > 30 or rows > 5:
+        raise ValueError("Colonnes ou rangées invalides")
+    return {slot: (visual_hash(icon) if _presence(icon) >= presence_threshold else None)
+            for slot, icon in slot_icons(bar, columns, rows)}
+
+
 def scan_spell_bar(
     bar: np.ndarray,
     *,
@@ -119,39 +141,33 @@ def scan_spell_bar(
     detections: list[IconCandidate] = []
     empty: list[int] = []
     seen: list[tuple[int, str]] = []
-    for row in range(rows):
-        for column in range(columns):
-            slot = row * columns + column + 1
-            x0, x1 = round(column * width / columns), round((column + 1) * width / columns)
-            y0, y1 = round(row * height / rows), round((row + 1) * height / rows)
-            inset = max(2, min(x1 - x0, y1 - y0) // 12)
-            icon = bar[y0 + inset:y1 - inset, x0 + inset:x1 - inset].copy()
-            presence = _presence(icon)
-            if presence < presence_threshold:
-                empty.append(slot)
-                continue
-            fingerprint = visual_hash(icon)
-            success, encoded = cv2.imencode(".png", icon)
-            if not success:
-                raise RuntimeError("Impossible d'encoder une icône détectée")
-            duplicate = next((index for index, prior in seen if (int(prior, 16) ^ int(fingerprint, 16)).bit_count() <= 2), None)
-            seen.append((slot, fingerprint))
-            best = max((( _similarity(icon, fingerprint, item), item) for item in known_icons),
-                       key=lambda pair: pair[0], default=(0.0, None))
-            confidence, known = best
-            if duplicate is not None:
-                status = "À vérifier"
-            elif known is not None and confidence >= match_threshold:
-                status = "Reconnu"
-            elif known is not None and confidence >= max(0.55, match_threshold - 0.12):
-                status = "À vérifier"
-            else:
-                status = "Inconnu"
-            detections.append(IconCandidate(
-                page=page, slot=slot, icon_png=encoded.tobytes(), visual_hash=fingerprint,
-                presence_confidence=presence, recognition_confidence=confidence,
-                status=status, known_spell_id=known.spell_id if known and confidence >= max(0.55, match_threshold - 0.12) else None,
-                known_name=known.name if known and confidence >= max(0.55, match_threshold - 0.12) else None,
-                duplicate_of=duplicate,
-            ))
+    for slot, icon in slot_icons(bar, columns, rows):
+        presence = _presence(icon)
+        if presence < presence_threshold:
+            empty.append(slot)
+            continue
+        fingerprint = visual_hash(icon)
+        success, encoded = cv2.imencode(".png", icon)
+        if not success:
+            raise RuntimeError("Impossible d'encoder une icône détectée")
+        duplicate = next((index for index, prior in seen if (int(prior, 16) ^ int(fingerprint, 16)).bit_count() <= 2), None)
+        seen.append((slot, fingerprint))
+        best = max((( _similarity(icon, fingerprint, item), item) for item in known_icons),
+                   key=lambda pair: pair[0], default=(0.0, None))
+        confidence, known = best
+        if duplicate is not None:
+            status = "À vérifier"
+        elif known is not None and confidence >= match_threshold:
+            status = "Reconnu"
+        elif known is not None and confidence >= max(0.55, match_threshold - 0.12):
+            status = "À vérifier"
+        else:
+            status = "Inconnu"
+        detections.append(IconCandidate(
+            page=page, slot=slot, icon_png=encoded.tobytes(), visual_hash=fingerprint,
+            presence_confidence=presence, recognition_confidence=confidence,
+            status=status, known_spell_id=known.spell_id if known and confidence >= max(0.55, match_threshold - 0.12) else None,
+            known_name=known.name if known and confidence >= max(0.55, match_threshold - 0.12) else None,
+            duplicate_of=duplicate,
+        ))
     return ScanResult(page, rows * columns, tuple(empty), tuple(detections))
