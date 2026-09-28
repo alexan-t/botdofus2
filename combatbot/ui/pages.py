@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 from combatbot.models import CombatSnapshot, Spell, Strategy, StrategyMode, TargetPriority
 from combatbot.storage import Storage
 from combatbot.ui.grid_widget import GridWidget
-from combatbot.ui.images import bgr_to_pixmap
+from combatbot.ui.images import preview_pixmap
 from combatbot.ui.client_panel import ClientPanel
 from combatbot.ui.scan_panel import ScanPanel
 from combatbot.ui.gamedata_panel import GameDataPanel
@@ -170,19 +170,29 @@ class ObservationPreview(QLabel):
         self.setMinimumSize(560, 390)
         self.setStyleSheet("border: 1px solid rgba(143,209,79,36); background: #0f1510;")
         self._image_size: tuple[int, int] | None = None
+        self._source = None               # tableau de l'observation (référence, pas de copie)
+        self._rendered: tuple[int, int, int] | None = None
 
     def set_image(self, image) -> None:
         self._image_size = (image.shape[1], image.shape[0])
-        pixmap = bgr_to_pixmap(image)
-        self.setPixmap(pixmap.scaled(self.size(), Qt.AspectRatioMode.KeepAspectRatio,
-                                     Qt.TransformationMode.SmoothTransformation))
+        self._source = image
+        self._rendered = None
+        self._render()
+
+    def _render(self) -> None:
+        """Réduit la frame une seule fois à la taille du widget ; rien si déjà fait pour cette taille."""
+        if self._source is None:
+            return
+        key = (id(self._source), self.width(), self.height())
+        if key == self._rendered:
+            return
+        self._rendered = key
+        self.setPixmap(preview_pixmap(self._source, self.width(), self.height()))
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
-        if self.pixmap() is not None and self._image_size:
-            # L'image suivante rétablira la résolution source; éviter d'agrandir un aperçu déjà réduit.
-            self.setPixmap(self.pixmap().scaled(self.size(), Qt.AspectRatioMode.KeepAspectRatio,
-                                                Qt.TransformationMode.SmoothTransformation))
         super().resizeEvent(event)
+        if self._source is not None:
+            self._render()                # depuis la source : jamais un agrandissement flou
 
     def _image_point(self, event) -> tuple[int, int] | None:
         pixmap = self.pixmap()

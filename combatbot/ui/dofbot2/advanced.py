@@ -29,7 +29,7 @@ from combatbot.ui.dofbot2.icons import ICONS, icon_pixmap
 from combatbot.ui.dofbot2.pages import Page
 from combatbot.ui.dofbot2.settings import JsonSettings, SettingsBinding, app_settings
 from combatbot.ui.dofbot2.widgets import HoverButton, rounded_pixmap
-from combatbot.ui.images import bgr_to_pixmap
+from combatbot.ui.images import preview_pixmap
 from combatbot.vision.models import ZONE_LABELS
 
 if TYPE_CHECKING:
@@ -145,19 +145,34 @@ class FramePreview(QWidget):
         super().__init__(parent)
         self.placeholder, self.radius = placeholder, radius
         self.image: QImage | None = None
-        self._source_id: int | None = None
+        # Référence à la frame affichée (identité exacte, pas ``id()`` que Python peut réutiliser) ; seule
+        # une copie réduite à la taille du widget est convertie pour Qt, une fois par frame ou par taille.
+        self._source: np.ndarray | None = None
+        self._rendered_size: tuple[int, int] | None = None
 
     def set_frame(self, image: np.ndarray | None) -> None:
         if image is None:
             if self.image is not None:
-                self.image, self._source_id = None, None
+                self.image, self._source, self._rendered_size = None, None, None
                 self.update()
             return
-        if id(image) == self._source_id:
+        if image is self._source:
             return
-        self._source_id = id(image)
-        self.image = bgr_to_pixmap(image).toImage()
+        self._source, self._rendered_size = image, None
+        self._render()
+
+    def _render(self) -> None:
+        size = (max(1, self.width()), max(1, self.height()))
+        if self._source is None or size == self._rendered_size and self.image is not None:
+            return
+        self._rendered_size = size
+        self.image = preview_pixmap(self._source, *size).toImage()
         self.update()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - API Qt
+        super().resizeEvent(event)
+        self._rendered_size = None
+        self._render()
 
     def paintEvent(self, _event) -> None:  # noqa: N802 - API Qt
         painter = QPainter(self)
