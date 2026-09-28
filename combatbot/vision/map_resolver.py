@@ -148,7 +148,11 @@ class MapKnowledge:
 
     def confirm(self, key: tuple | None, map_id: int, *, layout: str | None, context: dict | None) -> None:
         with self._lock:
-            self.confirmations.append({"key": list(key) if key else None, "map_id": int(map_id),
+            stored_key = list(key) if key else None
+            if any(item.get("key") == stored_key and item.get("map_id") == int(map_id)
+                   and item.get("layout_signature") == layout for item in self.confirmations):
+                return      # même réponse répétée (plusieurs clics « Utiliser ») : une seule entrée
+            self.confirmations.append({"key": stored_key, "map_id": int(map_id),
                                        "layout_signature": layout, "context": context or {},
                                        "source": "human_manual",
                                        "created_at": datetime.now().astimezone().isoformat(timespec="seconds")})
@@ -404,6 +408,10 @@ class MapTransitionDetector:
 
     change_threshold: float = 0.55
     dark_threshold: float = 18.0
+    # Écran de chargement = noir PARTOUT. Une mine ou une grotte a un grand fond noir (moyenne 14,8
+    # mesurée en live, mine du Campement des Gobelins) mais ≈ 22 % de pixels éclairés : pas une transition.
+    lit_level: int = 40
+    lit_fraction_max: float = 0.05
     quiet_threshold: float = 0.08
     _previous: np.ndarray | None = None
     in_transition: bool = False
@@ -411,7 +419,8 @@ class MapTransitionDetector:
 
     def update(self, combat_image: np.ndarray) -> bool:
         small = cv2.resize(combat_image, (96, 54), interpolation=cv2.INTER_AREA).astype(np.int16)
-        dark = float(small.mean()) < self.dark_threshold
+        dark = float(small.mean()) < self.dark_threshold and \
+            float(np.mean(small.max(axis=2) > self.lit_level)) < self.lit_fraction_max
         change = 0.0 if self._previous is None else float(np.mean(np.abs(small - self._previous).max(axis=2) > 24))
         self._previous = small
         if dark or change >= self.change_threshold:

@@ -605,3 +605,52 @@ def test_service_resolves_after_one_step_from_ambiguous_start(twin_index, tmp_pa
     step = service.update(frame, frame, now=3.0)
     # Hypothèse intérieure possible et pas d'écran : rien n'est forcé (porte possible).
     assert step.status is MapResolutionStatus.AMBIGUOUS and step.map_id is None
+
+
+# ------------------------------------------------ écran sombre : chargement ≠ mine (live 28/09)
+from combatbot.vision.map_resolver import MapTransitionDetector  # noqa: E402
+
+MINE_FIXTURE = Path(__file__).parent / "fixtures" / "map_transition" / "mine-campement-gobelins-192x108.png"
+
+
+def test_uniform_black_screen_is_a_transition() -> None:
+    assert MapTransitionDetector().update(np.zeros((108, 192, 3), np.uint8))
+
+
+def test_uniform_fade_is_a_transition() -> None:
+    assert MapTransitionDetector().update(np.full((108, 192, 3), 12, np.uint8))
+
+
+def test_dark_scene_with_lit_area_is_not_a_transition() -> None:
+    image = np.zeros((108, 192, 3), np.uint8)
+    image[30:70, 60:130] = 90                                       # ≈ 14 % éclairé, moyenne < 18
+    assert image.mean() < MapTransitionDetector.dark_threshold
+    assert not MapTransitionDetector().update(image)
+
+
+def test_real_mine_is_not_a_transition() -> None:
+    import cv2
+    image = cv2.imread(str(MINE_FIXTURE))
+    assert image is not None
+    detector = MapTransitionDetector()
+    assert not detector.update(image)
+    assert not detector.update(image)                               # reste stable : lecture possible
+
+
+def test_service_reads_map_inside_dark_mine(index, tmp_path: Path) -> None:
+    import cv2
+    mine = cv2.imread(str(MINE_FIXTURE))
+    service = _service(index, [(0, -31), (0, -31), (0, -31)], tmp_path)
+    results = [service.update(mine, mine, now=float(t)) for t in range(3)]
+    assert all(result.status is not MapResolutionStatus.TRANSITION for result in results)
+    assert results[-1].status is MapResolutionStatus.RESOLVED and results[-1].map_id == 11
+
+
+def test_repeated_manual_confirmation_is_stored_once(tmp_path: Path) -> None:
+    knowledge = MapKnowledge(tmp_path / "k.json")
+    key = (-4, 2, "amakna", "campement des gobelins", 30)
+    for _ in range(3):
+        knowledge.confirm(key, 104858121, layout="L", context=None)
+    knowledge.confirm(key, 104859145, layout="L", context=None)
+    assert len(knowledge.confirmations) == 2
+    assert knowledge.confirmed_maps(key) == {104858121, 104859145}
