@@ -148,6 +148,27 @@ pathfinding du lot 4B.
 
 Mode tactique et thème DOFUS : toujours « non détecté ». Une seule taille de client observée.
 
+## 3.2 Pré-recette sur le PC du corpus 3B-6 (28/09 soir, `DESKTOP-LCKK4IJ`)
+
+Corpus runtime : 12 combats phase/tour (7 TRAIN, 3 VALIDATION, 2 TEST déjà consommés), benchmark map
+496 frames (472 avec mapId historique), modèle phase/tour installé (7 combats TRAIN).
+
+| Domaine | Verdict | Mesure |
+|---|---|---|
+| Phase/tour (3B-6B) | **PASS** | TEST figé `1eef84a` (43 frames) : phase 0,974, tour 1,000, « mon tour » à tort 0. Re-mesure TRAIN (un combat laissé de côté) 0,994 / 0,982 et VALIDATION 1,000 / 1,000 : identiques aux chiffres du 28/09 matin |
+| Map (3B-6C) | **PASS** | re-mesuré avec le code actuel : 377/472 correctes, **0 mauvaise**, couverture 0,80 (0,75 sans la forme à l'écran ni les hypothèses gardées) ; lecteur ≈ 0,80 s |
+| Grille (3B-3) | NOT_EVALUABLE ici | les 26 frames `lot3b2r` sont sur l'autre PC (PASS là-bas) |
+| PA/PM, entités | NOT_EVALUABLE | bancs non relancés : ils installent gabarits/profils → décision utilisateur |
+| Latence | NOT_EVALUABLE ici | aucune session réelle journalisée sur ce PC |
+
+Corrections faites à cette occasion :
+- **Tour fail-closed** (§ 3.1, point 4) : l'heuristique de secours est supprimée. Sans modèle phase/tour,
+  le tour reste inconnu, avec un avertissement dans le log et « modèle phase/tour absent » dans
+  Vision réelle. Test : `test_turn_is_fail_closed_without_combat_state_model`. Le test historique qui
+  attendait « mon tour » sans modèle attend désormais « inconnu ».
+- **Recette** : le rapport TEST figé (`combat-state-TEST-<sha>.json`, mesure sous la clé `result`)
+  était classé « aucune vérité phase/tour » ; il est maintenant lu comme mesure TEST.
+
 ## 4. Reste à faire
 
 1. ~~Session réelle avec `DofBot2.exe` reconstruit → latence mesurée sur le package.~~ **Fait le
@@ -156,5 +177,7 @@ Mode tactique et thème DOFUS : toujours « non détecté ». Une seule taille d
    explicitement, décision utilisateur).
 3. Phase/tour : TEST sur ce PC impossible sans vérité ; soit copier le corpus 3B-6 de l'autre PC,
    soit annoter 2 combats neufs (TEST aveugle, second PC = validation d'une 2e configuration).
-4. Rendre le tour fail-closed (§ 3.1) : c'est le blocage réel avant tout lot d'exécution.
+4. ~~Rendre le tour fail-closed (§ 3.1).~~ **Fait** (§ 3.2).
 5. Réduire la latence de capture (236 ms de médiane pour 2560x1377).
+6. Sur ce PC : 3 à 5 combats neufs avec l'exécutable reconstruit (journal de session : latence,
+   cadence, map, phase/tour) — mesure de la latence sur une 2e configuration.
