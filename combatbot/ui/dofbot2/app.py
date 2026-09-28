@@ -84,6 +84,8 @@ class StatusDot(QWidget):
         self.color = QColor(t.TEXT_2)
 
     def set_color(self, color: str) -> None:
+        if QColor(color) == self.color:
+            return
         self.color = QColor(color)
         self.update()
 

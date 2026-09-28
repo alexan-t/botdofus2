@@ -108,6 +108,7 @@ class MainWindow(QMainWindow):
         self.logs = LogsPage(storage)
         self.settings = SettingsPage(storage, self.jobs)
         self.corpus = CorpusPage()
+        self.corpus.spell_source = self._profile_spells_for_tools
         self.pages = [
             self.dashboard, self.combat, self.spells, self.strategies,
             self.statistics, self.logs, self.settings, self.corpus,
@@ -188,6 +189,7 @@ class MainWindow(QMainWindow):
         self.scan_panel.scan_finished.connect(lambda _count: self.invalidate_plan_spells())
         self.client_panel.profile_changed.connect(lambda _profile_id: self.invalidate_plan_spells())
         self.scan_panel.tooltip_requested.connect(self._scan_tooltip)
+        self.scan_panel.page_confirm_requested.connect(self._confirm_spell_page)
         if self.client_panel.profile_id is not None:
             self.scan_panel.set_profile(self.client_panel.profile_id)
         self.connection_timer = QTimer(self)
@@ -538,6 +540,37 @@ class MainWindow(QMainWindow):
             if self.client_panel.profile_id != profile_id:
                 raise ValueError("Le profil a changé pendant le scan ; résultat non enregistré")
             self.scan_panel.accept_scan(result)
+
+        self._run_capture(deliver, process)
+
+    def _profile_spells_for_tools(self):
+        from combatbot.combat.spells import load_profile_spells
+        profile_id = self.client_panel.profile_id
+        return load_profile_spells(self.storage, profile_id) if profile_id is not None else ()
+
+    def _confirm_spell_page(self, page: int, columns: int, rows: int) -> None:
+        """Confirmation humaine de la page affichée : signature de la barre mémorisée (aucune action)."""
+        from datetime import datetime
+        from combatbot.combat.spell_page import ConfirmedSpellPage, save_confirmed_page
+        from combatbot.vision.icons import bar_signature
+        profile_id = self.client_panel.profile_id
+        calibration = self.storage.load_calibration(profile_id) if profile_id is not None else None
+        if calibration is None:
+            self._vision_error("Calibrez la barre de sorts avant de confirmer la page affichée.")
+            return
+
+        def process(frame: CapturedFrame):
+            return bar_signature(calibration.crop(frame, "spell_bar"), columns, rows)
+
+        def deliver(_frame: CapturedFrame, signature) -> None:
+            if self.client_panel.profile_id != profile_id:
+                raise ValueError("Le profil a changé pendant la confirmation ; page non enregistrée")
+            if sum(value is not None for value in signature.values()) < 2:
+                raise ValueError("Trop peu de sorts visibles dans la barre : page non confirmée")
+            save_confirmed_page(self.storage, profile_id, ConfirmedSpellPage(
+                page, signature, datetime.now().astimezone().isoformat(timespec="seconds")))
+            self.scan_panel.summary.setText(f"Page {page} confirmée comme page affichée ({columns}×{rows}). "
+                                            "Elle sera oubliée dès que la barre changera.")
 
         self._run_capture(deliver, process)
 

@@ -70,6 +70,9 @@ tour et combat simulés, placement, lancement, garde-fous (F9, porte d'entrée r
 **Aucune entrée réelle n'est branchée.**
 
 - `python -m combatbot.benchmark --execution-selftest` : auto-test offline de la chaîne d'exécution.
+- Préparation live (lecture seule, `LOT-WINDOWS-ACCEPTANCE-AND-LIVE-READINESS.md`) : `--spell-readiness`,
+  `--runtime-profile`, `--player-cell-diagnostics`, `--targeting-proof-report`, puis après une session guidée
+  (`RECETTE-LIVE-FASTTRACK.md`) `--live-fasttrack-report`.
 - `powershell -ExecutionPolicy Bypass -File scripts\run_windows_acceptance.ps1 -ProfileId N` : recette
   Windows complète en lecture seule ; rapport dans `reports\windows-acceptance-<date>\SUMMARY.md`.
 

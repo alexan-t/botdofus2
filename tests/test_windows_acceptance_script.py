@@ -13,12 +13,21 @@ def test_script_is_readable_by_windows_powershell_5() -> None:
 
 def test_script_runs_every_required_step() -> None:
     text = SCRIPT.read_text(encoding="utf-8-sig")
-    for flag in ("--execution-selftest", "--observation-e2e", "--dry-run-plans", "--acceptance", "--profile-id"):
+    for flag in ("--execution-selftest", "--observation-e2e", "--dry-run-plans", "--acceptance", "--profile-id",
+                 "--resolve-profile", "--spell-readiness", "--runtime-profile", "--player-cell-diagnostics",
+                 "--targeting-proof-report", "--runtime-health", "--ocr-threads-benchmark", "--ui-stress"):
         assert flag in text
     for test in ("test_browser_titled_dofus_is_not_a_game_window", "test_rapidocr_reads_synthetic_visible_text",
                  "test_window_selection_by_handle_and_client_rect"):
         assert test in text
     assert "Get-CorpusSnapshot" in text and "SUMMARY.md" in text and "PYTHONBOT_DATA_DIR" in text
+    assert "## RESOURCE HEALTH" in text and "UI lag" in text and "GDI" in text
+
+
+def test_profile_is_never_guessed() -> None:
+    text = SCRIPT.read_text(encoding="utf-8-sig")
+    assert "dofbot2_last_profile" not in text and "dernier utilisé" not in text
+    assert "exit 2" in text and "-ProfileId <ID>" in text
 
 
 def test_script_never_acts_in_the_game() -> None:

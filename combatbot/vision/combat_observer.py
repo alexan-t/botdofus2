@@ -192,9 +192,12 @@ class RealCombatObserver:
                 if self.grid_resolver is not None else None
             map_resolution = self.map_context.update(frame.image, combat_image, cell_centers=centers)
         mark("map")
+        grid_ms: dict[str, float] = {}
         if self.grid_resolver is not None:
             resolution = self.grid_resolver.resolve(combat_image, frame.client.size, zones)
+            grid_ms["resolve"] = round((time.perf_counter() - lap[0]) * 1000, 2)
             grid = self._validate_grid(resolution, combat_image)
+            grid_ms["validate"] = round((time.perf_counter() - lap[0]) * 1000 - grid_ms["resolve"], 2)
         else:
             grid = infer_combat_grid(combat_image, self.grid_calibration)
         mark("grid")
@@ -350,6 +353,8 @@ class RealCombatObserver:
             "combat_state_model": self.combat_state_model is not None,
             "analysis_ms": elapsed_ms,
             "stage_ms": {name: round(value, 2) for name, value in stage_ms.items()},
+            "capture_ms": dict(getattr(frame, "timings_ms", {}) or {}),
+            "grid_ms": grid_ms,
             "global_confidence": observation.observation_confidence,
             "entities": {"pipeline": "CELL_ENTITY_DETECTOR" if entity_timings else "LEGACY_CLASSIFY",
                          **entity_timings},
@@ -445,7 +450,11 @@ class RealCombatObserver:
         timings = {"detector_ms": detection.timings_ms.get("total", 0.0), "tracker_ms": tracker_ms,
                    "roi_maps_ms": detection.timings_ms.get("roi_maps", 0.0),
                    "player_profile": detection.diagnostics.get("player_profile"),
-                   "team_profile": detection.diagnostics.get("team_profile")}
+                   "team_profile": detection.diagnostics.get("team_profile"),
+                   # Diagnostic de la décision joueur (aucun effet sur la décision elle-même).
+                   "player_decision": detection.diagnostics.get("player_decision"),
+                   "player_candidates": detection.diagnostics.get("player_candidates"),
+                   "player_track_state": player_track.state.value if player_track else None}
         return grid, player_cell, player_cell_id, player_confidence, tuple(enemies), fields, timings
 
     def designate_player_cell(self, pixel: CombatPoint | tuple[int, int], packet: ObservationPacket):
