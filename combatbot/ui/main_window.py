@@ -108,6 +108,7 @@ class MainWindow(QMainWindow):
         self.logs = LogsPage(storage)
         self.settings = SettingsPage(storage, self.jobs)
         self.corpus = CorpusPage()
+        self.corpus.spell_source = self._profile_spells_for_tools
         self.pages = [
             self.dashboard, self.combat, self.spells, self.strategies,
             self.statistics, self.logs, self.settings, self.corpus,
@@ -541,6 +542,11 @@ class MainWindow(QMainWindow):
             self.scan_panel.accept_scan(result)
 
         self._run_capture(deliver, process)
+
+    def _profile_spells_for_tools(self):
+        from combatbot.combat.spells import load_profile_spells
+        profile_id = self.client_panel.profile_id
+        return load_profile_spells(self.storage, profile_id) if profile_id is not None else ()
 
     def _confirm_spell_page(self, page: int, columns: int, rows: int) -> None:
         """Confirmation humaine de la page affichée : signature de la barre mémorisée (aucune action)."""

@@ -427,6 +427,11 @@ class CorpusPage(QWidget):
         self.combat_state_button = QPushButton("Annoter phase et tour…")
         hud_buttons.addWidget(self.combat_state_button)
         self.combat_state_button.clicked.connect(self._annotate_combat_state)
+        self.targeting_proof_button = QPushButton("Preuve portée / LOS (4C)…")
+        hud_buttons.addWidget(self.targeting_proof_button)
+        self.targeting_proof_button.clicked.connect(self._targeting_proof)
+        # Sorts du profil courant (fournis par la fenêtre principale) ; aucun accès direct au stockage ici.
+        self.spell_source = lambda: ()
         hud_buttons.addStretch()
         outer.addLayout(hud_buttons)
         self.hud_review_button.clicked.connect(self._hud_review)
@@ -541,6 +546,20 @@ class CorpusPage(QWidget):
         except ValueError as exc:
             QMessageBox.warning(self, "Phase et tour", str(exc))
         self.refresh()
+
+    def _targeting_proof(self) -> None:
+        from combatbot.combat.targeting_proof import TargetingProofStore
+        from combatbot.runtime import app_data_root
+        from combatbot.ui.targeting_proof_dialog import TargetingProofDialog
+
+        try:
+            dialog = TargetingProofDialog(self.repository, self.spell_source(),
+                                          TargetingProofStore(app_data_root() / "data" / "targeting_proof"), self)
+            if not present_tool(dialog, "portee"):
+                dialog.showMaximized()
+            dialog.exec()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Preuve portée / LOS", str(exc))
 
     def _hud_review(self) -> None:
         from combatbot.ui.hud_review_dialog import HUDReviewDialog

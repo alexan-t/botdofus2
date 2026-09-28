@@ -19,6 +19,7 @@ TOOLS = {
     "entites": ("Annoter les entités", "Placez joueur et ennemis par cellule sur chaque frame"),
     "phase": ("Phase et tour", "Indiquez l'état du combat sur chaque frame"),
     "annot": ("Annotation", "Vérité terrain humaine pour cette observation"),
+    "portee": ("Preuve portée / LOS (4C)", "Marquez les cellules que le client affiche ciblables pour ce sort"),
 }
 
 Presenter = Callable[[QDialog, str], bool]

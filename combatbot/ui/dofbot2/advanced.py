@@ -1075,6 +1075,7 @@ CORPUS_TOOLS = (
     ("phase", "Phase et tour", "Placement, combat, fin et numéro de tour"),
     ("collecte", "Collecte HUD réelle", "Capture PA/PM en direct pendant vos combats"),
     ("recette", "Recette de grille", "Jugez la grille GameData sur une capture"),
+    ("portee", "Preuve portée / LOS", "Vérité du client pour un sort sélectionné par vous"),
 )
 
 
@@ -1222,7 +1223,7 @@ class CorpusToolsPage(AdvancedPage):
         actions = {
             "annot": corpus._annotate, "hud": corpus._hud_review, "entites": corpus._annotate_entities,
             "phase": corpus._annotate_combat_state, "collecte": corpus.hud_collection_requested.emit,
-            "recette": self.legacy.combat.grid_recipe.click,
+            "recette": self.legacy.combat.grid_recipe.click, "portee": corpus._targeting_proof,
         }
         actions[key]()
         if key not in ("collecte", "recette"):

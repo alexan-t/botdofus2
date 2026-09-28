@@ -60,6 +60,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="Rapport profile-spells-readiness du profil (lecture seule)")
     parser.add_argument("--player-cell-diagnostics", action="store_true",
                         help="Raisons de chaque cellule joueur inconnue (sessions + corpus, lecture seule)")
+    parser.add_argument("--targeting-proof-report", action="store_true",
+                        help="4C : compare les règles candidates aux vérités du client collectées (aucune adoptée)")
     parser.add_argument("--runtime-profile", action="store_true",
                         help="Profil de latence par étape depuis les journaux de sessions réelles")
     parser.add_argument("--execution-selftest", action="store_true",
@@ -89,6 +91,8 @@ def main(argv: list[str] | None = None) -> int:
         return _install_entities(args)
     if args.resolve_profile or args.spell_readiness:
         return _profile_reports(args)
+    if args.targeting_proof_report:
+        return _targeting_proof_report(args)
     if args.runtime_profile:
         from combatbot.corpus.acceptance import default_data_dirs
         from combatbot.live.runtime_profile import markdown_report as profile_markdown
@@ -275,8 +279,46 @@ def _profile_reports(args) -> int:
     return 0
 
 
-def _dry_run_plans(repository: CorpusRepository, args) -> int:
+def _combat_map_provider(client):
+    """map_id → CombatMap depuis le client GameData local (None si aucun client configuré)."""
     from combatbot.combat.pathfinding import CombatMap
+    provider = None
+    if client is not None:
+        from combatbot.gamedata.provider import LocalGameDataProvider
+        provider = LocalGameDataProvider(client)
+        provider.scan_client()
+
+    def map_provider(map_id: int):
+        return CombatMap.from_topology(provider.get_map_topology(map_id)) if provider is not None else None
+    return map_provider
+
+
+def _targeting_proof_report(args) -> int:
+    import json
+    from combatbot.combat.targeting_proof import TargetingProofStore, compare
+    store = TargetingProofStore(app_data_root() / "data" / "targeting_proof")
+    map_provider = _combat_map_provider(_client_directory(args))
+
+    def safe_provider(map_id: int):
+        try:
+            return map_provider(map_id)
+        except (OSError, ValueError, KeyError):
+            return None
+
+    report = compare(store.load(), safe_provider)
+    output = args.output_dir or (app_data_root() / "data" / "benchmarks")
+    output.mkdir(parents=True, exist_ok=True)
+    path = output / "4c-proof.json"
+    path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"4C : {report['samples']} échantillon(s), maps {report['maps']}, cas manquants {report['missing_cases']}")
+    for name, bucket in report["candidates"].items():
+        print(f"  {name} : {bucket['verdict']} (accord {bucket['agree']}, désaccord {bucket['disagree']}, "
+              f"inconnu {bucket['unknown']})")
+    print(f"Statut de la règle : {report['rule_status']} · JSON : {path}")
+    return 0
+
+
+def _dry_run_plans(repository: CorpusRepository, args) -> int:
     from combatbot.combat.spells import load_profile_spells
     from combatbot.combat.targeting import CONSERVATIVE_RULES, RangeMetric, TargetingRules
     from combatbot.corpus.dry_run_replay import markdown_report, run_dry_run_replay, write_report
@@ -290,14 +332,7 @@ def _dry_run_plans(repository: CorpusRepository, args) -> int:
     finally:
         storage.close()
     client = _client_directory(args)
-    provider = None
-    if client is not None:
-        from combatbot.gamedata.provider import LocalGameDataProvider
-        provider = LocalGameDataProvider(client)
-        provider.scan_client()
-
-    def map_provider(map_id: int):
-        return CombatMap.from_topology(provider.get_map_topology(map_id)) if provider is not None else None
+    map_provider = _combat_map_provider(client)
 
     rules = TargetingRules(range_metric=RangeMetric.LOGICAL_MANHATTAN) if args.assume_logical_range \
         else CONSERVATIVE_RULES
