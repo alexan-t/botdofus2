@@ -65,6 +65,14 @@ le pathfinding GameData, le domaine sorts, le ciblage fail-closed, le planner et
 - `python -m combatbot.benchmark --dry-run-plans --profile-id N [--assume-logical-range]` : rejeu dry-run
   des décisions.
 
+Cœur d'exécution préparé (`LOT-FASTTRACK-EXECUTION-CORE.md`) : traduction plan → clics écran, boucle fermée,
+tour et combat simulés, placement, lancement, garde-fous (F9, porte d'entrée réelle fermée par défaut).
+**Aucune entrée réelle n'est branchée.**
+
+- `python -m combatbot.benchmark --execution-selftest` : auto-test offline de la chaîne d'exécution.
+- `powershell -ExecutionPolicy Bypass -File scripts\run_windows_acceptance.ps1 -ProfileId N` : recette
+  Windows complète en lecture seule ; rapport dans `reports\windows-acceptance-<date>\SUMMARY.md`.
+
 ## Grille GameData projetée (LOT 3B-2)
 
 Chaîne : `DofusCellId` → `GridCoordinate` (GameData) → `GridScreenTransform` → `CombatPoint` → `LayoutTransform` → `ClientPoint` / `ScreenPoint`.

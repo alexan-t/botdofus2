@@ -60,3 +60,6 @@ Desktop.ini
 # Dumps concaténés du projet (générés, volumineux)
 pythonbot_test.md
 projet-pythonbot_test.md
+
+# Recettes Windows locales (scripts/run_windows_acceptance.ps1)
+reports/
