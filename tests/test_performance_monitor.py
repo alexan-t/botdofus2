@@ -26,6 +26,17 @@ def test_growth_classification() -> None:
     assert percentile([1, 2, 3, 4], 0.5) == 2 and percentile([], 0.5) is None
 
 
+def test_start_stop_growth_excludes_warmup_but_keeps_detecting_a_leak() -> None:
+    from combatbot.performance.health import _cycle_growth
+
+    plateau = [{"t": float(index), "rss_mb": 100 + min(index, 9)} for index in range(20)]
+    leak = [{"t": float(index), "rss_mb": 100 + index} for index in range(20)]
+    warmup, plateau_growth = _cycle_growth(plateau, "rss_mb")
+    assert warmup == 10 and plateau_growth["samples_after_warmup"] == 10
+    assert plateau_growth["verdict"] == "PLATEAU_AFTER_WARMUP"
+    assert _cycle_growth(leak, "rss_mb")[1]["verdict"] == "GROWING"
+
+
 def test_sampler_adds_cpu_after_the_first_sample() -> None:
     sampler = ResourceSampler()
     first, second = sampler.sample(phase="x"), sampler.sample(phase="x")

@@ -135,6 +135,16 @@ def _summarize(name: str, rows: list[dict], counters: _Counters, rebuilds: int, 
             "heap_growth": classify_growth(times, [row.get("python_heap_mb") for row in rows], warmup_s)}
 
 
+def _cycle_growth(rows: list[dict], field: str) -> tuple[int, dict[str, object]]:
+    """Évalue les cycles après leur première moitié d'échauffement."""
+    if not rows:
+        return 0, {"verdict": "NOT_MEASURED"}
+    times = [row["t"] for row in rows]
+    warmup_cycles = len(rows) // 2
+    warmup_s = times[warmup_cycles] - times[0] if len(times) >= 2 else 0
+    return warmup_cycles, classify_growth(times, [row.get(field) for row in rows], warmup_s)
+
+
 def run_health(duration_s: float = 60.0, *, sample_every_s: float = 5.0, cycles: int = 20,
                frames_per_cycle: int = 3, work_s: float = 0.25, trace_python: bool = False,
                phases: tuple[str, ...] = ("IDLE", "OBSERVATION", "ADVANCED_OBSERVATION", "MINIMIZED")
@@ -230,10 +240,21 @@ def run_health(duration_s: float = 60.0, *, sample_every_s: float = 5.0, cycles:
         cycle_rows.append({**sampler.sample(phase="START_STOP"), "cycle": index + 1, "frames": counters.frames,
                            "observer_alive": legacy._observer is not None, "jobs_active": legacy.jobs.active,
                            "packets_alive": _packets_alive(), **_qt_census(window, legacy)})
+    # Les premières créations de workers, caches Qt et buffers d'image sont un
+    # échauffement normal. Une fuite continue reste visible sur la seconde moitié
+    # des cycles ; inclure le warm-up produisait un faux GROWING sous Windows.
+    def cycle_growth(field: str) -> dict[str, object]:
+        return _cycle_growth(cycle_rows, field)[1]
+
     report["start_stop"] = {
         "cycles": cycles, "rows": cycle_rows,
-        "rss_growth": classify_growth([row["t"] for row in cycle_rows], [row.get("rss_mb") for row in cycle_rows],
-                                      warmup_s=0),
+        "warmup_cycles": _cycle_growth(cycle_rows, "rss_mb")[0],
+        "rss_growth": cycle_growth("rss_mb"),
+        "private_growth": cycle_growth("private_mb"),
+        "thread_growth": cycle_growth("threads"),
+        "handle_growth": cycle_growth("handles"),
+        "gdi_growth": cycle_growth("gdi_objects"),
+        "user_growth": cycle_growth("user_objects"),
         "threads": [row.get("threads") for row in cycle_rows],
         "qt_timers": [row["qt_timers"] for row in cycle_rows],
         "qt_timers_active": [row["qt_timers_active"] for row in cycle_rows],
@@ -266,8 +287,13 @@ def markdown_report(report: dict) -> str:
             f"| {phase['accordion_rebuilds']} | {phase['rss_growth']['verdict']} |")
     cycles = report["start_stop"]
     lines += ["", f"## {cycles['cycles']} cycles START/STOP", "",
+              f"- Warm-up exclu du verdict : {cycles.get('warmup_cycles', 0)} premier(s) cycle(s)",
               f"- RSS : {cycles['rss_growth']['verdict']} (début {cycles['rss_growth'].get('start')} Mo, fin "
               f"{cycles['rss_growth'].get('end')} Mo)",
+              f"- Private Bytes : {cycles['private_growth']['verdict']} "
+              f"({cycles['private_growth'].get('start')} → {cycles['private_growth'].get('end')} Mo)",
+              f"- Handles / GDI / USER : {cycles['handle_growth']['verdict']} / "
+              f"{cycles['gdi_growth']['verdict']} / {cycles['user_growth']['verdict']}",
               f"- Threads : {cycles['threads'][0] if cycles['threads'] else None} → "
               f"{cycles['threads'][-1] if cycles['threads'] else None}",
               f"- QTimers (actifs) : {cycles['qt_timers_active'][0] if cycles['qt_timers_active'] else None} → "
