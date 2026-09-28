@@ -261,3 +261,53 @@ Ces résolutions ont une confiance de 0,96 (< 0,97) : aucune empreinte n'est app
   jeu (entrer / sortir d'une mine, d'une étable, d'une maison).
 - Intérieurs entièrement dessinés et maps en plusieurs versions (Jardins d'Hiver, Frigost) : restent
   ambigus → mapId manuel, mémorisé ensuite.
+
+## 12. Test live intérieur — mine du Campement des Gobelins (28/09, 2e PC)
+
+2e PC (client Alea local, layout 2560×1377, profil `combat_grid_v2` existant) ; index spatial
+reconstruit en 78 s (12 154 maps).
+
+### Extérieur : ambiguïtés levées
+Journal : (-4,3) → `104072451` et (-4,2) → `104072452` résolues **sans map précédente** par la forme
+à l'écran (`UNIQUE_AFTER_SCREEN_SHAPE`, 5 salles de mine réfutées par `INDOOR_VOID_LIT`) ; (-4,4)
+→ `104072450` malgré l'OCR « Campement **t** des Gobelins » (similarité de nom). Grille GameData
+projetée et **ALIGNÉE** sur `104072452` après détection automatique (capture utilisateur), sans
+recalibration.
+
+### Bug : une mine prise pour un écran de chargement — corrigé
+Dans la mine, rien n'était journalisé et la map n'était jamais trouvée. Cause : `MapTransitionDetector`
+considérait « moyenne < 18 » comme écran noir de transition ; la mine (grand fond noir) mesure 14,8 de
+moyenne avec ≈ 22 % de pixels éclairés → TRANSITION permanente, aucune lecture OCR (qui lisait pourtant
+« -4,2, Niveau 30 » à 0,997). Correction : noir = moyenne < 18 **et** < 5 % de pixels > 40. Tests :
+fixture réelle `tests/fixtures/map_transition/mine-campement-gobelins-192x108.png` (échouent sur l'ancien code).
+
+### Résultat dans la mine
+- Entrée : **AMBIGUOUS** entre les 5 salles en (-4,2) ; l'extérieur réfuté (36 % de cases marchables noires).
+- Vérité utilisateur (`/mapid`) : entrée depuis le campement = **`104858121`**.
+- **Le seuil de soutien de forme (≤ 10 %) est faux pour les intérieurs** : la vraie salle a 10,6 % de
+  cases marchables noires (donc « non soutenue ») et une mauvaise salle (`104862217`) 0 %. Choisir par
+  la forme aurait donné une mauvaise map ; l'abstention était la bonne réponse. Le 10 % venait de 472
+  frames **extérieures** uniquement. Non modifié (un seul exemple) ; à ne pas utiliser pour départager
+  des intérieurs.
+- La mine a 8 salles (5 en (-4,2), puis (-4,3) `104862209`, (-5,3) `104859137`, (-6,4) `104860161`),
+  **non reliées dans le graphe GameData** (portes, pas de bords) : aucune déduction de salle en salle.
+- Secours manuel `104858121` : confirmation + empreinte `human_manual` mémorisées ; sortie → extérieur
+  retrouvé (`previous_map_id` = `104858121`). **Retour dans la mine par l'empreinte : non vérifié en live.**
+
+### Autres corrections
+- Outils avancés : la ligne « Revenir à la détection automatique » n'apparaissait jamais — `isVisible()`
+  est toujours faux sur le contrôleur historique masqué ; remplacé par `not isHidden()` (+ test).
+- Confirmation manuelle répétée (3 clics « Utiliser ») : une seule entrée mémorisée (+ test).
+- `build_exe.ps1` : sous Windows PowerShell 5.1, les INFO de PyInstaller (stderr) arrêtaient le script
+  avec `$ErrorActionPreference = "Stop"` ; seul le code de sortie fait foi désormais. Build + smoke OK.
+
+### Statuts mis à jour
+```
+MAP CHANGE DETECTION:            PASS live (+ intérieur sombre après correction)
+INDOOR (mine) :                  PASS prudent (extérieur réfuté, AMBIGUOUS entre salles, 0 mauvaise map)
+GAMEDATA AUTOLOAD / CALIBRATION REUSE : PASS live (104072452 alignée sans recalibration)
+GRID ALIGNMENT AFTER MAP CHANGE: PASS live sur 1 map ; combat après changement non observé
+FINGERPRINT REVISIT (intérieur): NON VÉRIFIÉ live
+WRONG MAPS (live):               0
+ACTIONS:                         NONE
+```
