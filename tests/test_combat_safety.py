@@ -196,3 +196,17 @@ def test_only_the_win32_module_holds_real_input_calls() -> None:
     holders = sorted(str(path.relative_to(root)) for path in root.rglob("*.py")
                      if any(token in path.read_text(encoding="utf-8") for token in tokens))
     assert holders == ["input/win32_mouse.py"]
+
+
+def test_rate_limit_reports_the_wait_instead_of_forcing_an_abort() -> None:
+    clock = Clock()
+    guard = SafetyGuard(SafetyLimits(max_clicks_per_second=2), EmergencyStop(), clock)
+    guard.begin_turn()
+    assert guard.seconds_until_click_allowed() == 0.0
+    guard.record_action()
+    clock.now += 0.25
+    guard.record_action()
+    wait = guard.seconds_until_click_allowed()
+    assert 0.75 < wait < 0.76
+    clock.now += wait
+    assert guard.seconds_until_click_allowed() == 0.0 and check(guard, clock).allowed

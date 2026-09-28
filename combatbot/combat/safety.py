@@ -179,6 +179,15 @@ class SafetyGuard:
             reasons.append("cadence maximale de clics atteinte")
         return SafetyVerdict(not reasons, tuple(reasons))
 
+    def seconds_until_click_allowed(self) -> float:
+        """Attente nécessaire pour rester sous ``max_clicks_per_second`` (0 si un clic est permis)."""
+        now = self.clock()
+        while self._clicks and now - self._clicks[0] >= 1.0:
+            self._clicks.popleft()
+        if len(self._clicks) < self.limits.max_clicks_per_second:
+            return 0.0
+        return max(0.0, 1.0 - (now - self._clicks[0])) + 1e-3
+
     def record_action(self) -> None:
         self.actions_this_turn += 1
         self._clicks.append(self.clock())
