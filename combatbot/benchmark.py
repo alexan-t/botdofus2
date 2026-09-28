@@ -54,6 +54,10 @@ def main(argv: list[str] | None = None) -> int:
                              "(prédictions enregistrées seulement, sans DOFUS ; filtre : --entity-splits)")
     parser.add_argument("--dry-run-plans", action="store_true",
                         help="FAST-4D/5A0 : rejoue le corpus à travers état → plan → exécuteur dry-run (aucune action)")
+    parser.add_argument("--resolve-profile", action="store_true",
+                        help="Profil de recette non ambigu (JSON) ; code 2 si plusieurs profils sans --profile-id")
+    parser.add_argument("--spell-readiness", action="store_true",
+                        help="Rapport profile-spells-readiness du profil (lecture seule)")
     parser.add_argument("--execution-selftest", action="store_true",
                         help="Auto-test offline de la chaîne d'exécution (aucune entrée réelle)")
     parser.add_argument("--profile-id", type=int, help="Profil dont les sorts confirmés sont utilisés (défaut : dernier)")
@@ -79,6 +83,8 @@ def main(argv: list[str] | None = None) -> int:
         if not args.entities:
             parser.error("--install-runtime-profiles exige --entities")
         return _install_entities(args)
+    if args.resolve_profile or args.spell_readiness:
+        return _profile_reports(args)
     if args.execution_selftest:
         from combatbot.combat.selftest import markdown_report as selftest_markdown
         from combatbot.combat.selftest import run_selftest, write_report as write_selftest
@@ -217,6 +223,33 @@ def _install_entities(args) -> int:
     if args.output_dir:
         args.output_dir.mkdir(parents=True, exist_ok=True)
         (args.output_dir / "runtime-installation.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+    return 0
+
+
+def _profile_reports(args) -> int:
+    import json
+    from combatbot.live.profiles import resolve_profile
+    from combatbot.runtime import database_path
+    from combatbot.storage import Storage
+
+    storage = Storage(database_path())
+    try:
+        resolution = resolve_profile(storage, args.profile_id)
+        if args.resolve_profile:
+            print(json.dumps(resolution.to_dict(), ensure_ascii=False))
+            return 0 if resolution.profile_id is not None else 2
+        if resolution.profile_id is None:
+            print(f"Profil non déterminé : {resolution.reason}")
+            for candidate in resolution.candidates:
+                print(f"  --profile-id {candidate[0]}  ({candidate[1]})")
+            return 2
+        from combatbot.live.spell_readiness import markdown_report, spell_readiness, write_report
+        report = spell_readiness(storage, resolution.profile_id)
+    finally:
+        storage.close()
+    json_path, _ = write_report(report, args.output_dir or (app_data_root() / "data" / "benchmarks"))
+    print(markdown_report(report))
+    print(f"JSON : {json_path}")
     return 0
 
 
