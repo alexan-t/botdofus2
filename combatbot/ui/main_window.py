@@ -69,6 +69,8 @@ class MainWindow(QMainWindow):
         self._last_observation: ObservationPacket | None = None
         # LOT 3B-6C : map détectée automatiquement ; la déclaration manuelle reste un secours.
         self._map_identity = AutoMapIdentity()
+        self._last_plan = None          # FAST-4D : dernier plan dry-run (aucune action)
+        self.dry_run_assume_range = False
         self._map_preparation = None      # préparation en thread (index GameData + topologie)
         self._topology_source: GameDataTopologySource | None = None
         self._topology_folder: str | None = None
@@ -106,6 +108,7 @@ class MainWindow(QMainWindow):
         self.logs = LogsPage(storage)
         self.settings = SettingsPage(storage, self.jobs)
         self.corpus = CorpusPage()
+        self.corpus.spell_source = self._profile_spells_for_tools
         self.pages = [
             self.dashboard, self.combat, self.spells, self.strategies,
             self.statistics, self.logs, self.settings, self.corpus,
@@ -183,7 +186,10 @@ class MainWindow(QMainWindow):
             lambda mode: self._stop_observation() if mode == "Simulation" else None
         )
         self.scan_panel.scan_requested.connect(self._scan_spells)
+        self.scan_panel.scan_finished.connect(lambda _count: self.invalidate_plan_spells())
+        self.client_panel.profile_changed.connect(lambda _profile_id: self.invalidate_plan_spells())
         self.scan_panel.tooltip_requested.connect(self._scan_tooltip)
+        self.scan_panel.page_confirm_requested.connect(self._confirm_spell_page)
         if self.client_panel.profile_id is not None:
             self.scan_panel.set_profile(self.client_panel.profile_id)
         self.connection_timer = QTimer(self)
@@ -534,6 +540,37 @@ class MainWindow(QMainWindow):
             if self.client_panel.profile_id != profile_id:
                 raise ValueError("Le profil a changé pendant le scan ; résultat non enregistré")
             self.scan_panel.accept_scan(result)
+
+        self._run_capture(deliver, process)
+
+    def _profile_spells_for_tools(self):
+        from combatbot.combat.spells import load_profile_spells
+        profile_id = self.client_panel.profile_id
+        return load_profile_spells(self.storage, profile_id) if profile_id is not None else ()
+
+    def _confirm_spell_page(self, page: int, columns: int, rows: int) -> None:
+        """Confirmation humaine de la page affichée : signature de la barre mémorisée (aucune action)."""
+        from datetime import datetime
+        from combatbot.combat.spell_page import ConfirmedSpellPage, save_confirmed_page
+        from combatbot.vision.icons import bar_signature
+        profile_id = self.client_panel.profile_id
+        calibration = self.storage.load_calibration(profile_id) if profile_id is not None else None
+        if calibration is None:
+            self._vision_error("Calibrez la barre de sorts avant de confirmer la page affichée.")
+            return
+
+        def process(frame: CapturedFrame):
+            return bar_signature(calibration.crop(frame, "spell_bar"), columns, rows)
+
+        def deliver(_frame: CapturedFrame, signature) -> None:
+            if self.client_panel.profile_id != profile_id:
+                raise ValueError("Le profil a changé pendant la confirmation ; page non enregistrée")
+            if sum(value is not None for value in signature.values()) < 2:
+                raise ValueError("Trop peu de sorts visibles dans la barre : page non confirmée")
+            save_confirmed_page(self.storage, profile_id, ConfirmedSpellPage(
+                page, signature, datetime.now().astimezone().isoformat(timespec="seconds")))
+            self.scan_panel.summary.setText(f"Page {page} confirmée comme page affichée ({columns}×{rows}). "
+                                            "Elle sera oubliée dès que la barre changera.")
 
         self._run_capture(deliver, process)
 
@@ -1039,6 +1076,7 @@ class MainWindow(QMainWindow):
             if telemetry is not None:
                 telemetry.record(value.metadata, value.observation)
             self.combat.set_observation(value)
+            self._plan_dry_run(value)
             if self.combat.sequence_capture.isChecked():
                 self._capture_sequence(value)
 
@@ -1054,6 +1092,46 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Vision réelle", f"Observation interrompue : {message}")
 
         self.jobs.submit(observer.observe, success, failure)
+
+    # FAST-4D/5A0 : ce que le bot ferait sur cette frame, calculé en lecture seule. Aucune action n'est
+    # envoyée ; une erreur du planificateur n'interrompt jamais l'observation.
+    def _plan_dry_run(self, packet: ObservationPacket) -> None:
+        from combatbot.combat.pathfinding import CombatMap
+        from combatbot.combat.planner import plan_turn
+        from combatbot.combat.spells import load_profile_spells
+        from combatbot.combat.state import RealCombatState
+        from combatbot.combat.targeting import CONSERVATIVE_RULES, RangeMetric, TargetingRules
+        try:
+            profile_id = self.client_panel.profile_id
+            if profile_id is None:
+                self._last_plan = None
+                return
+            if getattr(self, "_plan_spells_profile", None) != profile_id:
+                self._plan_spells = load_profile_spells(self.storage, profile_id)
+                self._plan_spells_profile = profile_id
+            topology = self._declared_topology
+            combat_map = getattr(self, "_plan_map", None)
+            if topology is None:
+                combat_map = None
+            elif combat_map is None or combat_map.map_id != topology.map_id:
+                combat_map = CombatMap.from_topology(topology)
+            self._plan_map = combat_map
+            semantic = packet.metadata.get("semantic_combat_state") or {}
+            identity = self._map_identity.current_map()
+            state = RealCombatState.from_observation(
+                packet.observation, map_id=identity.map_id if identity else None,
+                phase=semantic.get("phase"), turn=semantic.get("turn_owner"))
+            rules = TargetingRules(range_metric=RangeMetric.LOGICAL_MANHATTAN) \
+                if getattr(self, "dry_run_assume_range", False) else CONSERVATIVE_RULES
+            self._last_plan = plan_turn(state, combat_map, self._plan_spells, rules=rules)
+        except Exception as exc:  # noqa: BLE001 - diagnostic seulement, jamais bloquant
+            self._last_plan = None
+            if not getattr(self, "_plan_error_logged", False):
+                self._plan_error_logged = True
+                self._on_event(CombatEvent("WARNING", "combat.dry_run", f"Plan dry-run indisponible : {exc}"))
+
+    def invalidate_plan_spells(self) -> None:
+        self._plan_spells_profile = None
 
     def _save_observation(self) -> None:
         packet = self._last_observation

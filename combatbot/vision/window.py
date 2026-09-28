@@ -98,7 +98,9 @@ def list_dofus_windows(fragment: str = "DOFUS") -> list[WindowInfo]:
     dès que Windows identifie un autre exécutable que Dofus.exe."""
     user32 = _user32()
     windows: list[WindowInfo] = []
-    callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    # WINFUNCTYPE n'existe que sous Windows (même type qu'avant) ; le repli CFUNCTYPE ne sert qu'à
+    # exécuter la logique de filtrage ailleurs, avec un user32 simulé.
+    callback_type = getattr(ctypes, "WINFUNCTYPE", ctypes.CFUNCTYPE)(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 
     def visit(hwnd: int, _lparam: int) -> bool:
         if user32.IsWindowVisible(hwnd):

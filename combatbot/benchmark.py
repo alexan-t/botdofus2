@@ -49,6 +49,39 @@ def main(argv: list[str] | None = None) -> int:
                         help="3B-6C : rejouer le corpus pour mesurer la résolution automatique de map")
     parser.add_argument("--acceptance", action="store_true",
                         help="3B-7 : recette consolidée (rapports des bancs + sessions réelles), sans rien relancer")
+    parser.add_argument("--observation-e2e", action="store_true",
+                        help="FAST-3B7 : observation complète frame par frame contre les vérités humaines "
+                             "(prédictions enregistrées seulement, sans DOFUS ; filtre : --entity-splits)")
+    parser.add_argument("--dry-run-plans", action="store_true",
+                        help="FAST-4D/5A0 : rejoue le corpus à travers état → plan → exécuteur dry-run (aucune action)")
+    parser.add_argument("--resolve-profile", action="store_true",
+                        help="Profil de recette non ambigu (JSON) ; code 2 si plusieurs profils sans --profile-id")
+    parser.add_argument("--spell-readiness", action="store_true",
+                        help="Rapport profile-spells-readiness du profil (lecture seule)")
+    parser.add_argument("--player-cell-diagnostics", action="store_true",
+                        help="Raisons de chaque cellule joueur inconnue (sessions + corpus, lecture seule)")
+    parser.add_argument("--live-fasttrack-report", action="store_true",
+                        help="Dossier reports/live-fasttrack-<date> après une session réelle (lecture seule)")
+    parser.add_argument("--session-id", help="Session à analyser (défaut : la plus récente)")
+    parser.add_argument("--targeting-proof-report", action="store_true",
+                        help="4C : compare les règles candidates aux vérités du client collectées (aucune adoptée)")
+    parser.add_argument("--ocr-threads-benchmark", action="store_true",
+                        help="Temps OCR et CPU selon les threads ONNX Runtime de RapidOCR (rien n'est appliqué)")
+    parser.add_argument("--ui-stress", action="store_true",
+                        help="GDI/USER/handles/RSS après des blocs répétés d'opérations UI (aucune action jeu)")
+    parser.add_argument("--runtime-health", action="store_true",
+                        help="Santé CPU/RAM/threads/handles/UI de DofBot2 sur frames synthétiques (aucune action)")
+    parser.add_argument("--duration", type=float, default=60.0, help="--runtime-health : durée par phase (s)")
+    parser.add_argument("--sample-every", type=float, default=5.0, help="--runtime-health : période d'échantillon (s)")
+    parser.add_argument("--cycles", type=int, default=20, help="--runtime-health : cycles START/STOP")
+    parser.add_argument("--trace-python", action="store_true", help="--runtime-health : tas Python (tracemalloc)")
+    parser.add_argument("--runtime-profile", action="store_true",
+                        help="Profil de latence par étape depuis les journaux de sessions réelles")
+    parser.add_argument("--execution-selftest", action="store_true",
+                        help="Auto-test offline de la chaîne d'exécution (aucune entrée réelle)")
+    parser.add_argument("--profile-id", type=int, help="Profil dont les sorts confirmés sont utilisés (défaut : dernier)")
+    parser.add_argument("--assume-logical-range", action="store_true",
+                        help="Hypothèse explicite, non prouvée : portée = distance logique |dx|+|dy| (tracée dans le rapport)")
     parser.add_argument("--data-dir", type=Path, action="append",
                         help="3B-7 : dossier data/ à inspecter (répétable ; défaut : sources, runtime, LocalAppData)")
     parser.add_argument("--limit", type=int, help="Nombre maximal de frames (diagnostic)")
@@ -69,6 +102,61 @@ def main(argv: list[str] | None = None) -> int:
         if not args.entities:
             parser.error("--install-runtime-profiles exige --entities")
         return _install_entities(args)
+    if args.resolve_profile or args.spell_readiness:
+        return _profile_reports(args)
+    if args.targeting_proof_report:
+        return _targeting_proof_report(args)
+    if args.live_fasttrack_report:
+        return _live_fasttrack_report(args)
+    if args.ocr_threads_benchmark:
+        import json
+        from combatbot.performance.ocr_benchmark import markdown_report as ocr_markdown
+        from combatbot.performance.ocr_benchmark import run_ocr_threads_benchmark
+        report = run_ocr_threads_benchmark()
+        output = args.output_dir or (app_data_root() / "data" / "benchmarks")
+        output.mkdir(parents=True, exist_ok=True)
+        (output / "ocr-threads.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(ocr_markdown(report))
+        return 0
+    if args.ui_stress:
+        import json
+        from combatbot.performance.health import run_ui_stress
+        output = args.output_dir or (app_data_root() / "data" / "benchmarks")
+        report = run_ui_stress(max(3, args.cycles // 2))
+        output.mkdir(parents=True, exist_ok=True)
+        (output / "ui-stress.json").write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str),
+                                              encoding="utf-8")
+        for key in ("gdi_growth", "user_growth", "handles_growth", "rss_growth"):
+            print(f"{key}: {report[key].get('verdict')} ({report[key].get('start')} → {report[key].get('end')})")
+        print(f"threads : {report['threads']}")
+        return 0
+    if args.runtime_health:
+        from combatbot.performance.health import markdown_report as health_markdown
+        from combatbot.performance.health import run_health, write_report as write_health
+        output = args.output_dir or (app_data_root() / "data" / "benchmarks")   # avant l'isolation du harnais
+        report = run_health(args.duration, sample_every_s=args.sample_every, cycles=args.cycles,
+                            trace_python=args.trace_python)
+        json_path, _ = write_health(report, output)
+        print(health_markdown(report))
+        print(f"JSON : {json_path}")
+        return 0
+    if args.runtime_profile:
+        from combatbot.corpus.acceptance import default_data_dirs
+        from combatbot.live.runtime_profile import markdown_report as profile_markdown
+        from combatbot.live.runtime_profile import runtime_profile, write_report as write_profile
+        report = runtime_profile(args.data_dir or default_data_dirs())
+        json_path, _ = write_profile(report, args.output_dir or (app_data_root() / "data" / "benchmarks"))
+        print(profile_markdown(report))
+        print(f"JSON : {json_path}")
+        return 0
+    if args.execution_selftest:
+        from combatbot.combat.selftest import markdown_report as selftest_markdown
+        from combatbot.combat.selftest import run_selftest, write_report as write_selftest
+        report = run_selftest()
+        json_path, _ = write_selftest(report, args.output_dir or (app_data_root() / "data" / "benchmarks"))
+        print(selftest_markdown(report))
+        print(f"JSON : {json_path}")
+        return 0 if report["verdict"] == "PASS" else 1
     if args.acceptance:
         from combatbot.corpus.acceptance import markdown_report, run_acceptance, write_acceptance
         report = run_acceptance(args.data_dir)
@@ -77,6 +165,26 @@ def main(argv: list[str] | None = None) -> int:
         print(f"JSON : {json_path}")
         return 0
     repository = CorpusRepository(args.corpus_root)
+    if args.observation_e2e:
+        from combatbot.corpus.observation_e2e_benchmark import markdown_report as e2e_markdown
+        from combatbot.corpus.observation_e2e_benchmark import run_observation_e2e, write_report as write_e2e
+        report = run_observation_e2e(repository, tuple(args.entity_splits) if args.entity_splits else None)
+        json_path, markdown_path = write_e2e(report, args.output_dir or (app_data_root() / "data" / "benchmarks"))
+        print(e2e_markdown(report))
+        print(f"JSON : {json_path}")
+        print(f"Markdown : {markdown_path}")
+        return 0
+    if args.dry_run_plans:
+        return _dry_run_plans(repository, args)
+    if args.player_cell_diagnostics:
+        from combatbot.corpus.acceptance import default_data_dirs
+        from combatbot.live.player_cell_diagnostics import diagnose, load_records, markdown_report as cell_markdown
+        from combatbot.live.player_cell_diagnostics import write_report as write_cells
+        report = diagnose(load_records(args.data_dir or default_data_dirs(), repository))
+        json_path, _ = write_cells(report, args.output_dir or (app_data_root() / "data" / "benchmarks"))
+        print(cell_markdown(report))
+        print(f"JSON : {json_path}")
+        return 0
     if args.combat_state or args.install_combat_state_model:
         return _combat_state(repository, args)
     if args.map_resolution:
@@ -188,6 +296,129 @@ def _install_entities(args) -> int:
     if args.output_dir:
         args.output_dir.mkdir(parents=True, exist_ok=True)
         (args.output_dir / "runtime-installation.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+    return 0
+
+
+def _profile_reports(args) -> int:
+    import json
+    from combatbot.live.profiles import resolve_profile
+    from combatbot.runtime import database_path
+    from combatbot.storage import Storage
+
+    storage = Storage(database_path())
+    try:
+        resolution = resolve_profile(storage, args.profile_id)
+        if args.resolve_profile:
+            print(json.dumps(resolution.to_dict(), ensure_ascii=False))
+            return 0 if resolution.profile_id is not None else 2
+        if resolution.profile_id is None:
+            print(f"Profil non déterminé : {resolution.reason}")
+            for candidate in resolution.candidates:
+                print(f"  --profile-id {candidate[0]}  ({candidate[1]})")
+            return 2
+        from combatbot.live.spell_readiness import markdown_report, spell_readiness, write_report
+        report = spell_readiness(storage, resolution.profile_id)
+    finally:
+        storage.close()
+    json_path, _ = write_report(report, args.output_dir or (app_data_root() / "data" / "benchmarks"))
+    print(markdown_report(report))
+    print(f"JSON : {json_path}")
+    return 0
+
+
+def _combat_map_provider(client):
+    """map_id → CombatMap depuis le client GameData local (None si aucun client configuré)."""
+    from combatbot.combat.pathfinding import CombatMap
+    provider = None
+    if client is not None:
+        from combatbot.gamedata.provider import LocalGameDataProvider
+        provider = LocalGameDataProvider(client)
+        provider.scan_client()
+
+    def map_provider(map_id: int):
+        return CombatMap.from_topology(provider.get_map_topology(map_id)) if provider is not None else None
+    return map_provider
+
+
+def _live_fasttrack_report(args) -> int:
+    from datetime import datetime
+    from combatbot.combat.targeting_proof import TargetingProofStore, compare
+    from combatbot.corpus.acceptance import default_data_dirs
+    from combatbot.live.fasttrack_bundle import build_bundle, latest_session, readiness_report, write_bundle
+    from combatbot.runtime import database_path
+    from combatbot.storage import Storage
+
+    data_dirs = args.data_dir or default_data_dirs()
+    session = args.session_id or latest_session(data_dirs)
+    map_provider = _combat_map_provider(_client_directory(args))
+
+    def safe_provider(map_id: int):
+        try:
+            return map_provider(map_id)
+        except (OSError, ValueError, KeyError):
+            return None
+
+    proof = compare(TargetingProofStore(app_data_root() / "data" / "targeting_proof").load(), safe_provider)
+    readiness = readiness_report(lambda: Storage(database_path()), args.profile_id)
+    reports = build_bundle(data_dirs, session=session, readiness=readiness, targeting_proof=proof)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    output = write_bundle(reports, args.output_dir or (PROJECT_ROOT / "reports" / f"live-fasttrack-{stamp}"),
+                          session=session)
+    print((output / "summary.md").read_text(encoding="utf-8"))
+    print(f"Dossier : {output}")
+    return 0
+
+
+def _targeting_proof_report(args) -> int:
+    import json
+    from combatbot.combat.targeting_proof import TargetingProofStore, compare
+    store = TargetingProofStore(app_data_root() / "data" / "targeting_proof")
+    map_provider = _combat_map_provider(_client_directory(args))
+
+    def safe_provider(map_id: int):
+        try:
+            return map_provider(map_id)
+        except (OSError, ValueError, KeyError):
+            return None
+
+    report = compare(store.load(), safe_provider)
+    output = args.output_dir or (app_data_root() / "data" / "benchmarks")
+    output.mkdir(parents=True, exist_ok=True)
+    path = output / "4c-proof.json"
+    path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"4C : {report['samples']} échantillon(s), maps {report['maps']}, cas manquants {report['missing_cases']}")
+    for name, bucket in report["candidates"].items():
+        print(f"  {name} : {bucket['verdict']} (accord {bucket['agree']}, désaccord {bucket['disagree']}, "
+              f"inconnu {bucket['unknown']})")
+    print(f"Statut de la règle : {report['rule_status']} · JSON : {path}")
+    return 0
+
+
+def _dry_run_plans(repository: CorpusRepository, args) -> int:
+    from combatbot.combat.spells import load_profile_spells
+    from combatbot.combat.targeting import CONSERVATIVE_RULES, RangeMetric, TargetingRules
+    from combatbot.corpus.dry_run_replay import markdown_report, run_dry_run_replay, write_report
+    from combatbot.runtime import database_path
+    from combatbot.storage import Storage
+
+    storage = Storage(database_path())
+    try:
+        profile_id = args.profile_id or storage.get_setting("dofbot2_last_profile")
+        spells = load_profile_spells(storage, int(profile_id)) if profile_id else ()
+    finally:
+        storage.close()
+    client = _client_directory(args)
+    map_provider = _combat_map_provider(client)
+
+    rules = TargetingRules(range_metric=RangeMetric.LOGICAL_MANHATTAN) if args.assume_logical_range \
+        else CONSERVATIVE_RULES
+    report = run_dry_run_replay(repository, map_provider, spells, rules=rules, limit=args.limit)
+    report["profile_id"] = profile_id
+    report["client"] = str(client) if client else None
+    json_path, markdown_path = write_report(report, args.output_dir or (app_data_root() / "data" / "benchmarks"))
+    print(markdown_report(report))
+    print(f"JSON : {json_path}")
+    print(f"Markdown : {markdown_path}")
     return 0
 
 

@@ -55,6 +55,37 @@ def repolish(widget: QWidget) -> None:
     widget.update()
 
 
+# --- Mises à jour différentielles : rien n'est réécrit (ni re-polish) si la valeur n'a pas changé ----
+def set_text(widget, text: str) -> bool:
+    if widget.text() == text:
+        return False
+    widget.setText(text)
+    return True
+
+
+def set_style(widget: QWidget, style: str) -> bool:
+    if widget.styleSheet() == style:
+        return False
+    widget.setStyleSheet(style)
+    return True
+
+
+def set_tooltip(widget: QWidget, text: str) -> bool:
+    if widget.toolTip() == text:
+        return False
+    widget.setToolTip(text)
+    return True
+
+
+def set_prop(widget: QWidget, name: str, value) -> bool:
+    """Propriété dynamique utilisée par la feuille de style : re-polish seulement si elle change."""
+    if widget.property(name) == value:
+        return False
+    widget.setProperty(name, value)
+    repolish(widget)
+    return True
+
+
 class Switch(QAbstractButton):
     """Interrupteur 40×22 : on #8fd14f + bouton #0b1408, off #2a332c + bouton #8e9c8f."""
 
@@ -402,6 +433,12 @@ class Accordion(QWidget):
         self.body.setVisible(opened)
         self.header.set_rotation(180.0 if opened else 0.0)
         self._sync_style()
+
+    def set_subtitle(self, subtitle: str) -> None:
+        """Mise à jour en place (aucune reconstruction de l'accordéon)."""
+        if self.header.subtitle != subtitle:
+            self.header.subtitle = subtitle
+            self.header.update()
 
     def rows(self) -> list[QWidget]:
         layout = self.body.layout()

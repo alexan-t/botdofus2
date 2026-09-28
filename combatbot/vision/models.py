@@ -68,6 +68,8 @@ class CapturedFrame:
     image: np.ndarray  # BGR, lecture seule par convention
     activation_succeeded: bool = True
     source: str = "window"  # window ou desktop
+    # Sous-étapes de la capture (ms) : grab, contrôles, conversion. Diagnostic de latence uniquement.
+    timings_ms: dict[str, float] = field(default_factory=dict, compare=False)
 
 
 @dataclass(frozen=True)
