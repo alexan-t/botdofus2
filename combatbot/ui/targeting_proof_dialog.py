@@ -83,7 +83,7 @@ class TargetingProofDialog(QDialog):
     def _show(self) -> None:
         if not self.entries:
             self.header.setText("Aucune observation avec grille GameData projetée. Dans DOFUS, sélectionnez un sort "
-                                "(sans le lancer), puis « Enregistrer l'observation » dans Vision réelle.")
+                                "(sans le lancer), puis « Enregistrer cette observation » dans l'observation réelle.")
             return
         entry = self.entries[self.index]
         self.document = self.repository.read_observation(entry)

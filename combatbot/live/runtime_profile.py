@@ -17,12 +17,21 @@ from combatbot.vision.session_telemetry import STAGES, _stats
 P95_CRITERION_MS = 400.0
 
 
-def load_frames(data_dirs: list[Path]) -> list[tuple[str, dict]]:
+def session_journals(data_dirs: list[Path]) -> dict[str, Path]:
+    """session → journal (premier dossier de données qui la contient)."""
+    journals: dict[str, Path] = {}
+    for root in data_dirs:
+        for journal in sorted(Path(root).glob("logs/sessions/*/frames.jsonl")):
+            journals.setdefault(journal.parent.name, journal)
+    return journals
+
+
+def load_frames(data_dirs: list[Path], sessions: set[str] | None = None) -> list[tuple[str, dict]]:
     frames, seen = [], set()
     for root in data_dirs:
         for journal in sorted(Path(root).glob("logs/sessions/*/frames.jsonl")):
             session = journal.parent.name
-            if session in seen:
+            if session in seen or (sessions is not None and session not in sessions):
                 continue
             seen.add(session)
             try:
@@ -48,8 +57,8 @@ def _stage_values(frames: list[tuple[str, dict]], key: str, stage: str) -> list[
     return values
 
 
-def runtime_profile(data_dirs: list[Path]) -> dict[str, object]:
-    frames = load_frames(data_dirs)
+def runtime_profile(data_dirs: list[Path], sessions: set[str] | None = None) -> dict[str, object]:
+    frames = load_frames(data_dirs, sessions)
     stages = {stage: _stats(_stage_values(frames, "stage_ms", stage)) for stage in STAGES}
     def substeps(key: str) -> dict[str, dict]:
         names = sorted({name for _s, record in frames for name in (record.get(key) or {})})

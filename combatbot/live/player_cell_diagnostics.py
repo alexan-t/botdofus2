@@ -98,10 +98,10 @@ def classify(record: dict) -> str | None:
             "conflict_with_prior": "CONFLICT_WITH_PRIOR"}.get(decision, "TRACKER_DROPPED")
 
 
-def load_records(data_dirs: list[Path], repository=None) -> list[dict]:
+def load_records(data_dirs: list[Path], repository=None, sessions: set[str] | None = None) -> list[dict]:
     from combatbot.live.runtime_profile import load_frames
     records = []
-    for session, frame in load_frames(data_dirs):
+    for session, frame in load_frames(data_dirs, sessions):
         records.append({**frame, "session": session, "source": "session"})
     if repository is not None:
         for entry in repository.list_entries():

@@ -1,7 +1,7 @@
 """LOT-4C-LIVE-PROOF : vérité du client sur la portée et la LOS, et comparaison de règles candidates.
 
 Principe : l'utilisateur sélectionne **lui-même** un sort dans DOFUS. Le client affiche alors les
-cellules ciblables. PythonBot enregistre la frame (flux « Enregistrer l'observation » existant, aucune
+cellules ciblables. PythonBot enregistre la frame (« Enregistrer cette observation », aucune
 action) et l'utilisateur annote chaque cellule : ciblable, non ciblable, obstacle. Ce module :
 
 - porte l'échantillon (``ProofSample``) et son stockage JSON, hors corpus (aucune vérité modifiée) ;

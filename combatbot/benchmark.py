@@ -60,6 +60,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="Rapport profile-spells-readiness du profil (lecture seule)")
     parser.add_argument("--player-cell-diagnostics", action="store_true",
                         help="Raisons de chaque cellule joueur inconnue (sessions + corpus, lecture seule)")
+    parser.add_argument("--live-fasttrack-report", action="store_true",
+                        help="Dossier reports/live-fasttrack-<date> après une session réelle (lecture seule)")
+    parser.add_argument("--session-id", help="Session à analyser (défaut : la plus récente)")
     parser.add_argument("--targeting-proof-report", action="store_true",
                         help="4C : compare les règles candidates aux vérités du client collectées (aucune adoptée)")
     parser.add_argument("--runtime-profile", action="store_true",
@@ -93,6 +96,8 @@ def main(argv: list[str] | None = None) -> int:
         return _profile_reports(args)
     if args.targeting_proof_report:
         return _targeting_proof_report(args)
+    if args.live_fasttrack_report:
+        return _live_fasttrack_report(args)
     if args.runtime_profile:
         from combatbot.corpus.acceptance import default_data_dirs
         from combatbot.live.runtime_profile import markdown_report as profile_markdown
@@ -291,6 +296,35 @@ def _combat_map_provider(client):
     def map_provider(map_id: int):
         return CombatMap.from_topology(provider.get_map_topology(map_id)) if provider is not None else None
     return map_provider
+
+
+def _live_fasttrack_report(args) -> int:
+    from datetime import datetime
+    from combatbot.combat.targeting_proof import TargetingProofStore, compare
+    from combatbot.corpus.acceptance import default_data_dirs
+    from combatbot.live.fasttrack_bundle import build_bundle, latest_session, readiness_report, write_bundle
+    from combatbot.runtime import database_path
+    from combatbot.storage import Storage
+
+    data_dirs = args.data_dir or default_data_dirs()
+    session = args.session_id or latest_session(data_dirs)
+    map_provider = _combat_map_provider(_client_directory(args))
+
+    def safe_provider(map_id: int):
+        try:
+            return map_provider(map_id)
+        except (OSError, ValueError, KeyError):
+            return None
+
+    proof = compare(TargetingProofStore(app_data_root() / "data" / "targeting_proof").load(), safe_provider)
+    readiness = readiness_report(lambda: Storage(database_path()), args.profile_id)
+    reports = build_bundle(data_dirs, session=session, readiness=readiness, targeting_proof=proof)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    output = write_bundle(reports, args.output_dir or (PROJECT_ROOT / "reports" / f"live-fasttrack-{stamp}"),
+                          session=session)
+    print((output / "summary.md").read_text(encoding="utf-8"))
+    print(f"Dossier : {output}")
+    return 0
 
 
 def _targeting_proof_report(args) -> int:
