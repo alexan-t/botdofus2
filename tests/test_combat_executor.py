@@ -59,7 +59,9 @@ def test_closed_loop_contract_success_failure_timeout() -> None:
     assert executor.verify("c1", ExpectedState(step.expected.player_cell_id, step.expected.ap, step.expected.mp)).kind \
         is ActionEventKind.SUCCEEDED
     executor.start(ActionRequest("c2", "p", 0, step, step.expected))
-    failed = executor.verify("c2", ExpectedState(step.expected.player_cell_id, step.expected.ap + 3, step.expected.mp))
+    unchanged = executor.verify("c2", ExpectedState(step.expected.player_cell_id, step.expected.ap + 3, step.expected.mp))
+    assert unchanged.kind is ActionEventKind.STARTED and unchanged.detail == "PA inchangés"   # CAST pas encore visible
+    failed = executor.verify("c2", ExpectedState(step.expected.player_cell_id, step.expected.ap + 1, step.expected.mp))
     assert failed.kind is ActionEventKind.FAILED and "ap" in failed.data["mismatches"]
     executor.start(ActionRequest("c3", "p", 0, step, step.expected, timeout_s=2.0))
     assert executor.verify("c3", None, now=clock.now + 1).kind is ActionEventKind.STARTED   # encore en attente

@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Protocol
 
+from combatbot.combat.effects import Effect, check_effect
 from combatbot.combat.planner import ExpectedState, Plan, PlanStatus, PlanStep
 from combatbot.models import Action, CombatEvent
 
@@ -62,7 +63,7 @@ class ActionEvent:
 class ClosedLoopExecutor(Protocol):
     """Contrat des exécuteurs de plan (dry-run aujourd'hui ; souris seulement dans un lot futur)."""
     def start(self, request: ActionRequest) -> ActionEvent: ...
-    def verify(self, correlation_id: str, observed: ExpectedState | None, *, now: float | None = None) -> ActionEvent: ...
+    def verify(self, correlation_id: str, observed, *, now: float | None = None) -> ActionEvent: ...
 
 
 def plan_id(plan: Plan) -> str:
@@ -121,27 +122,35 @@ class DryRunActionExecutor:
         return self._emit(ActionEvent(ActionEventKind.DRY_RUN_NOT_EXECUTED, request.correlation_id, now,
                                       f"{request.step.describe()} : aucune entrée envoyée au jeu"))
 
-    def verify(self, correlation_id: str, observed: ExpectedState | None, *, now: float | None = None) -> ActionEvent:
-        """Compare l'état observé à l'effet attendu (sert au rejeu aujourd'hui, au LOT 5B demain)."""
+    def verify(self, correlation_id: str, observed, *, now: float | None = None) -> ActionEvent:
+        """Juge l'effet de l'étape selon son type (``effects.check_effect``) : sert au rejeu aujourd'hui.
+
+        ``observed`` : objet exposant player_cell_id / ap / mp (et turn / phase), ou None si aucune
+        observation. PENDING, UNKNOWN ou aucune observation : en attente jusqu'au délai, puis TIMED_OUT ;
+        jamais un succès.
+        """
         if correlation_id not in self._pending:
             return self._emit(ActionEvent(ActionEventKind.REFUSED, correlation_id, self.clock(),
                                           "corrélation inconnue"))
         request, started = self._pending[correlation_id]
         now = self.clock() if now is None else now
-        if observed is None:
-            if now - started >= request.timeout_s:
-                del self._pending[correlation_id]
-                return self._emit(ActionEvent(ActionEventKind.TIMED_OUT, correlation_id, now,
-                                              f"aucune observation après {request.timeout_s:.1f} s"))
-            return ActionEvent(ActionEventKind.STARTED, correlation_id, now, "en attente d'observation")
-        del self._pending[correlation_id]
-        mismatches = {name: {"expected": getattr(request.expected, name), "observed": getattr(observed, name)}
-                      for name in ("player_cell_id", "ap", "mp")
-                      if getattr(request.expected, name) != getattr(observed, name)}
-        if mismatches:
+        check = check_effect(request.step, observed) if observed is not None else None
+        if check is not None and check.effect is Effect.CONTRADICTED:
+            del self._pending[correlation_id]
             return self._emit(ActionEvent(ActionEventKind.FAILED, correlation_id, now,
-                                          "effet observé différent de l'effet attendu", {"mismatches": mismatches}))
-        return self._emit(ActionEvent(ActionEventKind.SUCCEEDED, correlation_id, now, "effet attendu observé"))
+                                          f"effet observé différent de l'effet attendu : {check.detail}",
+                                          {"mismatches": check.mismatches}))
+        if check is not None and check.effect is Effect.CONFIRMED:
+            del self._pending[correlation_id]
+            return self._emit(ActionEvent(ActionEventKind.SUCCEEDED, correlation_id, now,
+                                          f"effet attendu observé : {check.detail}"))
+        if now - started >= request.timeout_s:
+            del self._pending[correlation_id]
+            detail = check.detail if check is not None else "aucune observation"
+            return self._emit(ActionEvent(ActionEventKind.TIMED_OUT, correlation_id, now,
+                                          f"{detail} après {request.timeout_s:.1f} s"))
+        return ActionEvent(ActionEventKind.STARTED, correlation_id, now,
+                           "en attente d'observation" if check is None else check.detail)
 
     # -------------------------------------------------------------- plan complet
     def run_plan(self, plan: Plan, timeout_s: float = 3.0) -> DryRunReport:
