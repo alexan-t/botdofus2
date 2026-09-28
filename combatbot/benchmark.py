@@ -65,6 +65,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--session-id", help="Session à analyser (défaut : la plus récente)")
     parser.add_argument("--targeting-proof-report", action="store_true",
                         help="4C : compare les règles candidates aux vérités du client collectées (aucune adoptée)")
+    parser.add_argument("--ocr-threads-benchmark", action="store_true",
+                        help="Temps OCR et CPU selon les threads ONNX Runtime de RapidOCR (rien n'est appliqué)")
     parser.add_argument("--runtime-health", action="store_true",
                         help="Santé CPU/RAM/threads/handles/UI de DofBot2 sur frames synthétiques (aucune action)")
     parser.add_argument("--duration", type=float, default=60.0, help="--runtime-health : durée par phase (s)")
@@ -104,6 +106,16 @@ def main(argv: list[str] | None = None) -> int:
         return _targeting_proof_report(args)
     if args.live_fasttrack_report:
         return _live_fasttrack_report(args)
+    if args.ocr_threads_benchmark:
+        import json
+        from combatbot.performance.ocr_benchmark import markdown_report as ocr_markdown
+        from combatbot.performance.ocr_benchmark import run_ocr_threads_benchmark
+        report = run_ocr_threads_benchmark()
+        output = args.output_dir or (app_data_root() / "data" / "benchmarks")
+        output.mkdir(parents=True, exist_ok=True)
+        (output / "ocr-threads.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(ocr_markdown(report))
+        return 0
     if args.runtime_health:
         from combatbot.performance.health import markdown_report as health_markdown
         from combatbot.performance.health import run_health, write_report as write_health
