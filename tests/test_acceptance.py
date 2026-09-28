@@ -54,7 +54,10 @@ def test_combat_state_verdicts() -> None:
 
 
 def test_map_verdicts() -> None:
-    assert evaluate_map({"frames_with_truth": 472, "wrong_maps": 0, "coverage": 0.75}).status == PASS
+    assert evaluate_map({"frames_with_truth": 472, "wrong_maps": 0, "coverage": 0.75,
+                         "outcomes": {"correct": 356}}).status == PASS
+    empty = evaluate_map({"frames_with_truth": 57, "wrong_maps": 0, "coverage": 0.0, "outcomes": {"unknown": 75}})
+    assert empty.status == NOT_EVALUABLE                     # 0 erreur parce que 0 réponse
     assert evaluate_map({"frames_with_truth": 472, "wrong_maps": 1}).status == FAIL
     assert evaluate_map({"frames_with_truth": 0}).status == NOT_EVALUABLE
 
@@ -83,7 +86,8 @@ def test_latency_needs_the_packaged_executable(tmp_path: Path) -> None:
 def test_stale_report_is_never_a_pass(tmp_path: Path, monkeypatch) -> None:
     report = tmp_path / "benchmarks" / "map-resolution.json"
     report.parent.mkdir(parents=True)
-    report.write_text(json.dumps({"frames_with_truth": 10, "wrong_maps": 0}), encoding="utf-8")
+    report.write_text(json.dumps({"frames_with_truth": 10, "wrong_maps": 0, "outcomes": {"correct": 10}}),
+                      encoding="utf-8")
     os.utime(report, (1_000_000, 1_000_000))
     monkeypatch.setattr(acceptance, "last_source_change", lambda paths, repo=None: 2_000_000.0)
     domain = next(item for item in acceptance.DOMAINS if item.key == "map")

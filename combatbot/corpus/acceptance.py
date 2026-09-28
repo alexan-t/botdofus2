@@ -129,10 +129,14 @@ def evaluate_map(report: dict) -> Verdict:
     metrics = {"frames_with_truth": report.get("frames_with_truth"), "wrong_maps": report.get("wrong_maps"),
                "accepted_precision": report.get("accepted_precision"), "coverage": report.get("coverage"),
                "coordinate_reader_ms_median": report.get("coordinate_reader_ms_median")}
+    metrics["ocr_inputs"] = report.get("ocr_inputs")
     if not report.get("frames_with_truth"):
         return Verdict(NOT_EVALUABLE, metrics)
     if report.get("wrong_maps"):
         return Verdict(FAIL, metrics, ["mauvaise map acceptée"])
+    if not (report.get("outcomes") or {}).get("correct"):
+        # 0 erreur parce que 0 réponse : mesure vide, pas un succès.
+        return Verdict(NOT_EVALUABLE, metrics, ["aucune map résolue : rien n'a été mesuré (lectures refusées)"])
     return Verdict(PASS, metrics, ["couverture informative : AMBIGUOUS/UNKNOWN sont des refus volontaires"])
 
 
