@@ -193,7 +193,7 @@ def test_only_the_win32_module_holds_real_input_calls() -> None:
     root = Path(__file__).resolve().parents[1] / "combatbot"
     tokens = ("SendInput", "SetCursorPos", "mouse_event", "keybd_event", "pyautogui.click", "pyautogui.move",
               "pyautogui.press", "pyautogui.drag", "pyautogui.key", "pyautogui.mouse")   # capture : screenshot seul
-    holders = sorted(str(path.relative_to(root)) for path in root.rglob("*.py")
+    holders = sorted(path.relative_to(root).as_posix() for path in root.rglob("*.py")
                      if any(token in path.read_text(encoding="utf-8") for token in tokens))
     assert holders == ["input/win32_mouse.py"]
 

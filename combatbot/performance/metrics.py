@@ -61,7 +61,29 @@ def _windows_snapshot() -> dict[str, object]:
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     psapi = ctypes.WinDLL("psapi", use_last_error=True)
     user32 = ctypes.WinDLL("user32", use_last_error=True)
+    # ctypes suppose des arguments ``int`` tant que les signatures ne sont pas
+    # déclarées. Le pseudo-handle 64 bits renvoyé par GetCurrentProcess vaut
+    # 0xffffffffffffffff et déborde alors avant même l'appel Win32.
+    kernel32.GetCurrentProcess.argtypes = []
     kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    psapi.GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.POINTER(Counters), wintypes.DWORD]
+    psapi.GetProcessMemoryInfo.restype = wintypes.BOOL
+    kernel32.GetProcessTimes.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.FILETIME),
+                                         ctypes.POINTER(wintypes.FILETIME), ctypes.POINTER(wintypes.FILETIME),
+                                         ctypes.POINTER(wintypes.FILETIME)]
+    kernel32.GetProcessTimes.restype = wintypes.BOOL
+    kernel32.GetProcessHandleCount.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel32.GetProcessHandleCount.restype = wintypes.BOOL
+    user32.GetGuiResources.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    user32.GetGuiResources.restype = wintypes.DWORD
+    kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    kernel32.Thread32First.argtypes = [wintypes.HANDLE, ctypes.POINTER(ThreadEntry)]
+    kernel32.Thread32First.restype = wintypes.BOOL
+    kernel32.Thread32Next.argtypes = [wintypes.HANDLE, ctypes.POINTER(ThreadEntry)]
+    kernel32.Thread32Next.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
     process = kernel32.GetCurrentProcess()
     result: dict[str, object] = {}
     counters = Counters()
@@ -77,10 +99,8 @@ def _windows_snapshot() -> dict[str, object]:
     count = wintypes.DWORD()
     if kernel32.GetProcessHandleCount(process, ctypes.byref(count)):
         result["handles"] = int(count.value)
-    user32.GetGuiResources.restype = wintypes.DWORD
     result["gdi_objects"] = int(user32.GetGuiResources(process, 0))
     result["user_objects"] = int(user32.GetGuiResources(process, 1))
-    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
     snapshot = kernel32.CreateToolhelp32Snapshot(0x4, 0)            # TH32CS_SNAPTHREAD
     if snapshot and snapshot != wintypes.HANDLE(-1).value:
         try:
