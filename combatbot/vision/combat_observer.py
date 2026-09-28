@@ -192,9 +192,12 @@ class RealCombatObserver:
                 if self.grid_resolver is not None else None
             map_resolution = self.map_context.update(frame.image, combat_image, cell_centers=centers)
         mark("map")
+        grid_ms: dict[str, float] = {}
         if self.grid_resolver is not None:
             resolution = self.grid_resolver.resolve(combat_image, frame.client.size, zones)
+            grid_ms["resolve"] = round((time.perf_counter() - lap[0]) * 1000, 2)
             grid = self._validate_grid(resolution, combat_image)
+            grid_ms["validate"] = round((time.perf_counter() - lap[0]) * 1000 - grid_ms["resolve"], 2)
         else:
             grid = infer_combat_grid(combat_image, self.grid_calibration)
         mark("grid")
@@ -351,7 +354,7 @@ class RealCombatObserver:
             "analysis_ms": elapsed_ms,
             "stage_ms": {name: round(value, 2) for name, value in stage_ms.items()},
             "capture_ms": dict(getattr(frame, "timings_ms", {}) or {}),
-            "capture_source": getattr(frame, "source", None),
+            "grid_ms": grid_ms,
             "global_confidence": observation.observation_confidence,
             "entities": {"pipeline": "CELL_ENTITY_DETECTOR" if entity_timings else "LEGACY_CLASSIFY",
                          **entity_timings},

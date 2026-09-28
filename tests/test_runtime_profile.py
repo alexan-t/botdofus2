@@ -24,12 +24,13 @@ def frame(total: float, capture: float = 236.0, **extra) -> dict:
 def test_profile_ranks_the_real_costs_and_judges_p95(tmp_path: Path) -> None:
     write_session(tmp_path, "s1", [frame(734), frame(979, 300.0), frame(700)])
     write_session(tmp_path, "s2", [frame(650, capture_ms={"grab_window": 150.0, "to_rgb": 10.0},
-                                         capture_source="window")])
+                                         capture_source="window", grid_ms={"resolve": 11.0, "validate": 105.0})])
     report = runtime_profile([tmp_path])
     assert report["frames"] == 4 and report["verdict"] == "FAIL"
     assert [item["stage"] for item in report["top3"]] == ["capture", "entities", "grid"]
     assert report["capture_substeps_ms"]["grab_window"]["median"] == 150.0
     assert report["capture_sources"] == {"non journalisée": 3, "window": 1}
+    assert report["grid_substeps_ms"]["validate"]["median"] == 105.0
     assert set(report["per_session_total_ms"]) == {"s1", "s2"}
     assert "Top 3" in markdown_report(report)
 

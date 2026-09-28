@@ -51,8 +51,11 @@ def _stage_values(frames: list[tuple[str, dict]], key: str, stage: str) -> list[
 def runtime_profile(data_dirs: list[Path]) -> dict[str, object]:
     frames = load_frames(data_dirs)
     stages = {stage: _stats(_stage_values(frames, "stage_ms", stage)) for stage in STAGES}
-    sub_names = sorted({name for _s, record in frames for name in (record.get("capture_ms") or {})})
-    capture = {name: _stats(_stage_values(frames, "capture_ms", name)) for name in sub_names}
+    def substeps(key: str) -> dict[str, dict]:
+        names = sorted({name for _s, record in frames for name in (record.get(key) or {})})
+        return {name: _stats(_stage_values(frames, key, name)) for name in names}
+
+    capture = substeps("capture_ms")
     ranked = sorted((stage for stage in STAGES if stage != "total" and stages[stage]["median"] is not None),
                     key=lambda stage: stages[stage]["median"], reverse=True)
     total = stages["total"]
@@ -70,7 +73,8 @@ def runtime_profile(data_dirs: list[Path]) -> dict[str, object]:
             "data_dirs": [str(path) for path in data_dirs], "frames": len(frames), "sessions": dict(sessions),
             "stages_ms": stages, "top3": [{"stage": stage, "median_ms": stages[stage]["median"],
                                            "p95_ms": stages[stage]["p95"]} for stage in ranked[:3]],
-            "capture_substeps_ms": capture,
+            "capture_substeps_ms": capture, "grid_substeps_ms": substeps("grid_ms"),
+            "entities_substeps_ms": substeps("entities_ms"),
             "capture_sources": dict(Counter(record.get("capture_source") or "non journalisée" for _s, record in frames)),
             "per_session_total_ms": per_session, "criterion": {"p95_total_ms": P95_CRITERION_MS},
             "verdict": verdict, "actions": "NONE"}
@@ -93,6 +97,11 @@ def markdown_report(report: dict) -> str:
                   for name, stats in report["capture_substeps_ms"].items()]
     else:
         lines.append("- non journalisées (sessions antérieures à ce lot) : refaire une session pour les mesurer")
+    for key, title in (("grid_substeps_ms", "Grille"), ("entities_substeps_ms", "Entités")):
+        if report.get(key):
+            lines += ["", f"## {title} : sous-étapes", "", "| Sous-étape | n | médiane | p95 |", "|---|---|---|---|"]
+            lines += [f"| {name} | {stats['n']} | {stats['median']} | {stats['p95']} |"
+                      for name, stats in report[key].items()]
     lines += ["", f"Sources de capture : {json.dumps(report['capture_sources'], ensure_ascii=False)}"]
     return "\n".join(lines) + "\n"
 
