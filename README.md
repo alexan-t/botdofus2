@@ -55,6 +55,16 @@ Réglages stockés en SQLite (`profile_settings` / `settings`), sans migration d
 `python main.py --screen=connect` (ou `profile`, `create`, `app`) ouvre directement un écran.
 Polices Manrope et JetBrains Mono : `assets/fonts/` (SIL OFL).
 
+## Cœur combat hors ligne (fast-track)
+
+Voir `LOT-FASTTRACK-OFFLINE.md` et `AUDIT-FASTTRACK-OFFLINE.md`. Le paquet `combatbot/combat/` contient
+le pathfinding GameData, le domaine sorts, le ciblage fail-closed, le planner et l'exécuteur, qui reste
+**dry-run** (aucune entrée n'est envoyée au jeu). Il ne dépend ni d'OpenCV, ni de Qt, ni de RapidOCR.
+
+- `python -m combatbot.benchmark --observation-e2e` : benchmark e2e de l'observation sur le corpus.
+- `python -m combatbot.benchmark --dry-run-plans --profile-id N [--assume-logical-range]` : rejeu dry-run
+  des décisions.
+
 ## Grille GameData projetée (LOT 3B-2)
 
 Chaîne : `DofusCellId` → `GridCoordinate` (GameData) → `GridScreenTransform` → `CombatPoint` → `LayoutTransform` → `ClientPoint` / `ScreenPoint`.
