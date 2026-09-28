@@ -27,7 +27,7 @@ from combatbot.combat.scripted import FakeClock, FakeSender, ScriptedObserver
 from combatbot.combat.spells import CombatSpell, SpellProvenance, SpellSlot
 from combatbot.combat.state import EnemyState, RealCombatState
 from combatbot.combat.targeting import RangeMetric, TargetingRules
-from combatbot.combat.turn_runner import SingleTurnRunner, TurnConfig, TurnOutcome, make_planner
+from combatbot.combat.turn_runner import SingleTurnRunner, TurnConfig, make_planner
 from combatbot.gamedata.models import DofusCellId, GameMap, GameMapCell, GridCoordinate
 from combatbot.gamedata.topology import CELL_COUNT, cell_to_grid, grid_to_cell
 from combatbot.vision.coordinates import ClientSize, LayoutTransform, NormalizedRect, ScreenPoint
