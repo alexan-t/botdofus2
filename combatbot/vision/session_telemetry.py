@@ -57,6 +57,10 @@ def frame_record(metadata: dict, observation, *, wall_time: float) -> dict[str, 
         "ap": getattr(observation, "ap", None),
         "mp": getattr(observation, "mp", None),
         "player_cell_id": getattr(observation, "player_cell_id", None),
+        "player_diag": {key: value for key, value in (metadata.get("entities") or {}).items()
+                        if key in ("pipeline", "player_profile", "team_profile", "player_decision",
+                                   "player_candidates", "player_track_state")},
+        "player_confidence": getattr(observation, "player_confidence", None),
         "enemies": len(getattr(observation, "enemies", ()) or ()),
     }
 

@@ -58,6 +58,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="Profil de recette non ambigu (JSON) ; code 2 si plusieurs profils sans --profile-id")
     parser.add_argument("--spell-readiness", action="store_true",
                         help="Rapport profile-spells-readiness du profil (lecture seule)")
+    parser.add_argument("--player-cell-diagnostics", action="store_true",
+                        help="Raisons de chaque cellule joueur inconnue (sessions + corpus, lecture seule)")
     parser.add_argument("--runtime-profile", action="store_true",
                         help="Profil de latence par étape depuis les journaux de sessions réelles")
     parser.add_argument("--execution-selftest", action="store_true",
@@ -123,6 +125,15 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.dry_run_plans:
         return _dry_run_plans(repository, args)
+    if args.player_cell_diagnostics:
+        from combatbot.corpus.acceptance import default_data_dirs
+        from combatbot.live.player_cell_diagnostics import diagnose, load_records, markdown_report as cell_markdown
+        from combatbot.live.player_cell_diagnostics import write_report as write_cells
+        report = diagnose(load_records(args.data_dir or default_data_dirs(), repository))
+        json_path, _ = write_cells(report, args.output_dir or (app_data_root() / "data" / "benchmarks"))
+        print(cell_markdown(report))
+        print(f"JSON : {json_path}")
+        return 0
     if args.combat_state or args.install_combat_state_model:
         return _combat_state(repository, args)
     if args.map_resolution:

@@ -450,7 +450,11 @@ class RealCombatObserver:
         timings = {"detector_ms": detection.timings_ms.get("total", 0.0), "tracker_ms": tracker_ms,
                    "roi_maps_ms": detection.timings_ms.get("roi_maps", 0.0),
                    "player_profile": detection.diagnostics.get("player_profile"),
-                   "team_profile": detection.diagnostics.get("team_profile")}
+                   "team_profile": detection.diagnostics.get("team_profile"),
+                   # Diagnostic de la décision joueur (aucun effet sur la décision elle-même).
+                   "player_decision": detection.diagnostics.get("player_decision"),
+                   "player_candidates": detection.diagnostics.get("player_candidates"),
+                   "player_track_state": player_track.state.value if player_track else None}
         return grid, player_cell, player_cell_id, player_confidence, tuple(enemies), fields, timings
 
     def designate_player_cell(self, pixel: CombatPoint | tuple[int, int], packet: ObservationPacket):
