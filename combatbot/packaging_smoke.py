@@ -206,6 +206,15 @@ def _entity_check() -> dict[str, object]:
             "action_executed": False}
 
 
+def _json_default(value: object) -> object:
+    """Scalaires/tableaux numpy (rectangles de la capture DOFUS réelle) → types JSON natifs."""
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
 def run_packaging_smoke(app, storage, window) -> int:
     report_path = Path(os.environ.get(
         "PYTHONBOT_SMOKE_REPORT", str(app_data_root() / "logs" / "packaging-smoke.json")
@@ -302,7 +311,8 @@ def run_packaging_smoke(app, storage, window) -> int:
         results["traceback"] = traceback.format_exc()
     finally:
         report_path.parent.mkdir(parents=True, exist_ok=True)
-        report_path.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
+        report_path.write_text(json.dumps(results, ensure_ascii=False, indent=2, default=_json_default),
+                               encoding="utf-8")
         window.close()
         app.processEvents()
     return 0 if results.get("success") else 2
