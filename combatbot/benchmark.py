@@ -37,6 +37,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="3B-6B : installer le modèle phase/tour appris sur les vérités humaines TRAIN")
     parser.add_argument("--map-resolution", action="store_true",
                         help="3B-6C : rejouer le corpus pour mesurer la résolution automatique de map")
+    parser.add_argument("--acceptance", action="store_true",
+                        help="3B-7 : recette consolidée (rapports des bancs + sessions réelles), sans rien relancer")
+    parser.add_argument("--data-dir", type=Path, action="append",
+                        help="3B-7 : dossier data/ à inspecter (répétable ; défaut : sources, runtime, LocalAppData)")
     parser.add_argument("--limit", type=int, help="Nombre maximal de frames (diagnostic)")
     parser.add_argument("--client", type=Path, help="Dossier client GameData (défaut : réglage de l'application)")
     parser.add_argument("--install-runtime-profiles", action="store_true",
@@ -55,6 +59,13 @@ def main(argv: list[str] | None = None) -> int:
         if not args.entities:
             parser.error("--install-runtime-profiles exige --entities")
         return _install_entities(args)
+    if args.acceptance:
+        from combatbot.corpus.acceptance import markdown_report, run_acceptance, write_acceptance
+        report = run_acceptance(args.data_dir)
+        json_path, _ = write_acceptance(report, args.output_dir or (PROJECT_ROOT / "data" / "benchmarks"))
+        print(markdown_report(report))
+        print(f"JSON : {json_path}")
+        return 0
     repository = CorpusRepository(args.corpus_root)
     if args.combat_state or args.install_combat_state_model:
         return _combat_state(repository, args)
