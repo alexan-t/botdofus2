@@ -71,7 +71,26 @@ combat) est étiquetée « mon tour » dans 2 combats ; une frame étiquetée «
   détecteur n'a été fait d'après la VALIDATION ; seules les données TRAIN ont changé.
 - Modèle runtime réinstallé : 7 combats TRAIN, 167 frames.
 
-### À faire
-- TEST aveugle : nouveaux combats jamais vus, mesurés une seule fois, selon la même règle que 3B-5.
+### Mesure — TEST aveugle (UNE seule fois, 28/09, référence figée `1eef84a`)
+2 combats jamais vus, annotés sans suggestion (`session_476dfc09fee9` 17 frames,
+`session_a9f208f1f1bc` 26 frames ; 43 frames). Modèle appris sur les 7 combats TRAIN.
+Rapport brut : `data/benchmarks/combat-state-TEST-1eef84a.json`. Ces combats sont désormais historiques :
+ne plus jamais les mesurer comme TEST.
+
+| | Justes | Fausses | Abstentions | Précision | Couverture |
+|---|---|---|---|---|---|
+| Phase | 38 | 1 | 4 | 0,974 | 0,907 |
+| Tour | 27 | 0 | 3 | 1,000 | 0,900 |
+
+- **« Mon tour » affirmé à tort : 0 ; manqué : 0.** Transitions 9/10. Résultats 1/2 (l'autre : abstention).
+- La phase fausse (`476dfc09fee9` frame 45) est l'instant juste après « Prêt » : fumée de début de combat,
+  bouton déjà « TERMINER LE TOUR » mais foncé. Étiquetée « placement », détectée « combat, tour d'un autre ».
+  C'est le même instant ambigu que dans le TRAIN. La vérité humaine est gardée telle quelle, et l'erreur est comptée.
+- Abstentions : 3 frames hors combat (phase), 1 résultat (phase), 3 boutons masqués (tour).
+- Aucun réglage après ce TEST.
+
+### Bilan 3B-6B
+Le détecteur n'a jamais annoncé « mon tour » à tort, ni en TRAIN, ni en VALIDATION, ni en TEST.
+Point à surveiller : l'instant de début de combat, entre la fin du placement et le 1er tour.
 
 Commande : `python -m combatbot.benchmark --combat-state [--install-combat-state-model]`.
